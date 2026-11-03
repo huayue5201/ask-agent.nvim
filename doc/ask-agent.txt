@@ -76,7 +76,8 @@ require("ask_agent").setup({
 
 In the ask window: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` inserts a newline.
 In the map: a letter picks that pane, `<Tab>` switches to the list.
-In the list: a number (`<M-a>`… past 9) picks, `<Tab>` returns to the map.
+In the list: a number (`<M-a>`… past 9) picks where the implementation offers
+those; `<Tab>` returns to the map unless the implementation already maps `<Tab>`.
 
 ==============================================================================
 5. PICKERS                                                 *ask-agent-pickers*
@@ -88,8 +89,10 @@ painted over the floating window. Blocks are laid out compactly (no gaps) and
 the map is centered on screen.
 
 `list` is a plain list of every instance, including ones in other tabs and
-windows. Each entry shows the instance glyph in its own stable color, the name,
-and the cwd. Menus are centered rather than attached to the cursor.
+windows, shown through `vim.ui.select` — so it is whatever your config provides
+(dropbar, telescope, fzf-lua, snacks, …), with no hard dependency. Each entry
+shows the instance glyph in its own stable color, the name, and the cwd. Float
+menus are centered rather than attached to the cursor.
 
 Without `rex`, or when fewer than two candidates can be located on screen, the
 map silently falls back to the list.

@@ -135,7 +135,7 @@ end
 ---@param cb fun(target: table|nil)
 --- Map candidates onto rex cells and show the map; returning false means "map unusable", so the caller falls back to the list
 ---@return boolean opened
---- Current floating windows (including relative windows such as dropbar menus)
+--- Current floating windows (any float opened by the vim.ui.select implementation)
 ---@return table<integer, true>
 local function float_wins()
 	local out = {}
@@ -148,7 +148,9 @@ local function float_wins()
 	return out
 end
 
---- Close the floating window opened by vim.ui.select (dropbar menus have close; otherwise close the window directly)
+--- Close the floating window opened by vim.ui.select.
+--- Implementations that expose a close() API are asked to close themselves first;
+--- anything else is closed as a plain window (never a hard dependency on one plugin)
 ---@param win integer
 local function close_menu(win)
 	if not vim.api.nvim_win_is_valid(win) then
@@ -165,7 +167,7 @@ local function close_menu(win)
 	pcall(vim.api.nvim_win_close, win, true)
 end
 
---- Center the floating window on screen (dropbar menus hug the cursor by default)
+--- Center the floating window on screen (most list implementations hug the cursor)
 ---@param win integer
 local function center_win(win)
 	if not vim.api.nvim_win_is_valid(win) then
@@ -260,10 +262,21 @@ local function list_select(mod, cands, note_avoid, cb, back)
 				local buf = vim.api.nvim_win_get_buf(w)
 				if not bufs[buf] then
 					bufs[buf] = true
-					vim.keymap.set("n", "<Tab>", function()
-						close_menu(w)
-						vim.schedule(back)
-					end, { buffer = buf, nowait = true, silent = true })
+					-- Respect the host implementation: never take over a <Tab> that is already mapped
+					-- (telescope/fzf-lua/snacks use it for multi-select and similar).
+					local taken = false
+					for _, m in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+						if m.lhs == "<Tab>" then
+							taken = true
+							break
+						end
+					end
+					if not taken then
+						vim.keymap.set("n", "<Tab>", function()
+							close_menu(w)
+							vim.schedule(back)
+						end, { buffer = buf, nowait = true, silent = true })
+					end
 				end
 			end
 		end

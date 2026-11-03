@@ -30,11 +30,18 @@ function M.check()
 		warn("Neovim 0.10+ is required")
 	end
 
-	-- optional integrations
-	if pcall(require, "dropbar.utils.menu") then
-		ok("dropbar.nvim found (centered, clickable menus)")
+	-- optional integrations: the list mode only needs *some* vim.ui.select implementation
+	local select_impl = "builtin (blocking)"
+	for _, name in ipairs({ "dropbar.utils.menu", "telescope", "fzf-lua", "snacks.picker", "mini.pick" }) do
+		if pcall(require, name) then
+			select_impl = name
+			break
+		end
+	end
+	if select_impl == "builtin (blocking)" then
+		info("no vim.ui.select implementation installed — list mode uses the blocking builtin prompt")
 	else
-		info("dropbar.nvim not found — falling back to plain vim.ui.select")
+		ok(("list mode via vim.ui.select (found: %s)"):format(select_impl))
 	end
 
 	local rex = require("ask_agent.rex")

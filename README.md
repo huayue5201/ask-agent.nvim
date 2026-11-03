@@ -34,8 +34,10 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 ## Requirements
 
 - Neovim 0.10+ (uses `vim.json`, `vim.uv`).
-- Optional: [dropbar.nvim](https://github.com/Bekaboo/dropbar.nvim) for centered,
-  mouse-clickable menus (plain `vim.ui.select` is used otherwise).
+- No picker dependency: list mode goes through `vim.ui.select`, so whichever plugin
+  overrides it (dropbar, telescope, fzf-lua, snacks, mini.pick …) is what you get.
+  Float menus get centered and each item's glyph is painted with its instance color;
+  `<Tab>` (back to the map) is only added when the implementation does not use it.
 - Optional: `rex` for the split-layout map view.
 - At least one agent backend (see [Backends](#backends)).
 
@@ -53,7 +55,6 @@ lazy.nvim:
 ```lua
 {
   "huayue5201/ask-agent.nvim",
-  dependencies = { "Bekaboo/dropbar.nvim" },
   config = function()
     require("ask_agent").setup()
   end,
@@ -252,7 +253,7 @@ ask.register(mod)             -- register a backend at runtime
 ## Health
 
 `:checkhealth ask_agent` reports the active backend, how many instances it sees, whether
-`rex` and `dropbar` are available, and where aliases and the bridge registry live.
+`rex` and a `vim.ui.select` implementation are available, and where aliases and the bridge registry live.
 
 ## License
 
