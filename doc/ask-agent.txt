@@ -10,8 +10,9 @@ CONTENTS                                              *ask-agent-contents*
   5. Pickers .................................... |ask-agent-pickers|
   6. Backends ................................... |ask-agent-backends|
   7. Instance names ............................. |ask-agent-aliases|
-  8. RPC bridge ................................. |ask-agent-bridge|
-  9. API ........................................ |ask-agent-api|
+  8. Layout adapters ............................ |ask-agent-layouts|
+  9. RPC bridge ................................. |ask-agent-bridge|
+  10. API ....................................... |ask-agent-api|
 
 ==============================================================================
 1. DESIGN                                                   *ask-agent-design*
@@ -94,8 +95,8 @@ windows, shown through `vim.ui.select` — so it is whatever your config provide
 shows the instance glyph in its own stable color, the name, and the cwd. Float
 menus are centered rather than attached to the cursor.
 
-Without `rex`, or when fewer than two candidates can be located on screen, the
-map silently falls back to the list.
+Without a layout adapter, or when fewer than two candidates can be located on
+screen, the map silently falls back to the list.
 
 ==============================================================================
 6. BACKENDS                                               *ask-agent-backends*
@@ -117,7 +118,8 @@ A target is one instance:
   cwd       project directory (used for matching)
   ts        start time (ordering, alias staleness, color)
   sock      optional delivery endpoint
-  rex       optional { session, block }: which terminal pane it lives in
+  rex       optional { session, block }: where it lives, as the rex adapter reads it
+  layout    optional: same, in the shape another layout adapter expects
   icon      optional per-instance glyph
   avoid     optional warning to show before sending
 
@@ -135,7 +137,27 @@ instance id and stamped with its start time, so a recycled pid never inherits an
 old name. Set or clear them with |:AskAgentAlias|.
 
 ==============================================================================
-8. RPC BRIDGE                                         *ask-agent-bridge*
+8. LAYOUT ADAPTERS                                   *ask-agent-layouts*
+
+The map needs to know where each instance sits, which is multiplexer-specific:
+
+  id            unique id, e.g. "zellij"
+  available()   -> ok, reason?
+  window()      -> win, data          "the window nvim itself lives in"
+  panes(win)    -> { { id, rect = { x, y, w, h }, kind = "tiled"|"float" }, ... }
+                  rect is normalised 0..1, y from the top, later entries paint on top
+  match(target) -> pane id|nil        which pane hosts this instance
+  cursor()      optional -> pane id   where nvim is focused
+  labels(data)  optional -> pane id -> label
+
+Register with `ask.register_layout(mod)`, choose a default with
+`setup({ layout = "zellij" })`, or read/set it with `ask.layout()`.
+
+Shipped: `rex` (auto-registered, `lua/ask_agent/layouts/rex.lua`) and a tmux
+factory — `require("ask_agent").register_layout(require("ask_agent.layouts.generic").tmux())`.
+
+==============================================================================
+9. RPC BRIDGE                                         *ask-agent-bridge*
 
 `setup()` starts a Neovim RPC socket and writes a registration file so an agent
 can pull live context (unsaved buffers, diagnostics, quickfix) back out:
@@ -158,7 +180,7 @@ end)
 project tooling.
 
 ==============================================================================
-9. API                                                     *ask-agent-api*
+10. API                                                    *ask-agent-api*
 
 >lua
 local ask = require("ask_agent")
@@ -171,6 +193,7 @@ ask.pin(id) / ask.pinned()
 ask.alias(target, name) / ask.alias_of(target)
 ask.picker("map"|"list")
 ask.register(backend)
+ask.register_layout(adapter) / ask.layout(id)
 ask.generic  -- tmux backend factory
 <
 

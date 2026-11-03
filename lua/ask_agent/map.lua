@@ -1,7 +1,9 @@
 -- lua/ask_agent/map.lua
----@brief Floating map: draw cells from rex's real split layout; clicking a cell sends to the agent in that pane.
+---@brief Floating map: draw cells from the active layout adapter's real split layout; pressing a cell's letter sends to
+---the agent in that pane.
 --
--- Only used inside rex and when a block can be located (see rex.lua); otherwise the caller falls back to vim.ui.select.
+-- Only used when a layout adapter reports geometry and at least two candidates can be located on it (see
+--lua/ask_agent/layouts/init.lua); otherwise the caller falls back to vim.ui.select.
 -- Interaction: each cell shows "icon + letter" (a, b, c... in candidate order); press the letter to pick directly;
 -- h/j/k/l move to the adjacent cell in that direction; a click on a cell also works; q or <Esc> cancels.
 -- The canvas is a read-only static image: no cursor (Cursor is mapped to the background color), no footer help text.
@@ -12,6 +14,8 @@ local M = {}
 -- Extmark namespace for the map buffer (backgrounds/highlights rely on it)
 local NS = api.nvim_create_namespace("ai_map")
 
+--- Colors: reuse the host's terminal palette when it exposes one (the map then matches the statusline/winbar),
+---otherwise fall back to plain float colors so the plugin needs no dependency.
 local function palette()
 	local ok, p = pcall(function()
 		return require("feat.terminal.highlights").palette()
@@ -19,7 +23,18 @@ local function palette()
 	if ok and type(p) == "table" and p.chip_bg then
 		return p
 	end
-	return { fg = nil, green = nil, dim = nil, bar_strip = nil, chip_bg = nil, chip_fg = nil }
+	local function hl(name, field)
+		local ok, got = pcall(api.nvim_get_hl, 0, { name = name, link = false })
+		return ok and type(got) == "table" and got[field] or nil
+	end
+	return {
+		fg = hl("NormalFloat", "fg"),
+		green = hl("DiagnosticOk", "fg"),
+		dim = hl("Comment", "fg"),
+		bar_strip = hl("NormalFloat", "bg"),
+		chip_bg = hl("Normal", "bg"),
+		chip_fg = hl("Normal", "fg"),
+	}
 end
 
 local function define_hl()
@@ -27,17 +42,29 @@ local function define_hl()
 	local blend
 	local ok, h = pcall(require, "feat.terminal.highlights")
 	if ok and type(h.blend) == "function" then
-		blend = h.blend
+		blend = function(a, b, ratio)
+			return h.blend(a, b, ratio)
+		end
 	else
-		blend = function(a)
-			return a
+		-- no host palette: mix two #rrggbb colors ourselves (ratio = weight of b)
+		blend = function(a, b, ratio)
+			if type(a) ~= "string" or type(b) ~= "string" or #a ~= 7 or #b ~= 7 then
+				return a
+			end
+			local ar, ag, ab = tonumber(a:sub(2, 3), 16), tonumber(a:sub(4, 5), 16), tonumber(a:sub(6, 7), 16)
+			local br, bg, bb = tonumber(b:sub(2, 3), 16), tonumber(b:sub(4, 5), 16), tonumber(b:sub(6, 7), 16)
+			ratio = ratio or 0.5
+			local function mix(x, y)
+				return math.floor(x * (1 - ratio) + y * ratio + 0.5)
+			end
+			return ("#%02x%02x%02x"):format(mix(ar, br), mix(ag, bg), mix(ab, bb))
 		end
 	end
 	api.nvim_set_hl(0, "AiMapBg", { bg = p.bar_strip, fg = p.dim })
 	api.nvim_set_hl(0, "AiMapPane", { bg = p.chip_bg, fg = p.dim })
 	api.nvim_set_hl(0, "AiMapAgent", { bg = blend(p.chip_bg, p.green, 0.10), fg = p.green })
 	api.nvim_set_hl(0, "AiMapSel", { bg = blend(p.chip_bg, p.green, 0.34), fg = p.green, bold = true })
-	-- Floating panes (panes floated out inside rex) are slightly brighter than the tiled layer so the overlap hierarchy is visible
+	-- Floating panes (panes floated out of the tiled layer) are slightly brighter so the overlap hierarchy is visible
 	api.nvim_set_hl(0, "AiMapFloat", { bg = blend(p.chip_bg, p.fg, 0.12), fg = p.dim })
 	api.nvim_set_hl(
 		0,
@@ -249,16 +276,16 @@ local function place_label(t, owner, need)
 	return best[1], best[2], best[3]
 end
 
---- Convert rex leaf geometry into character cells (1-based, bottom-left inclusive), marking those "too small for a label"
+--- Convert adapter leaf geometry into character cells (1-based, bottom-left inclusive), marking those "too small for a label"
 ---@param panes table[]
----@param by_block table<string, table>
+---@param by_pane table<string, table>
 ---@param W integer
 ---@param H integer
 ---@return table[] geom  { { pane, item, x0, y0, x1, y1 } }
-local function geometry(panes, by_block, W, H)
+local function geometry(panes, by_pane, W, H)
 	local out = {}
 	for _, pane in ipairs(panes) do
-		local item = by_block[pane.block_id]
+		local item = by_pane[pane.id]
 		local x0, y0, x1, y1 = cells_of(pane.rect, W, H)
 		table.insert(out, { pane = pane, item = item, x0 = x0, y0 = y0, x1 = x1, y1 = y1 })
 	end
@@ -266,8 +293,8 @@ local function geometry(panes, by_block, W, H)
 end
 
 --- Draw one frame. The whole area is cells, with no footer — content is fixed and does not jump with candidate count.
-local function paint(panes, by_block, W, H, sel)
-	local geom = geometry(panes, by_block, W, H)
+local function paint(panes, by_pane, W, H, sel)
+	local geom = geometry(panes, by_pane, W, H)
 	local g = grid_new(W, H)
 	local hit, owner = {}, {}
 	for _, t in ipairs(geom) do
@@ -365,7 +392,7 @@ local function neighbour(panes, from, dir)
 	local holder, holder_area
 	for _, pane in ipairs(panes) do
 		local r = pane.rect
-		if r and pane.block_id ~= from.block_id and covers(r, r0) then
+		if r and pane.id ~= from.id and covers(r, r0) then
 			local area = r[3] * r[4]
 			if not holder_area or area < holder_area then
 				holder, holder_area = pane, area
@@ -381,7 +408,7 @@ local function neighbour(panes, from, dir)
 	local best, best_score
 	for _, pane in ipairs(panes) do
 		local r = pane.rect
-		if r and pane.block_id ~= from.block_id then
+		if r and pane.id ~= from.id then
 			local cx, cy = r[1] + r[3] / 2, r[2] + r[4] / 2
 			local gap
 			if dir == "h" then
@@ -410,7 +437,7 @@ local function neighbour(panes, from, dir)
 	-- search: cross the boundary into the upper/lower half of the other column. Floating panes contained by itself do not participate (not neighbours).
 	for _, pane in ipairs(panes) do
 		local r = pane.rect
-		if r and pane.block_id ~= from.block_id and not covers(r0, r) then
+		if r and pane.id ~= from.id and not covers(r0, r) then
 			local cx, cy = r[1] + r[3] / 2, r[2] + r[4] / 2
 			local along = horizontal and (cx - fcx) or (cy - fcy)
 			local forward = ((dir == "l" or dir == "j") and along > 1e-6)
@@ -432,29 +459,29 @@ end
 ----------------------------------------------------------------------
 
 --- Open the map picker
----@param opts { panes: table[], items: table[], cursor_block?: string, on_choose: fun(item: table|nil), on_switch?: fun() }
+---@param opts { panes: table[], items: table[], cursor_pane?: string, on_choose: fun(item: table|nil), on_switch?: fun() }
 function M.select(opts)
 	local panes = opts.panes or {}
 	local items = opts.items or {}
 	define_hl()
 
-	local by_block = {}
+	local by_pane = {}
 	for i, it in ipairs(items) do
 		it.letter = LETTERS[i]
 		if it.letter == "" then
 			it.letter = nil
 		end
-		if it.block_id then
-			by_block[it.block_id] = it
+		if it.pane_id then
+			by_pane[it.pane_id] = it
 		end
 	end
 
 	-- Only panes in this window are visible; other candidates can still be reached by letter
 	local located = {}
 	for _, it in ipairs(items) do
-		if it.block_id and by_block[it.block_id] == it then
+		if it.pane_id and by_pane[it.pane_id] == it then
 			for _, p in ipairs(panes) do
-				if p.block_id == it.block_id then
+				if p.pane_id == it.pane_id then
 					table.insert(located, it)
 					break
 				end
@@ -480,7 +507,7 @@ function M.select(opts)
 
 	local sel = nil
 	for _, it in ipairs(located) do
-		if it.block_id == opts.cursor_block then
+		if it.pane_id == opts.cursor_pane then
 			sel = it
 		end
 	end
@@ -512,7 +539,7 @@ function M.select(opts)
 	end
 
 	local function repaint()
-		local painted = paint(panes, by_block, W, H, sel)
+		local painted = paint(panes, by_pane, W, H, sel)
 		local lines, segs, h = painted[1], painted[2], painted[3]
 		hit = h
 		vim.bo[buf].modifiable = true
@@ -644,7 +671,7 @@ function M.select(opts)
 			return nil
 		end
 		for _, p in ipairs(panes) do
-			if p.block_id == item.block_id then
+			if p.pane_id == item.pane_id then
 				return p
 			end
 		end
@@ -712,7 +739,7 @@ function M.select(opts)
 			local item, y, x = walk(dir)
 			if not item then
 				local pane = neighbour(panes, current_pane(), dir)
-				item = pane and by_block[pane.block_id]
+				item = pane and by_pane[pane.id]
 			end
 			if item then
 				sel = item

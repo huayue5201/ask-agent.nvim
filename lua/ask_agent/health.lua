@@ -44,11 +44,26 @@ function M.check()
 		ok(("list mode via vim.ui.select (found: %s)"):format(select_impl))
 	end
 
-	local rex = require("ask_agent.rex")
-	if rex.available() then
-		ok("rex found — the visual map picker is available")
-	else
-		info("rex not found — the map picker will fall back to the list")
+	-- layout adapters: they decide whether the map picker can work at all
+	local layouts = require("ask_agent.layouts")
+	local active = layouts.active(require("ask_agent").layout())
+	for _, id in ipairs(layouts.list()) do
+		local mod = layouts.get(id)
+		local good, reason = pcall(mod.available or function()
+			return true
+		end)
+		local usable = good and reason
+		local line = ("layout %s: %s"):format(id, usable and "usable" or (reason or "unusable"))
+		if mod == active then
+			ok(line .. " (active)")
+		elseif usable then
+			info(line)
+		else
+			info(line .. " — the map picker falls back to the list")
+		end
+	end
+	if not active then
+		info("no layout adapter usable — the map picker will fall back to the list")
 	end
 
 	-- backends and their instances

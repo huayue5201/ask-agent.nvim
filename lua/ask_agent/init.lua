@@ -6,14 +6,16 @@
 --   message.lua   renders the final text — every backend shares the same format
 --   ui.lua        floating input — agent-agnostic
 --   backends/*    only handles "sending the text out": pi uses a unix socket, generic uses tmux/commands
---   rex.lua       reads split geometry from `rex session inspect` (optional, pure speedup)
---   map.lua       draws the split geometry as a floating map for target selection (:AskAgentPicker map|list)
+--   layouts/*     where agent instances sit on screen: rex reads `rex session inspect`, generic
+--                 ships a tmux factory; anything else can be registered from a config
+--   map.lua       draws that geometry as a floating map for target selection (:AskAgentPicker map|list)
 --
 -- Adding a new agent: write lua/ask_agent/backends/<name>.lua implementing { id, label, targets(), send() },
 -- or declare it in setup with the tmux() factory from backends/generic.lua (restriction: delivers to an existing process).
 -- Neither approach requires touching this file.
 --
--- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register.
+-- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register/
+--             layout/register_layout.
 
 local backends = require("ask_agent.backends")
 local generic = require("ask_agent.backends.generic")
@@ -32,8 +34,11 @@ local current = "pi"
 local matching = "exact"
 --- Manually pinned target (:AskAgentTarget), takes precedence over cwd matching
 local pinned = nil
---- Picker when there are multiple candidates: "map" (rex split map, default) / "list" (vim.ui.select list)
+--- Picker when there are multiple candidates: "map" (split map of the active layout adapter, default) / "list" (vim.ui.select list)
 local picker = "map"
+
+--- Layout adapter id (nil = first available). See ask_agent.layouts
+local layout_id = nil
 
 --- Icon: the instance's own icon wins, then the icons table by instance id / backend id, finally the generic robot glyph.
 --- Pickers use a consistent "icon name" layout so the agent is obvious at a glance
@@ -133,7 +138,7 @@ end
 --- This is what distinguishes a terminal pi from a codecompanion pi under the same cwd.
 ---@param mod table
 ---@param cb fun(target: table|nil)
---- Map candidates onto rex cells and show the map; returning false means "map unusable", so the caller falls back to the list
+--- Map candidates onto layout cells and show the map; returning false means "map unusable", so the caller falls back to the list
 ---@return boolean opened
 --- Current floating windows (any float opened by the vim.ui.select implementation)
 ---@return table<integer, true>
@@ -284,34 +289,38 @@ local function list_select(mod, cands, note_avoid, cb, back)
 end
 
 local function map_select(mod, cands, note_avoid, cb, switch)
-	local rex = require("ask_agent.rex")
-	if not rex.available() then
+	local layout = require("ask_agent.layouts").active(layout_id)
+	if not layout then
 		return false
 	end
-	local window, data, err = rex.current_window()
+	local available = type(layout.available) ~= "function" and true or layout.available()
+	if not available then
+		return false
+	end
+	local window, data = layout.window()
 	if not window then
 		return false
 	end
-	local panes = rex.panes(window)
+	local panes = layout.panes(window)
 	if #panes == 0 then
 		return false
 	end
 
 	local in_window = {}
 	for _, pane in ipairs(panes) do
-		in_window[pane.block_id] = true
+		in_window[pane.id] = true
 	end
 
 	local items, located = {}, 0
 	for i, c in ipairs(cands) do
 		local t = c.target
-		local block = t.rex and t.rex.block or nil
-		if block and in_window[block] then
+		local pane_id = layout.match(t)
+		if pane_id and in_window[pane_id] then
 			located = located + 1
 		end
 		table.insert(items, {
 			index = i,
-			block_id = block,
+			pane_id = pane_id,
 			target = t,
 			label = t.label,
 			name = vim.fn.fnamemodify(t.cwd or "?", ":t"),
@@ -327,9 +336,9 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 
 	require("ask_agent.map").select({
 		panes = panes,
-		labels = rex.labels(data),
+		labels = type(layout.labels) == "function" and layout.labels(data) or {},
 		items = items,
-		cursor_block = rex.block(),
+		cursor_pane = layout.cursor and layout.cursor() or nil,
 		on_choose = function(item)
 			if not item then
 				return -- cancelled: do nothing
@@ -371,7 +380,7 @@ local function choose_target(mod, cb)
 		return cb(cands[1].target)
 	end
 
-	-- Numbering + position in rex: the index stays consistent across list, map, and the send notification
+	-- Numbering + position on screen: the index stays consistent across list, map, and the send notification
 	for i, c in ipairs(cands) do
 		c.target.index = i
 	end
@@ -382,7 +391,7 @@ local function choose_target(mod, cb)
 		if open_map() then
 			return
 		end
-		show_list() -- if the map cannot open this time (not in rex / candidates have no position), stay in the list
+		show_list() -- if the map cannot open this time (no layout adapter / candidates have no position), stay in the list
 	end
 	show_list = function()
 		list_select(mod, cands, note_avoid, cb, to_map)
@@ -395,7 +404,7 @@ local function choose_target(mod, cb)
 	if picker == "map" and open_map() then
 		return
 	end
-	-- Not in rex / candidates have no registered position / error → quietly fall back to the list
+	-- No layout adapter / candidates have no registered position / error → quietly fall back to the list
 	show_list()
 end
 
@@ -538,7 +547,7 @@ function M.alias_of(target)
 	return aliases.get(target)
 end
 
---- Picker for multiple candidates, read/write: "map" (rex split map, default) or "list" (vim.ui.select)
+--- Picker for multiple candidates, read/write: "map" (layout split map, default) or "list" (vim.ui.select)
 ---@param value string|nil read-only when omitted
 ---@return string
 function M.picker(value)
@@ -559,15 +568,38 @@ M.generic = generic
 ---@param mod table
 M.register = backends.register
 
+--- Register a layout adapter (where instances sit on screen). nil/"auto" resets to first available
+---@param mod table|string|nil
+function M.register_layout(mod)
+	if mod == nil then
+		layout_id = nil
+		return nil
+	end
+	layout_id = require("ask_agent.layouts").register(mod).id
+	return layout_id
+end
+
+--- Layout adapter id, read/write
+---@param value string|nil
+---@return string|nil
+function M.layout(value)
+	if value ~= nil then
+		layout_id = value == "auto" and nil or value
+	end
+	return layout_id
+end
+
 --- Register backends, install user commands and keymaps
 --- `opts.keymaps` defaults to { ask = "<leader>aq", ask_visual = "<leader>aq", alias = "<leader>ai" };
 --- set `opts.keymaps = false` to disable all keymaps. A keymap is only installed when its value is a non-empty string.
+--- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, keymaps?: { ask?: string|false, ask_visual?: string|false, alias?: string|false }|false }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, keymaps?: { ask?: string|false, ask_visual?: string|false, alias?: string|false }|false }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
 	picker = opts.picker or "map"
+	layout_id = opts.layout or nil
 	require("ask_agent.icons").setup(opts.icons, opts.icon_colors)
 	backends.register(require("ask_agent.backends.pi"))
 	for _, mod in ipairs(opts.extra or {}) do
