@@ -1,0 +1,174 @@
+*ask-agent.txt*  Send anchored questions from Neovim to external agents
+
+==============================================================================
+CONTENTS                                              *ask-agent-contents*
+
+  1. Design ..................................... |ask-agent-design|
+  2. Setup ...................................... |ask-agent-setup|
+  3. Commands ................................... |ask-agent-commands|
+  4. Keymaps .................................... |ask-agent-keymaps|
+  5. Pickers .................................... |ask-agent-pickers|
+  6. Backends ................................... |ask-agent-backends|
+  7. Instance names ............................. |ask-agent-aliases|
+  8. RPC bridge ................................. |ask-agent-bridge|
+  9. API ........................................ |ask-agent-api|
+
+==============================================================================
+1. DESIGN                                                   *ask-agent-design*
+
+Agents that run outside Neovim only see what is on disk. This plugin sends the
+question *and* the thing you are looking at: cwd, tab, `file:line`, visual
+selection, unsaved state. Delivery is a socket or a command line, so it works
+with any agent that can receive text.
+
+==============================================================================
+2. SETUP                                                     *ask-agent-setup*
+
+>lua
+require("ask_agent").setup({
+  matching = "exact",            -- "exact" | "related" | "single"
+  picker = "map",                -- "map" | "list"
+  default = "pi",                -- default backend id
+  extra = {},                    -- backends registered at setup time
+  icons = { pi = "π" },          -- per-agent glyphs
+  icon_colors = {},              -- per-agent brand colors (hex)
+  keymaps = {                    -- false disables all
+    ask = "<leader>aq",
+    ask_visual = "<leader>aq",
+    alias = "<leader>ai",
+  },
+  aliases = { file = vim.fn.stdpath("cache") .. "/ask-agent/aliases.json" },
+  bridge = { dir = vim.fn.stdpath("cache") .. "/pi-ctx" },  -- false disables
+})
+<
+
+==============================================================================
+3. COMMANDS                                               *ask-agent-commands*
+
+                                                        *:AskAgent*
+:AskAgent [text]        Ask the current backend; the cursor position is the
+                        anchor. Without [text] the ask window opens.
+
+                                                  *:AskAgentVisual*
+:AskAgentVisual         Ask with the visual selection as anchor.
+
+                                                  *:AskAgentPi*
+:AskAgentPi             Ask the `pi` backend explicitly.
+
+                                                  *:AskAgentBackend*
+:AskAgentBackend [id]   Switch the default backend, or pick one.
+
+                                                  *:AskAgentPicker*
+:AskAgentPicker [mode]  Choose how multiple candidates are presented.
+
+                                                  *:AskAgentTarget*
+:AskAgentTarget [id]    Pin the target instance (skip matching); `!` clears.
+
+                                                  *:AskAgentAlias*
+:AskAgentAlias          Name an instance; names show up in lists, prompts and
+                        notifications. `!` clears a name.
+
+==============================================================================
+4. KEYMAPS                                                 *ask-agent-keymaps*
+
+<leader>aq (n, v)       Ask (cursor / selection anchor)
+<leader>ai              Name an instance
+
+In the ask window: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` inserts a newline.
+In the map: a letter picks that pane, `<Tab>` switches to the list.
+In the list: a number (`<M-a>`… past 9) picks, `<Tab>` returns to the map.
+
+==============================================================================
+5. PICKERS                                                 *ask-agent-pickers*
+
+`map` draws the split layout of your terminal multiplexer and puts a bold letter
+in every pane that hosts an agent. A pane covered by a floating window still
+gets its letter — placed on a visible cell of that same pane, so nothing is
+painted over the floating window. Blocks are laid out compactly (no gaps) and
+the map is centered on screen.
+
+`list` is a plain list of every instance, including ones in other tabs and
+windows. Each entry shows the instance glyph in its own stable color, the name,
+and the cwd. Menus are centered rather than attached to the cursor.
+
+Without `rex`, or when fewer than two candidates can be located on screen, the
+map silently falls back to the list.
+
+==============================================================================
+6. BACKENDS                                               *ask-agent-backends*
+
+A backend is a table (see `lua/ask_agent/backends/init.lua`):
+
+  id        unique id, e.g. "pi"
+  label     shown in prompts
+  targets() live instances
+  send(target, text) -> ok, err?
+  icon      optional glyph
+  available() optional: ok, reason?
+  status()    optional: ok, reason?
+
+A target is one instance:
+
+  id        stable within its lifetime (pid, socket path, pane id …)
+  label     human label, e.g. "pid 12345"
+  cwd       project directory (used for matching)
+  ts        start time (ordering, alias staleness, color)
+  sock      optional delivery endpoint
+  rex       optional { session, block }: which terminal pane it lives in
+  icon      optional per-instance glyph
+  avoid     optional warning to show before sending
+
+`ask_agent.backends.generic.tmux()` builds a tmux backend; register it with
+`setup({ extra = { ... } })` or `require("ask_agent.backends").register(mod)`.
+
+Individual instances are told apart by a stable color (hash of `id:ts`) and by
+an optional name; see |ask-agent-aliases|.
+
+==============================================================================
+7. INSTANCE NAMES                                   *ask-agent-aliases*
+
+Names are stored in a JSON file (default under `stdpath("cache")`), keyed by
+instance id and stamped with its start time, so a recycled pid never inherits an
+old name. Set or clear them with |:AskAgentAlias|.
+
+==============================================================================
+8. RPC BRIDGE                                         *ask-agent-bridge*
+
+`setup()` starts a Neovim RPC socket and writes a registration file so an agent
+can pull live context (unsaved buffers, diagnostics, quickfix) back out:
+
+>sh
+nvim --server <sock> --remote-expr \
+  'v:lua.require("ask_agent.bridge").handle("<base64(json)>")'
+<
+
+Actions: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`.
+Handlers return JSON and never throw. Register extra actions from your config:
+
+>lua
+require("ask_agent.bridge").extend("project", function(req)
+  return { ok = true, text = my_summary(req.root) }
+end)
+<
+
+`project` has no built-in implementation: it depends on the host config's
+project tooling.
+
+==============================================================================
+9. API                                                     *ask-agent-api*
+
+>lua
+local ask = require("ask_agent")
+ask.setup(opts)
+ask.ask({ visual = true })
+ask.send(text, opts)
+ask.use("pi") / ask.current()
+ask.list() / ask.targets("pi")
+ask.pin(id) / ask.pinned()
+ask.alias(target, name) / ask.alias_of(target)
+ask.picker("map"|"list")
+ask.register(backend)
+ask.generic  -- tmux backend factory
+<
+
+ vim:tw=78:ts=8:noet:ft=help:norl:
