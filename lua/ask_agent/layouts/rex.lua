@@ -146,6 +146,13 @@ function M.match(t)
 	return type(loc) == "table" and loc.block or nil
 end
 
+---Adapter contract: the window nvim lives in (falls back to the active window).
+---@param session string|nil
+---@return table|nil window, table|nil data, string|nil err
+function M.window(session)
+	return M.current_window(session)
+end
+
 ---The window nvim itself lives in (falls back to the active window).
 ---@param session string|nil
 ---@return table|nil window, table|nil data, string|nil err
