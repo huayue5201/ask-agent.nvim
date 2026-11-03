@@ -1,0 +1,58 @@
+-- lua/ask_agent/message.lua
+---@brief Render "question + anchor" into the final text that gets sent.
+--
+-- Rendering lives on the nvim side (rather than in each agent adapter) so every backend receives
+-- the same message format; switching agents does not require rewriting the assembly logic. The format
+-- matches the pi extension's early renderAsk, so older pi extensions can still parse the legacy
+-- {prompt, anchor} payload.
+
+local M = {}
+
+---@param anchor table
+---@param prompt string
+---@return string
+function M.render(anchor, prompt)
+	local a = anchor or {}
+	local question = vim.trim(prompt or "")
+	local out = { question ~= "" and question or "(empty question)" }
+
+	local where = {
+		a.path and ("%s:%d"):format(a.path, a.line or 1) or "<no filename>",
+		a.tab and ("tab %d"):format(a.tab) or nil,
+		a.modified and "unsaved" or nil,
+	}
+	local bits = {}
+	for _, w in ipairs(where) do
+		if w then
+			table.insert(bits, w)
+		end
+	end
+
+	table.insert(out, "")
+	-- Project overview digest (optional): placed before the anchor so the model sees "what project this is"
+	-- before "where this question lives"
+	if a.digest and a.digest ~= "" then
+		table.insert(out, "<project-overview>")
+		for line in (a.digest .. "\n"):gmatch("(.-)\n") do
+			table.insert(out, line)
+		end
+		table.insert(out, "</project-overview>")
+		table.insert(out, "")
+	end
+	table.insert(out, ("<nvim-context %s>"):format(table.concat(bits, " · ")))
+	if a.cwd then
+		table.insert(out, "cwd: " .. a.cwd)
+	end
+	if a.visual then
+		table.insert(out, ("selection %d-%d:"):format(a.visual.start_line, a.visual.end_line))
+		table.insert(out, "```" .. (a.filetype or ""))
+		for _, line in ipairs(a.visual.lines or {}) do
+			table.insert(out, line)
+		end
+		table.insert(out, "```")
+	end
+	table.insert(out, "</nvim-context>")
+	return table.concat(out, "\n")
+end
+
+return M

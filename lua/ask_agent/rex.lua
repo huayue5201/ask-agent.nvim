@@ -1,0 +1,159 @@
+-- lua/ask_agent/rex.lua
+---@brief Read the rex (terminal multiplexer) pane layout to map agent instances
+---onto concrete cells in the terminal.
+--
+-- Data source: `rex session inspect <session> --json` (~30ms in practice), whose
+-- core structure is
+--   { label, active_window_id, windows = { { window_id, layers = { { kind = "tiled",
+--     layout = <node>, blocks = { ... } } } } }, blocks = { { block_id, label } } }
+--   <node> = { block_id, rect = {x, y, w, h} }              -- leaf: 0..1 normalised
+--          | { split = { direction, ratio, before, after } } -- branch
+--
+-- When the nvim process itself lives in rex it gets REX_SESSION / REX_BLOCK in
+-- its environment; that locates "the window I am looking at", and flattening
+-- that window's leaves gives the map data.
+local M = {}
+
+local CACHE_MS = 1500
+local cache = {}
+
+local function env(name)
+	local v = vim.env[name]
+	if type(v) ~= "string" or v == "" then
+		return nil
+	end
+	return v
+end
+
+function M.session()
+	return env("REX_SESSION")
+end
+
+function M.block()
+	return env("REX_BLOCK")
+end
+
+---Whether the map is usable at all: inside rex and the rex command is available.
+function M.available()
+	return M.session() ~= nil and vim.fn.executable("rex") == 1
+end
+
+---Get the inspect result for a session (short cache so one picker session does
+---not spawn the process over and over).
+---@param session string|nil
+---@return table|nil data, string|nil err
+function M.inspect(session)
+	session = session or M.session()
+	if not session then
+		return nil, "not inside rex (no REX_SESSION)"
+	end
+	local now = vim.uv.now()
+	local hit = cache[session]
+	if hit and now - hit.ts < CACHE_MS then
+		return hit.data
+	end
+	local ok, res = pcall(function()
+		return vim.system({ "rex", "session", "inspect", session, "--json" }, { text = true }):wait(2000)
+	end)
+	if not ok or not res or res.code ~= 0 then
+		return nil, "rex session inspect failed"
+	end
+	local decoded, data = pcall(vim.json.decode, res.stdout)
+	if not decoded or type(data) ~= "table" then
+		return nil, "cannot parse rex output"
+	end
+	cache[session] = { ts = now, data = data }
+	return data
+end
+
+local function flatten(node, out)
+	if type(node) ~= "table" then
+		return
+	end
+	if node.block_id then
+		if node.rect then
+			table.insert(out, { block_id = node.block_id, rect = node.rect })
+		end
+		return
+	end
+	local split = node.split
+	if type(split) ~= "table" then
+		return
+	end
+	flatten(split.before, out)
+	flatten(split.after, out)
+end
+
+---Flatten every layer of a window -> { { block_id, rect, kind }, ... }
+--
+-- Array order is stacking order: the tiled layer is at the bottom, floating
+-- layers stack upwards in array order (later entries are on top, matching rex's
+-- raise_layer/lower_layer order). `rect` is already absolute within the whole
+-- window (floating layers write their bounds into it), so the layers can simply
+-- be painted over each other.
+---@param window table
+---@return table[]
+function M.panes(window)
+	local out = {}
+	for _, layer in ipairs((window or {}).layers or {}) do
+		local kind = layer.kind or "tiled"
+		if layer.layout then
+			local layer_panes = {}
+			flatten(layer.layout, layer_panes)
+			for _, p in ipairs(layer_panes) do
+				p.kind = kind
+				table.insert(out, p)
+			end
+		end
+	end
+	return out
+end
+
+---block_id -> label (things like "lively-prairie") lookup table.
+---@param data table
+---@return table<string, string>
+function M.labels(data)
+	local out = {}
+	local function collect(blocks)
+		for _, b in ipairs(blocks or {}) do
+			if b.block_id then
+				out[b.block_id] = b.label
+			end
+		end
+	end
+	collect(data.blocks)
+	for _, w in ipairs(data.windows or {}) do
+		for _, layer in ipairs(w.layers or {}) do
+			collect(layer.blocks)
+		end
+	end
+	return out
+end
+
+---The window nvim itself lives in (falls back to the active window).
+---@param session string|nil
+---@return table|nil window, table|nil data, string|nil err
+function M.current_window(session)
+	local data, err = M.inspect(session)
+	if not data then
+		return nil, nil, err
+	end
+	local want = M.block()
+	if want then
+		for _, w in ipairs(data.windows or {}) do
+			for _, p in ipairs(M.panes(w)) do
+				if p.block_id == want then
+					return w, data
+				end
+			end
+		end
+	end
+	for _, w in ipairs(data.windows or {}) do
+		if w.window_id == data.active_window_id then
+			return w, data
+		end
+	end
+	return (data.windows or {})[1], data
+end
+
+return M

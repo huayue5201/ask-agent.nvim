@@ -1,0 +1,6 @@
+# stylua / lua ls caches
+.stylua-cache/
+.luarc.json
+.luals/
+# macOS
+.DS_Store
