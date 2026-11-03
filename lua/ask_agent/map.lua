@@ -511,6 +511,33 @@ function M.select(opts)
 			sel = it
 		end
 	end
+	-- Nothing in my own pane (the usual case: the agent runs in a neighbour): pre-select the nearest one instead of the
+	-- first candidate in the list, so the highlighted cell is always the agent next door rather than a random one.
+	if not sel and opts.cursor_pane then
+		local origin
+		for _, p in ipairs(panes) do
+			if p.id == opts.cursor_pane and p.rect then
+				origin = p.rect
+			end
+		end
+		if origin then
+			local ox, oy = origin[1] + origin[3] / 2, origin[2] + origin[4] / 2
+			local best, best_d
+			for _, it in ipairs(located) do
+				for _, p in ipairs(panes) do
+					if p.id == it.pane_id and p.rect then
+						local dx = (p.rect[1] + p.rect[3] / 2) - ox
+						local dy = (p.rect[2] + p.rect[4] / 2) - oy
+						local d = dx * dx + dy * dy
+						if not best_d or d < best_d then
+							best, best_d = it, d
+						end
+					end
+				end
+			end
+			sel = best
+		end
+	end
 	sel = sel or located[1]
 
 	local hit
