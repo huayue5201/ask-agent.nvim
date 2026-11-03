@@ -481,7 +481,7 @@ function M.select(opts)
 	for _, it in ipairs(items) do
 		if it.pane_id and by_pane[it.pane_id] == it then
 			for _, p in ipairs(panes) do
-				if p.pane_id == it.pane_id then
+				if p.id == it.pane_id then
 					table.insert(located, it)
 					break
 				end
@@ -671,7 +671,7 @@ function M.select(opts)
 			return nil
 		end
 		for _, p in ipairs(panes) do
-			if p.pane_id == item.pane_id then
+			if p.id == item.pane_id then
 				return p
 			end
 		end
