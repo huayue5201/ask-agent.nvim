@@ -227,6 +227,19 @@ end
 ---@param back fun()|nil go back to the map (nil when the map is unavailable)
 local function list_select(mod, cands, note_avoid, cb, back)
 	local before = float_wins()
+	-- Only record the choice here and hand it to cb *after* the post-processing below: on_choice fires before
+	-- vim.ui.select returns, so calling cb inside would open the next float (the ask input) while we are still
+	-- diffing "new floating windows" — that float would be mistaken for the menu, re-centered, painted and even
+	-- get the <Tab> mapping. A blocking implementation chooses before we return (commit below); an async one
+	-- (telescope/fzf-lua/snacks) chooses later, when `decorated` is already set. Cancelled (nil) means "do nothing".
+	local chosen, decorated = nil, false
+	local function commit(c)
+		if not c then
+			return
+		end
+		note_avoid(c.target)
+		cb(c.target)
+	end
 	vim.ui.select(cands, {
 		prompt = ("Send to which %s%s? (:AskAgentTarget remembers the choice; <Tab> in the map also gets you here)"):format(
 			icon_prefix(mod),
@@ -248,11 +261,11 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			return table.concat(parts, "  ")
 		end,
 	}, function(c)
-		if not c then
-			return cb(nil) -- cancelled: do nothing
+		if decorated then
+			commit(c)
+		else
+			chosen = c
 		end
-		note_avoid(c.target)
-		cb(c.target)
 	end)
 
 	-- The floating window that appeared: center it and paint each item's icon with the instance's fixed color;
@@ -286,6 +299,11 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			end
 		end
 	end
+
+	-- Now the menu window is fully decorated (and, for blocking implementations, already closed): only then
+	-- continue with the chosen target, so opening the ask input cannot be mistaken for the menu.
+	decorated = true
+	commit(chosen)
 end
 
 local function map_select(mod, cands, note_avoid, cb, switch)
