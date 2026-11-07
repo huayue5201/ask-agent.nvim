@@ -29,6 +29,11 @@ function M.input(opts)
 	-- after 2.9s in an empty buffer), so disable buffer-level auto_trigger and pull one on demand with <A-]>.
 	vim.bo[buf].filetype = "markdown"
 	vim.b[buf].minuet_virtual_text_auto_trigger = false -- minuet virtualtext.lua:26 reads this variable directly
+	-- blink.cmp: keep the popup menu out of this buffer. Leaving insert closes the menu, and that close
+	-- repaints the whole floating window (measured: 3.2 KB of cells re-emitted, all 8 rows) — the flash
+	-- right after <Esc>. A free-form question has nothing worth completing anyway (same reasoning as
+	-- minuet above); the buffer-local flag is read in blink.cmp/lua/blink/cmp/config/init.lua:135-144.
+	vim.b[buf].completion = false
 
 	local win = vim.api.nvim_open_win(buf, true, {
 		relative = "editor",
