@@ -12,7 +12,8 @@ CONTENTS                                              *ask-agent-contents*
   7. Instance names ............................. |ask-agent-aliases|
   8. Layout adapters ............................ |ask-agent-layouts|
   9. RPC bridge ................................. |ask-agent-bridge|
-  10. API ....................................... |ask-agent-api|
+  10. Batch questions ........................... |ask-agent-batch|
+  11. API ....................................... |ask-agent-api|
 
 ==============================================================================
 1. DESIGN                                                   *ask-agent-design*
@@ -69,10 +70,30 @@ require("ask_agent").setup({
 :AskAgentAlias          Name an instance; names show up in lists, prompts and
                         notifications. `!` clears a name.
 
+                                                  *:AskAgentBatch*
+:AskAgentBatch          Queue a question at the cursor instead of sending it.
+
+                                                  *:AskAgentBatchVisual*
+:AskAgentBatchVisual    Queue a question anchored to the visual selection.
+
+                                                  *:AskAgentBatchSend*
+:AskAgentBatchSend      Send every queued question, one message each, to one
+                        target instance (chosen once). Successful entries leave
+                        the queue; failed ones stay for a retry.
+
+                                                  *:AskAgentBatchList*
+:AskAgentBatchList      List queued questions; choose jump to code, edit or
+                        delete.
+
+                                                  *:AskAgentBatchClear*
+:AskAgentBatchClear     Drop every queued question and its marker.
+
 ==============================================================================
 4. KEYMAPS                                                 *ask-agent-keymaps*
 
 <leader>aq (n, v)       Ask (cursor / selection anchor)
+<leader>ab (n, v)       Queue a question (cursor / selection anchor)
+<leader>aB              Send all queued questions
 <leader>ai              Name an instance
 
 In the ask window: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` inserts a newline.
@@ -180,12 +201,29 @@ end)
 project tooling.
 
 ==============================================================================
-10. API                                                    *ask-agent-api*
+10. BATCH QUESTIONS                                        *ask-agent-batch*
+
+Queue questions while browsing instead of sending them immediately. Each queued
+entry keeps the anchor captured at the time (cwd, file, line, selection), is
+drawn in the source buffer as a `»` sign plus end-of-line virtual text, and
+follows buffer edits through its extmark. `<leader>aB`
+(|:AskAgentBatchSend|) sends every entry as its own message to a single target
+chosen once.
+
+In the ask window: `<C-s>` queues the question, `<Esc>`/`<C-c>` cancels.
+Use |:AskAgentBatchList| to jump to an entry's code, edit its text or delete it;
+|:AskAgentBatchClear| drops them all. The queue lives in memory for the current
+Neovim session.
+
+==============================================================================
+11. API                                                    *ask-agent-api*
 
 >lua
 local ask = require("ask_agent")
 ask.setup(opts)
 ask.ask({ visual = true })
+ask.batch_ask({ visual = true })
+ask.batch_send() / ask.batch_list() / ask.batch_clear() / ask.batch_count()
 ask.send(text, opts)
 ask.use("pi") / ask.current()
 ask.list() / ask.targets("pi")

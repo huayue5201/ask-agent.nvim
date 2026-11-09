@@ -19,6 +19,9 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 ## Features
 
 - **Floating ask window** — no buffers, no temp files, no window churn. `<C-s>` sends.
+- **Batch questions** — queue several anchored questions while you browse, each shown as
+  a marker + virtual text in the source buffer, then send them all with one key
+  (`<leader>aB`). Each question travels with its own anchor.
 - **Anchor capture** — `cwd`, tab, `file:line`, visual selection, `modified`, plus a
   one-line human-readable summary that travels with the question.
 - **Multiple instances, disambiguated** — when several agents run in the same project
@@ -80,12 +83,19 @@ vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 | `:AskAgentPicker [map\|list]` | Choose the multi-candidate picker |
 | `:AskAgentTarget [id]` | Pin the target instance (`!` clears) |
 | `:AskAgentAlias` | Name an instance (`!` clears the name) |
+| `:AskAgentBatch` | Queue a question at the cursor instead of sending it now |
+| `:AskAgentBatchVisual` | Queue a question anchored to the selection |
+| `:AskAgentBatchSend` | Send every queued question (one message each) to one target |
+| `:AskAgentBatchList` | List queued questions (jump / edit / delete) |
+| `:AskAgentBatchClear` | Drop every queued question |
 
 Default keymaps (all configurable, `keymaps = false` disables):
 
 | Key | Action |
 | --- | --- |
 | `<leader>aq` (n / v) | Ask (cursor / selection anchor) |
+| `<leader>ab` (n / v) | Queue a question (cursor / selection anchor) |
+| `<leader>aB` | Send all queued questions |
 | `<leader>ai` | Name an instance |
 
 In the **ask window**: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` is a newline.
@@ -113,7 +123,14 @@ require("ask_agent").setup({
   icons = { pi = "π", claude = "✻" },
   icon_colors = { claude = "#d97757" },
 
-  keymaps = { ask = "<leader>aq", ask_visual = "<leader>aq", alias = "<leader>ai" },
+  keymaps = {
+    ask = "<leader>aq",
+    ask_visual = "<leader>aq",
+    batch = "<leader>ab",
+    batch_visual = "<leader>ab",
+    batch_send = "<leader>aB",
+    alias = "<leader>ai",
+  },
 
   -- instance names live here by default
   aliases = { file = vim.fn.stdpath("cache") .. "/ask-agent/aliases.json" },
@@ -277,6 +294,10 @@ local ask = require("ask_agent")
 
 ask.setup(opts)
 ask.ask(opts)                 -- ask ({ visual = true })
+ask.batch_ask(opts)           -- queue instead of send ({ visual = true })
+ask.batch_send(opts)          -- send all queued, one message each
+ask.batch_list()              -- list queued questions (jump/edit/delete)
+ask.batch_clear() / ask.batch_count()
 ask.send(text, opts)          -- send without the ask window
 ask.use(id) / ask.current()   -- default backend
 ask.list() / ask.targets(id)  -- backends / instances
@@ -288,6 +309,16 @@ ask.generic                   -- tmux backend factory
 ask.register(mod)             -- register a backend at runtime
 ask.register_layout(mod)      -- register a layout adapter at runtime
 ```
+
+## Batch questions
+
+When a question comes up while browsing, `<leader>ab` (also in visual mode, for a
+selection) queues it instead of sending: the text goes nowhere yet, and the source line gets a
+`»` sign plus the question as end-of-line virtual text (`[n]` = queue position). Move
+on, queue more. `<leader>aB` (`:AskAgentBatchSend`) sends every entry as its own
+message — each keeps the anchor captured when it was queued — to a single target
+chosen once. Entries follow buffer edits through their extmarks, and
+`:AskAgentBatchList` jumps/edits/deletes them.
 
 ## Health
 

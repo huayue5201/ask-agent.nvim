@@ -23,6 +23,7 @@ function M.capture(visual)
 	local a = {
 		cwd = vim.fn.getcwd(),
 		tab = vim.fn.tabpagenr(),
+		buf = buf,
 		path = path and vim.fn.fnamemodify(path, ":~:.") or nil,
 		line = cursor[1],
 		col = cursor[2] + 1,

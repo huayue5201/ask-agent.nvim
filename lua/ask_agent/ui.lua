@@ -11,7 +11,7 @@
 local M = {}
 
 --- Open the input floating window
----@param opts { title: string, on_submit: fun(text: string), prompt?: string }
+---@param opts { title: string, on_submit: fun(text: string), prompt?: string, default?: string }
 ---@return integer buf, integer win
 function M.input(opts)
 	local ui_w, ui_h = vim.o.columns, vim.o.lines
@@ -83,6 +83,13 @@ function M.input(opts)
 	vim.keymap.set("n", "<C-c>", close, { buffer = buf, nowait = true, desc = "Ask agent: cancel" })
 
 	vim.cmd("startinsert")
+	-- Prefilled text (batch edit): put the cursor at the end instead of the first line
+	if opts.default and opts.default ~= "" then
+		local lines = vim.split(opts.default, "\n", { plain = true })
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+		local row = #lines
+		pcall(vim.api.nvim_win_set_cursor, win, { row, #lines[row] })
+	end
 	return buf, win
 end
 

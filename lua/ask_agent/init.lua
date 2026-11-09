@@ -15,7 +15,7 @@
 -- Neither approach requires touching this file.
 --
 -- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register/
---             layout/register_layout.
+--             layout/register_layout/batch_ask/batch_send/batch_list/batch_clear/batch_count.
 
 local backends = require("ask_agent.backends")
 local generic = require("ask_agent.backends.generic")
@@ -23,6 +23,7 @@ local context = require("ask_agent.context")
 local message = require("ask_agent.message")
 local ui = require("ask_agent.ui")
 local aliases = require("ask_agent.aliases")
+local queue = require("ask_agent.queue")
 
 local NS_LIST = vim.api.nvim_create_namespace("ask_agent.list")
 
@@ -490,6 +491,170 @@ function M.ask(opts)
 	end)
 end
 
+--- Queue a question for a later batch send instead of sending it now.
+--- Same anchor capture as ask(), but the text goes into ask_agent.queue and is drawn
+--- in the source buffer as a marker + virtual text.
+---@param opts { visual?: boolean, backend?: string }|nil
+function M.batch_ask(opts)
+	opts = opts or {}
+	local mod = backends.get(opts.backend or current)
+	if not mod then
+		vim.notify(
+			("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
+			vim.log.levels.WARN
+		)
+		return
+	end
+	-- The anchor must be captured before the floating window opens
+	local anchor = context.capture(opts.visual)
+	ui.input({
+		title = ("Batch %s · %s · %d queued"):format(mod.label, context.describe(anchor), queue.count()),
+		on_submit = function(prompt)
+			local entry = queue.add(anchor, prompt)
+			vim.notify(
+				("[ask_agent] Queued #%d (%d pending) — :AskAgentBatchSend sends them all"):format(
+					entry.index,
+					queue.count()
+				),
+				vim.log.levels.INFO
+			)
+		end,
+	})
+end
+
+--- Send every queued question, one message each, to a single target chosen once.
+--- Successfully sent entries are removed (their markers disappear); failed ones stay queued.
+---@param opts { backend?: string }|nil
+---@return boolean ok
+function M.batch_send(opts)
+	opts = opts or {}
+	local pending = queue.list()
+	if #pending == 0 then
+		vim.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
+		return false
+	end
+	local mod = backends.get(opts.backend or current)
+	if not mod then
+		vim.notify(
+			("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
+			vim.log.levels.WARN
+		)
+		return false
+	end
+	choose_target(mod, function(target)
+		if not target then
+			return
+		end
+		local sent, failed = 0, {}
+		for _, entry in ipairs(pending) do
+			local index = entry.index
+			local anchor = queue.sync(entry)
+			local ok, send_err = mod.send(target, message.render(anchor, entry.prompt))
+			if ok then
+				sent = sent + 1
+				queue.remove(entry.id)
+			else
+				table.insert(failed, { index = index, err = send_err })
+			end
+		end
+		if sent > 0 then
+			local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
+			vim.notify(
+				("[%s] Sent %d batched question(s) → #%d %s (%s)"):format(
+					mod.label,
+					sent,
+					target.index or 0,
+					name_of(target),
+					where
+				),
+				vim.log.levels.INFO
+			)
+		end
+		for _, f in ipairs(failed) do
+			vim.notify(
+				("[%s] Batch #%d failed: %s"):format(mod.label, f.index, f.err or "unknown error"),
+				vim.log.levels.WARN
+			)
+		end
+	end)
+	return true
+end
+
+--- Jump to the code an entry is attached to.
+---@param entry table
+local function goto_entry(entry)
+	local buf = entry.buf
+	if not vim.api.nvim_buf_is_valid(buf) then
+		vim.notify("[ask_agent] The buffer of this anchor no longer exists", vim.log.levels.WARN)
+		return
+	end
+	if entry.bufname ~= "" and vim.api.nvim_buf_get_name(buf) ~= entry.bufname then
+		vim.notify("[ask_agent] The buffer number was reused by another file", vim.log.levels.WARN)
+		return
+	end
+	local win = vim.fn.bufwinid(buf)
+	if win ~= -1 then
+		vim.api.nvim_set_current_win(win)
+	else
+		vim.api.nvim_set_current_buf(buf)
+	end
+	local line = math.max(1, math.min(entry.line or 1, vim.api.nvim_buf_line_count(buf)))
+	vim.api.nvim_win_set_cursor(0, { line, entry.col or 0 })
+	vim.cmd("normal! zz")
+end
+
+--- List queued questions: jump / edit / delete.
+function M.batch_list()
+	local list = queue.list()
+	if #list == 0 then
+		vim.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
+		return
+	end
+	local function describe(entry)
+		local a = entry.anchor
+		local first = (entry.prompt:gsub("\n.*", ""))
+		return ("#%d  %s:%d  %s"):format(entry.index, a.path or "<no filename>", entry.line or 1, first)
+	end
+	vim.ui.select(list, {
+		prompt = ("Queued questions (%d)"):format(#list),
+		format_item = describe,
+	}, function(entry)
+		if not entry then
+			return
+		end
+		vim.ui.select({ "jump to code", "edit question", "delete" }, {
+			prompt = describe(entry),
+		}, function(action)
+			if action == "jump to code" then
+				goto_entry(entry)
+			elseif action == "edit question" then
+				ui.input({
+					title = ("Edit #%d · %s"):format(entry.index, context.describe(entry.anchor)),
+					default = entry.prompt,
+					on_submit = function(text)
+						queue.update(entry.id, text)
+					end,
+				})
+			elseif action == "delete" then
+				queue.remove(entry.id)
+				vim.notify(("[ask_agent] Deleted queued question #%d"):format(entry.index), vim.log.levels.INFO)
+			end
+		end)
+	end)
+end
+
+--- Drop every queued question and its marker.
+function M.batch_clear()
+	local n = queue.count()
+	queue.clear()
+	vim.notify(("[ask_agent] Cleared %d queued question(s)"):format(n), vim.log.levels.INFO)
+end
+
+---@return integer
+function M.batch_count()
+	return queue.count()
+end
+
 --- Switch the default backend
 ---@param id string
 ---@return boolean ok, string? err
@@ -612,7 +777,7 @@ end
 --- set `opts.keymaps = false` to disable all keymaps. A keymap is only installed when its value is a non-empty string.
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, keymaps?: { ask?: string|false, ask_visual?: string|false, alias?: string|false }|false }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, keymaps?: { ask?: string|false, ask_visual?: string|false, batch?: string|false, batch_visual?: string|false, batch_send?: string|false, alias?: string|false }|false }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -647,6 +812,21 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("AskAgentVisual", function()
 		M.ask({ visual = true })
 	end, { desc = "Ask agent: like AskAgent but includes the current selection" })
+	vim.api.nvim_create_user_command("AskAgentBatch", function()
+		M.batch_ask()
+	end, { desc = "Ask agent: queue a question at the cursor instead of sending it now" })
+	vim.api.nvim_create_user_command("AskAgentBatchVisual", function()
+		M.batch_ask({ visual = true })
+	end, { desc = "Ask agent: queue a question anchored to the current selection" })
+	vim.api.nvim_create_user_command("AskAgentBatchSend", function()
+		M.batch_send()
+	end, { desc = "Ask agent: send every queued question (one message each) to one target" })
+	vim.api.nvim_create_user_command("AskAgentBatchList", function()
+		M.batch_list()
+	end, { desc = "Ask agent: list queued questions (jump/edit/delete)" })
+	vim.api.nvim_create_user_command("AskAgentBatchClear", function()
+		M.batch_clear()
+	end, { desc = "Ask agent: drop every queued question" })
 	-- Legacy name
 	vim.api.nvim_create_user_command("AskAgentPi", function()
 		M.ask()
@@ -799,7 +979,14 @@ function M.setup(opts)
 	-- Keymaps: defaults match the historical <leader> mappings; keymaps = false disables all of them
 	local keymaps = opts.keymaps
 	if keymaps == nil then
-		keymaps = { ask = "<leader>aq", ask_visual = "<leader>aq", alias = "<leader>ai" }
+		keymaps = {
+			ask = "<leader>aq",
+			ask_visual = "<leader>aq",
+			alias = "<leader>ai",
+			batch = "<leader>ab",
+			batch_visual = "<leader>ab",
+			batch_send = "<leader>aB",
+		}
 	end
 	if keymaps then
 		if type(keymaps.ask) == "string" and keymaps.ask ~= "" then
@@ -811,6 +998,21 @@ function M.setup(opts)
 			vim.keymap.set("v", keymaps.ask_visual, function()
 				M.ask({ visual = true })
 			end, { desc = "Ask agent: ask the current backend (selection anchor)" })
+		end
+		if type(keymaps.batch) == "string" and keymaps.batch ~= "" then
+			vim.keymap.set("n", keymaps.batch, function()
+				M.batch_ask()
+			end, { desc = "Ask agent: queue a question at the cursor (batch)" })
+		end
+		if type(keymaps.batch_visual) == "string" and keymaps.batch_visual ~= "" then
+			vim.keymap.set("v", keymaps.batch_visual, function()
+				M.batch_ask({ visual = true })
+			end, { desc = "Ask agent: queue a question anchored to the selection (batch)" })
+		end
+		if type(keymaps.batch_send) == "string" and keymaps.batch_send ~= "" then
+			vim.keymap.set("n", keymaps.batch_send, function()
+				M.batch_send()
+			end, { desc = "Ask agent: send all queued questions" })
 		end
 		if type(keymaps.alias) == "string" and keymaps.alias ~= "" then
 			vim.keymap.set("n", keymaps.alias, "<cmd>AskAgentAlias<cr>", { desc = "Ask agent: alias an instance" })
