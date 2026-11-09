@@ -4,7 +4,10 @@
 --
 -- Contract (pi side: extensions/nvim-context.ts):
 --   ~/.cache/pi-agent/ask/<pid>.sock   unix socket, receives one JSON line {"text": "..."}
---   ~/.cache/pi-agent/ask/<pid>.json   registry {pid, sock, cwd, ts, embedded}
+--   ~/.cache/pi-agent/ask/<pid>.json   registry {pid, sock, cwd, ts, embedded, busy}
+--     `busy` is rewritten by the extension on agent_start/agent_settled, so nvim can
+--     tell "idle" from "processing a task"; messages sent while busy are queued by pi
+--     as follow-ups instead of interrupting the current tool chain.
 -- `embedded=true` means this pi runs as `pi --mode rpc` (started and owned by an
 -- ACP client such as codecompanion): messages sent to it only go back to that
 -- client, never to nvim. Such instances are excluded from cwd matching by
@@ -74,6 +77,9 @@ local function scan()
 					-- the terminal layout (older pi versions do not write it,
 					-- so it stays nil)
 					rex = type(entry.rex) == "table" and entry.rex or nil,
+					-- true while a turn is running: a question sent now is queued
+					-- as a follow-up, not answered immediately
+					busy = entry.busy == true,
 					avoid = embedded
 							and "embedded pi (driven by codecompanion/ACP): replies only appear in that chat buffer"
 						or nil,
@@ -105,16 +111,29 @@ function M.stale_targets()
 	return dead
 end
 
----Is the instance still there? Re-checked when the picker opens, because an instance can
----exit between listing and choosing.
+---Is the instance still there, and is it free? Re-checked when the picker opens, because
+---an instance can exit between listing and choosing.
 ---@param target table
----@return { running: boolean, detail?: string }
+---@return { running: boolean, busy?: boolean, detail?: string }
 function M.probe(target)
 	if not alive(tonumber(target.id)) then
 		return { running = false, detail = "process exited" }
 	end
 	if target.sock and vim.uv.fs_stat(target.sock) == nil then
 		return { running = false, detail = "socket missing" }
+	end
+	-- busy is carried by the listing; re-read the registry so a turn that started
+	-- (or settled) while the picker was open is reflected
+	local busy = target.busy == true
+	local ok, entry = pcall(function()
+		local path = ask_dir() .. "/" .. tostring(target.id) .. ".json"
+		return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+	end)
+	if ok and type(entry) == "table" then
+		busy = entry.busy == true
+	end
+	if busy then
+		return { running = true, busy = true, detail = "busy" }
 	end
 	return { running = true }
 end

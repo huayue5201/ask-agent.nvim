@@ -132,9 +132,16 @@ menus are centered rather than attached to the cursor.
 
 Every entry starts with a live status dot, re-probed when the picker opens:
 
-  ●  running (the probe may add a short detail, e.g. the pane's command)
+  ●  idle — the agent is free, the question is handled right away
+  ◐  busy — a turn is running; the question is still delivered now
+     (pi queues it as a follow-up and runs it after the current one), and a
+     notice tells you so
   ○  not running — process exited, socket missing, pane gone/dead, or the pane
      fell back to a shell
+
+The probe may add a short detail next to the dot (the pane's command, "busy",
+"process exited", ...). `pi` reports busy via the `busy` field its extension
+rewrites on agent_start/agent_settled; other backends may not report it.
 
 Exited instances reported by the backend (`stale_targets()`) are listed at the
 end, marked `○ … (exited)`, so a vanished agent is visible instead of absent.
@@ -156,7 +163,7 @@ A backend is a table (see `lua/ask_agent/backends/init.lua`):
   icon      optional glyph
   available() optional: ok, reason?
   status()    optional: ok, reason?
-  probe(target) optional: { running, detail? }  live check for the picker
+  probe(target) optional: { running, busy?, detail? }  live check for the picker
   stale_targets() optional: table[]             recently exited instances,
                                                 shown in the list as "○ not running"
 

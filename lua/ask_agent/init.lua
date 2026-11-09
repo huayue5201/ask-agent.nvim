@@ -99,17 +99,39 @@ local function candidate_status(mod, c)
 	return c._status
 end
 
---- Picker prefix: a filled/hollow dot plus an optional short detail ("process exited", "pane runs zsh", ...).
----@param st { running: boolean, stale?: boolean, detail?: string }
+--- Picker prefix: filled dot = idle, half dot = busy (the question gets queued as a
+---follow-up), hollow dot = gone. The detail text ("busy", "process exited", ...) rides along.
+---@param st { running: boolean, busy?: boolean, stale?: boolean, detail?: string }
 ---@return string mark, string|nil detail
 local function status_mark(st)
 	if st.stale then
 		return "○", st.detail or "exited"
 	end
-	if st.running then
-		return "●", st.detail
+	if not st.running then
+		return "○", st.detail or "not running"
 	end
-	return "○", st.detail or "not running"
+	if st.busy then
+		return "◐", st.detail or "busy"
+	end
+	return "●", st.detail
+end
+
+--- Tell the user that a busy target will not answer right away (pi queues the message
+--- as a follow-up and processes it after the current turn).
+---@param mod table
+---@param target table
+---@param st { running: boolean, busy?: boolean }
+local function note_busy(mod, target, st)
+	if not st.busy then
+		return
+	end
+	vim.notify(
+		("[%s] %s is busy — the question is queued behind the current task"):format(
+			mod.label or mod.id,
+			name_of(target)
+		),
+		vim.log.levels.INFO
+	)
 end
 
 local function pick_opts()
@@ -282,6 +304,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			)
 			return
 		end
+		note_busy(mod, c.target, st)
 		note_avoid(c.target)
 		cb(c.target)
 	end
@@ -471,6 +494,7 @@ local function choose_target(mod, cb)
 	if #live == 1 and live[1].tier == 1 and not live[1].target.avoid then
 		local st = candidate_status(mod, live[1])
 		if st.running then
+			note_busy(mod, live[1].target, st)
 			return cb(live[1].target)
 		end
 	end

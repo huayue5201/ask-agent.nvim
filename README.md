@@ -31,9 +31,10 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   color in the list and in the map. Give instances names with `:AskAgentAlias`.
 - **Two pickers** — a **map** of your terminal split layout (pick the agent by the pane
   it lives in) and a plain **list** (works across tabs/windows). `<Tab>` flips between
-  them. Every row shows a live status dot: `●` running, `○` not running (process gone,
-  socket missing, pane fell back to the shell); exited pi instances stay visible in the
-  list, greyed out, so you can see the agent is gone instead of guessing.
+  them. Every row shows a live status dot: `●` idle, `◐` busy (the question is queued
+  behind the running task, same as typing into pi while it works), `○` not running
+  (process gone, socket missing, pane fell back to the shell). Exited pi instances stay
+  visible in the list, greyed out, so you can see the agent is gone instead of guessing;
   `show_stale = false` hides them.
 - **Optional RPC bridge** — lets the agent pull *live* Neovim context back (unsaved
   buffers, diagnostics, quickfix, project overview) instead of reading stale files.
@@ -112,7 +113,9 @@ vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentAlias<cr>", { desc = "Ask agent:
 In the **ask window**: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` is a newline.
 In the **map**: letter picks that pane, `<Tab>` switches to the list, `<Esc>` cancels.
 In the **list**: number (or `<M-a>` for items past 9) picks, `<Tab>` goes back to the map.
-The dot next to each entry is its live status; choosing a `○` entry only warns — nothing is sent.
+The dot next to each entry is its live status: `●` idle, `◐` busy (your question is
+delivered immediately but pi processes it after the current turn — you get a notice
+saying so), `○` not running. Choosing a `○` entry only warns — nothing is sent.
 
 ## Setup
 

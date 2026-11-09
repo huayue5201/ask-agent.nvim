@@ -162,7 +162,7 @@ function M.probe(mod, target, stale)
 	if type(mod.probe) == "function" then
 		local ok, res = pcall(mod.probe, target)
 		if ok and type(res) == "table" then
-			return { running = res.running ~= false, detail = res.detail }
+			return { running = res.running ~= false, busy = res.busy == true, detail = res.detail }
 		elseif ok and res == false then
 			return { running = false }
 		end
