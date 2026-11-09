@@ -15,6 +15,11 @@
 --   icon       string                        glyph for pickers/notifications
 --   available  fun(): ok, reason?            default = #targets() > 0
 --   status     fun(): ok, reason?            alias for available, if provided
+--   probe      fun(target): { running: boolean, detail?: string }
+--                                            live check for the picker (default: a target is
+--                                            assumed to be running unless it is stale)
+--   stale_targets fun(): table[]             recently exited instances, shown greyed out in
+--                                            the picker so the user sees what is *not* running
 --
 -- Adding a new agent means writing `lua/ask_agent/backends/<name>.lua`, or
 -- creating one in three lines with the `generic.tmux()` factory from
@@ -81,12 +86,14 @@ function M.list()
 end
 
 ---List candidate targets for an interactive picker, ordered by
----"same cwd > same project > other; unmanaged > managed".
+---"same cwd > same project > other; live > stale; unmanaged > managed".
 ---tier=1 means the cwd matches exactly (the strict tier that may send directly).
+---Stale candidates (opts.include_stale) carry `stale=true`: they are only there so the picker
+---can show that instance as "not running"; they must never be sent to.
 ---@param mod table
 ---@param cwd string|nil
----@param opts { related?: boolean, single?: boolean }|nil
----@return table[] {{ target: table, tier: integer }}
+---@param opts { related?: boolean, single?: boolean, include_stale?: boolean, stale_limit?: integer }|nil
+---@return table[] {{ target: table, tier: integer, stale?: boolean }}
 function M.candidates(mod, cwd, opts)
 	opts = opts or {}
 	local function norm(p)
@@ -101,7 +108,7 @@ function M.candidates(mod, cwd, opts)
 	end
 	cwd = norm(cwd or vim.fn.getcwd())
 	local out = {}
-	for _, t in ipairs(targets or {}) do
+	local function add(t, stale)
 		local tcwd = norm(t.cwd)
 		local tier = 3 -- a different project
 		if tcwd == cwd then
@@ -109,11 +116,29 @@ function M.candidates(mod, cwd, opts)
 		elseif tcwd and (cwd:sub(1, #tcwd) == tcwd or tcwd:sub(1, #cwd) == cwd) then
 			tier = 2
 		end
-		table.insert(out, { target = t, tier = tier })
+		table.insert(out, { target = t, tier = tier, stale = stale or nil })
+	end
+	for _, t in ipairs(targets or {}) do
+		add(t, false)
+	end
+	if opts.include_stale and type(mod.stale_targets) == "function" then
+		local ok, dead = pcall(mod.stale_targets)
+		if ok then
+			local limit = opts.stale_limit or 3
+			for i, t in ipairs(dead or {}) do
+				if i > limit then
+					break
+				end
+				add(t, true)
+			end
+		end
 	end
 	table.sort(out, function(a, b)
 		if a.tier ~= b.tier then
 			return a.tier < b.tier
+		end
+		if (a.stale ~= nil) ~= (b.stale ~= nil) then
+			return not a.stale -- live instances first
 		end
 		local aa, bb = a.target.avoid ~= nil, b.target.avoid ~= nil
 		if aa ~= bb then
@@ -122,6 +147,27 @@ function M.candidates(mod, cwd, opts)
 		return (a.target.ts or 0) > (b.target.ts or 0)
 	end)
 	return out
+end
+
+---Is this target usable right now? Backends may implement probe(); stale candidates are never
+---running, and a backend without probe() is trusted (its targets() already filtered).
+---@param mod table
+---@param target table
+---@param stale boolean|nil candidate came from stale_targets()
+---@return { running: boolean, detail?: string }
+function M.probe(mod, target, stale)
+	if stale then
+		return { running = false }
+	end
+	if type(mod.probe) == "function" then
+		local ok, res = pcall(mod.probe, target)
+		if ok and type(res) == "table" then
+			return { running = res.running ~= false, detail = res.detail }
+		elseif ok and res == false then
+			return { running = false }
+		end
+	end
+	return { running = true }
 end
 
 ---Pick a target. Strict by default: only an identical cwd (after realpath

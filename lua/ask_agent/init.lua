@@ -38,6 +38,9 @@ local matching = "exact"
 local pinned = nil
 --- Picker when there are multiple candidates: "map" (split map of the active layout adapter, default) / "list" (vim.ui.select list)
 local picker = "map"
+--- Also list recently exited instances in the picker, marked "not running" (they can never be
+--- chosen; this exists so the user can see that the agent they expect is gone)
+local show_stale = true
 
 --- Layout adapter id (nil = first available). See ask_agent.layouts
 local layout_id = nil
@@ -81,6 +84,32 @@ end
 ---@return string
 local function name_of(t)
 	return aliases.get(t) or (t and (t.label or t.id)) or "?"
+end
+
+--- Liveness of a candidate, probed once per picker (an instance can die between listing and
+--- choosing). Stale candidates are never running.
+---@param mod table
+---@param c table candidate from backends.candidates
+---@return { running: boolean, stale?: boolean, detail?: string }
+local function candidate_status(mod, c)
+	if not c._status then
+		c._status = backends.probe(mod, c.target, c.stale)
+		c._status.stale = c.stale or nil
+	end
+	return c._status
+end
+
+--- Picker prefix: a filled/hollow dot plus an optional short detail ("process exited", "pane runs zsh", ...).
+---@param st { running: boolean, stale?: boolean, detail?: string }
+---@return string mark, string|nil detail
+local function status_mark(st)
+	if st.stale then
+		return "○", st.detail or "exited"
+	end
+	if st.running then
+		return "●", st.detail
+	end
+	return "○", st.detail or "not running"
 end
 
 local function pick_opts()
@@ -239,6 +268,20 @@ local function list_select(mod, cands, note_avoid, cb, back)
 		if not c then
 			return
 		end
+		local st = candidate_status(mod, c)
+		if not st.running then
+			local mark, detail = status_mark(st)
+			vim.notify(
+				("[%s] %s is %s%s — not sent"):format(
+					mod.label or mod.id,
+					name_of(c.target),
+					mark,
+					detail and (" (" .. detail .. ")") or ""
+				),
+				vim.log.levels.WARN
+			)
+			return
+		end
 		note_avoid(c.target)
 		cb(c.target)
 	end
@@ -249,11 +292,15 @@ local function list_select(mod, cands, note_avoid, cb, back)
 		),
 		format_item = function(c)
 			local t = c.target
+			local mark, detail = status_mark(candidate_status(mod, c))
 			local parts = {
 				("#%d"):format(t.index or 0),
-				icon_prefix(mod, t) .. name_of(t),
+				("%s %s%s"):format(mark, icon_prefix(mod, t), name_of(t)),
 				vim.fn.fnamemodify(t.cwd or "?", ":~"),
 			}
+			if detail then
+				table.insert(parts, ("(%s)"):format(detail))
+			end
 			if c.tier > 1 then
 				table.insert(parts, "(not in current project)")
 			end
@@ -333,21 +380,25 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 
 	local items, located = {}, 0
 	for i, c in ipairs(cands) do
-		local t = c.target
-		local pane_id = layout.match(t)
-		if pane_id and in_window[pane_id] then
-			located = located + 1
+		-- The map cannot grey a cell out, so exited instances are list-only
+		if not c.stale then
+			local t = c.target
+			local pane_id = layout.match(t)
+			if pane_id and in_window[pane_id] then
+				located = located + 1
+			end
+			table.insert(items, {
+				index = i,
+				pane_id = pane_id,
+				target = t,
+				label = t.label,
+				name = vim.fn.fnamemodify(t.cwd or "?", ":t"),
+				icon = icon_prefix(mod, t):gsub("%s+$", ""),
+				icon_hl = icon_color(mod, t),
+				tier = c.tier,
+				status = candidate_status(mod, c),
+			})
 		end
-		table.insert(items, {
-			index = i,
-			pane_id = pane_id,
-			target = t,
-			label = t.label,
-			name = vim.fn.fnamemodify(t.cwd or "?", ":t"),
-			icon = icon_prefix(mod, t):gsub("%s+$", ""),
-			icon_hl = icon_color(mod, t),
-			tier = c.tier,
-		})
 	end
 	-- With only 1 locatable pane the map is meaningless (the user cannot see where the others are), so fall back to the list
 	if located < 2 then
@@ -362,6 +413,18 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		on_choose = function(item)
 			if not item then
 				return -- cancelled: do nothing
+			end
+			if item.status and not item.status.running then
+				local _, detail = status_mark(item.status)
+				vim.notify(
+					("[%s] %s is not running%s — not sent"):format(
+						mod.label or mod.id,
+						name_of(item.target),
+						detail and (" (" .. detail .. ")") or ""
+					),
+					vim.log.levels.WARN
+				)
+				return
 			end
 			note_avoid(item.target)
 			cb(item.target)
@@ -390,14 +453,26 @@ local function choose_target(mod, cb)
 		pinned = nil -- target exited, so the pin is naturally invalid
 	end
 
-	local cands = backends.candidates(mod, vim.fn.getcwd(), pick_opts())
-	if #cands == 0 then
+	local cands =
+		backends.candidates(mod, vim.fn.getcwd(), vim.tbl_extend("force", pick_opts(), { include_stale = show_stale }))
+	local live = {}
+	for _, c in ipairs(cands) do
+		if not c.stale then
+			live[#live + 1] = c
+		end
+	end
+	if #live == 0 then
 		local _, reason = backends.status(mod)
 		vim.notify(("[%s] %s"):format(mod.label or mod.id, reason or "no available instances"), vim.log.levels.WARN)
 		return cb(nil)
 	end
-	if #cands == 1 and cands[1].tier == 1 and not cands[1].target.avoid then
-		return cb(cands[1].target)
+	-- Sole exact-cwd candidate: no picker at all, unless its process just went away
+	-- (then the picker opens with it marked "not running", instead of silently sending into the void)
+	if #live == 1 and live[1].tier == 1 and not live[1].target.avoid then
+		local st = candidate_status(mod, live[1])
+		if st.running then
+			return cb(live[1].target)
+		end
 	end
 
 	-- Numbering + position on screen: the index stays consistent across list, map, and the send notification
@@ -842,11 +917,12 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
 	picker = opts.picker or "map"
+	show_stale = opts.show_stale ~= false
 	layout_id = opts.layout or nil
 	require("ask_agent.icons").setup(opts.icons, opts.icon_colors)
 	backends.register(require("ask_agent.backends.pi"))

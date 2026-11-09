@@ -39,13 +39,14 @@ local function alive(pid)
 	return ok and err_name == "EPERM"
 end
 
----Scan the registry directory and return live pi instances (most recent first).
----@return table[]
-function M.targets()
+---Read the registry directory once; split entries into live and exited instances (most recent first).
+---Dead entries are kept so the picker can show "not running" instead of silently hiding them.
+---@return table[] live, table[] dead
+local function scan()
 	local dir = ask_dir()
-	local out = {}
+	local live, dead = {}, {}
 	if vim.fn.isdirectory(dir) == 0 then
-		return out
+		return live, dead
 	end
 	for _, name in ipairs(vim.fn.readdir(dir) or {}) do
 		if name:match("%.json$") then
@@ -53,38 +54,69 @@ function M.targets()
 				return vim.json.decode(table.concat(vim.fn.readfile(dir .. "/" .. name), "\n"))
 			end)
 			if ok and type(entry) == "table" and entry.sock then
-				-- Only accept live pids (uv.kill avoids a subprocess: ~0.001ms vs
+				-- Only live pids are usable (uv.kill avoids a subprocess: ~0.001ms vs
 				-- ~1.9ms for vim.fn.system). Note uv.kill does not throw; its
 				-- return value is the result: true when alive, nil + "ESRCH" when
 				-- dead. When we may not signal the process it is nil + "EPERM"
 				-- (also alive). Never use pcall's success to decide liveness --
 				-- that was the old bug that kept dead instances in the list.
-				if alive(tonumber(entry.pid)) then
-					local embedded = entry.embedded == true
-					table.insert(out, {
-						id = tostring(entry.pid),
-						label = ("pid %s%s"):format(entry.pid, embedded and " (acp)" or ""),
-						cwd = entry.cwd,
-						sock = entry.sock,
-						ts = entry.ts or 0,
-						embedded = embedded,
-						-- When running inside rex, carry {session, block}: the map
-						-- picker uses it to draw this instance in the right cell of
-						-- the terminal layout (older pi versions do not write it,
-						-- so it stays nil)
-						rex = type(entry.rex) == "table" and entry.rex or nil,
-						avoid = embedded
-								and "embedded pi (driven by codecompanion/ACP): replies only appear in that chat buffer"
-							or nil,
-					})
-				end
+				local pid_alive = alive(tonumber(entry.pid))
+				local embedded = entry.embedded == true
+				local t = {
+					id = tostring(entry.pid),
+					label = ("pid %s%s"):format(entry.pid, embedded and " (acp)" or ""),
+					cwd = entry.cwd,
+					sock = entry.sock,
+					ts = entry.ts or 0,
+					embedded = embedded,
+					-- When running inside rex, carry {session, block}: the map
+					-- picker uses it to draw this instance in the right cell of
+					-- the terminal layout (older pi versions do not write it,
+					-- so it stays nil)
+					rex = type(entry.rex) == "table" and entry.rex or nil,
+					avoid = embedded
+							and "embedded pi (driven by codecompanion/ACP): replies only appear in that chat buffer"
+						or nil,
+				}
+				table.insert(pid_alive and live or dead, t)
 			end
 		end
 	end
-	table.sort(out, function(a, b)
+	table.sort(live, function(a, b)
 		return a.ts > b.ts
 	end)
-	return out
+	table.sort(dead, function(a, b)
+		return a.ts > b.ts
+	end)
+	return live, dead
+end
+
+---Live pi instances (most recent first). These are the only sendable targets.
+---@return table[]
+function M.targets()
+	local live = scan()
+	return live
+end
+
+---Registry entries whose process is gone: shown greyed out by the picker, never sent to.
+---@return table[]
+function M.stale_targets()
+	local _, dead = scan()
+	return dead
+end
+
+---Is the instance still there? Re-checked when the picker opens, because an instance can
+---exit between listing and choosing.
+---@param target table
+---@return { running: boolean, detail?: string }
+function M.probe(target)
+	if not alive(tonumber(target.id)) then
+		return { running = false, detail = "process exited" }
+	end
+	if target.sock and vim.uv.fs_stat(target.sock) == nil then
+		return { running = false, detail = "socket missing" }
+	end
+	return { running = true }
 end
 
 function M.available()

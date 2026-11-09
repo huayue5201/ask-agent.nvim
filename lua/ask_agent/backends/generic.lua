@@ -59,6 +59,41 @@ function M.tmux(opts)
 		end,
 	}
 
+	-- The panes() factory may carry the command pattern it filters on (tmux_panes_by_cmd),
+	-- so the picker can tell "pane still runs the agent" from "pane fell back to the shell".
+	local pattern = type(opts.panes) == "table" and opts.panes.pattern or nil
+
+	---Live check used by the picker: pane still exists, is not dead, and still runs the agent.
+	---@param target table
+	---@return { running: boolean, detail?: string }
+	function backend.probe(target)
+		local ok, res = pcall(function()
+			return vim.system({
+				"tmux",
+				"display-message",
+				"-p",
+				"-t",
+				target.pane,
+				"-F",
+				"#{pane_dead}\t#{pane_current_command}",
+			}, { text = true }):wait()
+		end)
+		if not ok or res.code ~= 0 then
+			return { running = false, detail = "pane gone" }
+		end
+		local dead, cmd = (res.stdout or ""):match("^(%d)\t?(.*)")
+		if not dead then
+			return { running = false, detail = "pane not found" }
+		end
+		if dead == "1" then
+			return { running = false, detail = "pane dead" }
+		end
+		if pattern and cmd and cmd ~= "" and not cmd:find(pattern) then
+			return { running = false, detail = ("pane runs %s"):format(cmd) }
+		end
+		return { running = true, detail = cmd ~= "" and cmd or nil }
+	end
+
 	function backend.send(target, text)
 		local buffer = ("ai-ask-%s"):format(id)
 		local ok, err = tmux({ "load-buffer", "-b", buffer, "-" }, text)
@@ -83,9 +118,9 @@ end
 ---For example tmux_panes_by_cmd("opencode") yields one target per pane currently
 ---running opencode.
 ---@param pattern string Lua pattern matched against pane_current_command
----@return fun(): table[]
+---@return fun(): table[] callable table that also carries `pattern` (used by the probe)
 function M.tmux_panes_by_cmd(pattern)
-	return function()
+	local panes = function()
 		local ok, res = pcall(function()
 			return vim.system({
 				"tmux",
@@ -107,6 +142,11 @@ function M.tmux_panes_by_cmd(pattern)
 		end
 		return out
 	end
+	return setmetatable({ pattern = pattern }, {
+		__call = function()
+			return panes()
+		end,
+	})
 end
 
 return M

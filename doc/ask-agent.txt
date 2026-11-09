@@ -30,6 +30,7 @@ with any agent that can receive text.
 require("ask_agent").setup({
   matching = "exact",            -- "exact" | "related" | "single"
   picker = "map",                -- "map" | "list"
+  show_stale = true,             -- list exited instances too, marked "not running"
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time
   icons = { pi = "π" },          -- per-agent glyphs
@@ -129,6 +130,17 @@ windows, shown through `vim.ui.select` — so it is whatever your config provide
 shows the instance glyph in its own stable color, the name, and the cwd. Float
 menus are centered rather than attached to the cursor.
 
+Every entry starts with a live status dot, re-probed when the picker opens:
+
+  ●  running (the probe may add a short detail, e.g. the pane's command)
+  ○  not running — process exited, socket missing, pane gone/dead, or the pane
+     fell back to a shell
+
+Exited instances reported by the backend (`stale_targets()`) are listed at the
+end, marked `○ … (exited)`, so a vanished agent is visible instead of absent.
+They can never be chosen: picking one only warns and nothing is sent. Disable
+with `show_stale = false`. The map shows running instances only.
+
 Without a layout adapter, or when fewer than two candidates can be located on
 screen, the map silently falls back to the list.
 
@@ -144,6 +156,9 @@ A backend is a table (see `lua/ask_agent/backends/init.lua`):
   icon      optional glyph
   available() optional: ok, reason?
   status()    optional: ok, reason?
+  probe(target) optional: { running, detail? }  live check for the picker
+  stale_targets() optional: table[]             recently exited instances,
+                                                shown in the list as "○ not running"
 
 A target is one instance:
 
