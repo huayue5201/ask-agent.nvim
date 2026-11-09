@@ -218,6 +218,22 @@ invalid markers mean "unknown" (never blocks sending), and a marker older than
 busy forever. Screen scraping (capture-pane) is possible by writing your own
 `busy` function, but it breaks with UI changes, so it is not built in.
 
+Claude Code is bundled: `backends/claude.lua` builds the tmux backend above with
+`id = "claude"`, `label = "Claude Code"` and the hook marker directory
+`$XDG_CACHE_HOME/ask-agent/claude`. Register it with
+
+  require("ask_agent").setup({ extra = { require("ask_agent.backends.claude").new() } })
+
+and switch with `:AskAgentBackend claude`. `new()` accepts
+`id, label, command, command_pattern, state_dir, field, ttl, keys_after`.
+The matching hook script is `extensions/claude-ask-agent-state.sh`; install it as
+`~/.claude/ask-agent-state.sh` and add these hooks to `~/.claude/settings.json`:
+
+  UserPromptSubmit -> ask-agent-state.sh busy
+  Stop             -> ask-agent-state.sh idle
+  SessionStart     -> ask-agent-state.sh idle
+  SessionEnd       -> ask-agent-state.sh idle
+
 For non-tmux transports (unix socket, HTTP, file drop, ACP) write a module
 returning the table above and register it with `setup({ extra = { mod } })` or
 `require("ask_agent.backends").register(mod)`. `tests/backends.lua` in the repo is

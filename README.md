@@ -244,10 +244,26 @@ both without touching the plugin:
    look busy forever. `generic.slug()` is the same escaping a shell hook can
    reproduce (`tr -c '[:alnum:]._-' '_'`).
 
-   Claude Code hooks, for example: `UserPromptSubmit` writes `{"busy":true}`,
-   `Stop` writes `{"busy":false}`, both keyed by the `cwd` in the hook's stdin JSON.
-   Then the picker shows `●` idle, a spinner while busy, and tells you the question
-   will be queued.
+   Claude Code is wired up already: `extensions/claude-ask-agent-state.sh` writes
+   the marker, and these hooks call it —
+
+   ```json
+   "hooks": {
+     "UserPromptSubmit": [{ "hooks": [{ "type": "command",
+       "command": "/bin/sh -c '~/.claude/ask-agent-state.sh busy'", "timeout": 5 }] }],
+     "Stop":          [{ "hooks": [{ "type": "command",
+       "command": "/bin/sh -c '~/.claude/ask-agent-state.sh idle'", "timeout": 5 }] }],
+     "SessionStart":  [{ "hooks": [{ "type": "command",
+       "command": "/bin/sh -c '~/.claude/ask-agent-state.sh idle'", "timeout": 5 }] }],
+     "SessionEnd":    [{ "hooks": [{ "type": "command",
+       "command": "/bin/sh -c '~/.claude/ask-agent-state.sh idle'", "timeout": 5 }] }]
+   }
+   ```
+
+   Copy the script to `~/.claude/`, add the hooks to `~/.claude/settings.json`, and the
+   picker shows `●` idle, a spinner while busy, and tells you the question will be
+   queued. Same pattern works for any agent with lifecycle hooks (codex/opencode
+   plugins): write `{"busy":true}` on submit, `{"busy":false}` on stop.
 
 2. **Screen scraping** — match on the pane's visible text (`capture-pane`) for a
    spinner or an "esc to interrupt" hint and pass that as `busy`. Zero agent-side
@@ -278,6 +294,14 @@ Bundled backends:
   instance's unix socket.
 - `generic` — the tmux factory above, plus `tmux_panes(match)`,
   `tmux_panes_by_cmd(pattern)` and `state_file(dir, opts)` for hook-written busy markers.
+- `claude` — Claude Code in tmux, busy state read from the marker files its hooks write:
+
+  ```lua
+  require("ask_agent").setup({ extra = { require("ask_agent.backends.claude").new() } })
+  ```
+
+  `new()` takes `{ id, label, command (default "claude"), command_pattern, state_dir,
+  field, ttl, keys_after }`. Then `:AskAgentBackend claude`.
 
 ## The map picker
 
