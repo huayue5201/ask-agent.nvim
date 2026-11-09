@@ -10,7 +10,7 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 
 ```
         ┌── nvim ────────────────┐        ┌── pi / claude / tmux ──┐
-  <leader>aq                     │        │                        │
+  :AskAgent                      │        │                        │
   ──────────────►  floating ask  ─── socket/cmd ───►  agent session │
                    + anchor       │        │                        │
         └────────────────────────┘        └────────────────────────┘
@@ -20,8 +20,10 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 
 - **Floating ask window** — no buffers, no temp files, no window churn. `<C-s>` sends.
 - **Batch questions** — queue several anchored questions while you browse, each shown as
-  a marker + virtual text in the source buffer, then send them all with one key
-  (`<leader>aB`). Each question travels with its own anchor.
+  a marker + virtual text in the source buffer, then send them all at once
+  (`:AskAgentBatchSend`). Each question travels with its own anchor.
+- **Commands only, no keymaps** — the plugin never touches your mappings; you bind
+  `:AskAgent*` commands however you like.
 - **Anchor capture** — `cwd`, tab, `file:line`, visual selection, `modified`, plus a
   one-line human-readable summary that travels with the question.
 - **Multiple instances, disambiguated** — when several agents run in the same project
@@ -89,14 +91,18 @@ vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 | `:AskAgentBatchList` | List queued questions (jump / edit / delete) |
 | `:AskAgentBatchClear` | Drop every queued question |
 
-Default keymaps (all configurable, `keymaps = false` disables):
+No keymaps are installed: the plugin only defines commands. Map them yourself, e.g.
 
-| Key | Action |
-| --- | --- |
-| `<leader>aq` (n / v) | Ask (cursor / selection anchor) |
-| `<leader>ab` (n / v) | Queue a question (cursor / selection anchor) |
-| `<leader>aB` | Send all queued questions |
-| `<leader>ai` | Name an instance |
+```lua
+vim.keymap.set({ "n", "v" }, "<leader>aq", function()
+  require("ask_agent").ask({ visual = vim.fn.mode() ~= "n" })
+end, { desc = "Ask agent" })
+vim.keymap.set({ "n", "v" }, "<leader>ab", function()
+  require("ask_agent").batch_ask({ visual = vim.fn.mode() ~= "n" })
+end, { desc = "Ask agent: queue" })
+vim.keymap.set("n", "<leader>aB", "<cmd>AskAgentBatchSend<cr>", { desc = "Ask agent: send queue" })
+vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentAlias<cr>", { desc = "Ask agent: alias" })
+```
 
 In the **ask window**: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` is a newline.
 In the **map**: letter picks that pane, `<Tab>` switches to the list, `<Esc>` cancels.
@@ -122,15 +128,6 @@ require("ask_agent").setup({
   -- per-agent glyphs and brand colors
   icons = { pi = "π", claude = "✻" },
   icon_colors = { claude = "#d97757" },
-
-  keymaps = {
-    ask = "<leader>aq",
-    ask_visual = "<leader>aq",
-    batch = "<leader>ab",
-    batch_visual = "<leader>ab",
-    batch_send = "<leader>aB",
-    alias = "<leader>ai",
-  },
 
   -- instance names live here by default
   aliases = { file = vim.fn.stdpath("cache") .. "/ask-agent/aliases.json" },
@@ -252,7 +249,7 @@ usually a 30-line file.
 
 ## Instance names
 
-`:AskAgentAlias` (`<leader>ai`) attaches a name to an instance; the name is used in the
+`:AskAgentAlias` attaches a name to an instance; the name is used in the
 list, in the ask window title and in the "sent" notification. Names are stored in
 `<cache>/ask-agent/aliases.json`, keyed by instance id and stamped with its start time,
 so a recycled pid never inherits an old name. `:AskAgentAlias!` clears a name.
@@ -312,10 +309,10 @@ ask.register_layout(mod)      -- register a layout adapter at runtime
 
 ## Batch questions
 
-When a question comes up while browsing, `<leader>ab` (also in visual mode, for a
-selection) queues it instead of sending: the text goes nowhere yet, and the source line gets a
+When a question comes up while browsing, `:AskAgentBatch` (or
+`:AskAgentBatchVisual` for a selection) queues it instead of sending: the text goes nowhere yet, and the source line gets a
 `»` sign plus the question as end-of-line virtual text (`[n]` = queue position). Move
-on, queue more. `<leader>aB` (`:AskAgentBatchSend`) sends every entry as its own
+on, queue more. `:AskAgentBatchSend` sends every entry as its own
 message — each keeps the anchor captured when it was queued — to a single target
 chosen once. Entries follow buffer edits through their extmarks, and
 `:AskAgentBatchList` jumps/edits/deletes them.

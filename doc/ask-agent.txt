@@ -34,11 +34,6 @@ require("ask_agent").setup({
   extra = {},                    -- backends registered at setup time
   icons = { pi = "π" },          -- per-agent glyphs
   icon_colors = {},              -- per-agent brand colors (hex)
-  keymaps = {                    -- false disables all
-    ask = "<leader>aq",
-    ask_visual = "<leader>aq",
-    alias = "<leader>ai",
-  },
   aliases = { file = vim.fn.stdpath("cache") .. "/ask-agent/aliases.json" },
   bridge = { dir = vim.fn.stdpath("cache") .. "/pi-ctx" },  -- false disables
 })
@@ -91,10 +86,19 @@ require("ask_agent").setup({
 ==============================================================================
 4. KEYMAPS                                                 *ask-agent-keymaps*
 
-<leader>aq (n, v)       Ask (cursor / selection anchor)
-<leader>ab (n, v)       Queue a question (cursor / selection anchor)
-<leader>aB              Send all queued questions
-<leader>ai              Name an instance
+The plugin installs no keymaps: commands are the public interface, mappings belong
+to your config. Example:
+
+>lua
+vim.keymap.set({ "n", "v" }, "<leader>aq", function()
+  require("ask_agent").ask({ visual = vim.fn.mode() ~= "n" })
+end, { desc = "Ask agent" })
+vim.keymap.set({ "n", "v" }, "<leader>ab", function()
+  require("ask_agent").batch_ask({ visual = vim.fn.mode() ~= "n" })
+end, { desc = "Ask agent: queue" })
+vim.keymap.set("n", "<leader>aB", "<cmd>AskAgentBatchSend<cr>", { desc = "Ask agent: send queue" })
+vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentAlias<cr>", { desc = "Ask agent: alias" })
+<
 
 In the ask window: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` inserts a newline.
 In the map: a letter picks that pane, `<Tab>` switches to the list.
@@ -206,9 +210,8 @@ project tooling.
 Queue questions while browsing instead of sending them immediately. Each queued
 entry keeps the anchor captured at the time (cwd, file, line, selection), is
 drawn in the source buffer as a `»` sign plus end-of-line virtual text, and
-follows buffer edits through its extmark. `<leader>aB`
-(|:AskAgentBatchSend|) sends every entry as its own message to a single target
-chosen once.
+follows buffer edits through its extmark. |:AskAgentBatchSend| sends every
+entry as its own message to a single target chosen once.
 
 In the ask window: `<C-s>` queues the question, `<Esc>`/`<C-c>` cancels.
 Use |:AskAgentBatchList| to jump to an entry's code, edit its text or delete it;

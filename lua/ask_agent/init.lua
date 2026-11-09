@@ -772,12 +772,12 @@ function M.layout(value)
 	return layout_id
 end
 
---- Register backends, install user commands and keymaps
---- `opts.keymaps` defaults to { ask = "<leader>aq", ask_visual = "<leader>aq", alias = "<leader>ai" };
---- set `opts.keymaps = false` to disable all keymaps. A keymap is only installed when its value is a non-empty string.
+--- Register backends and install the user commands.
+--- The plugin installs no keymaps on purpose: commands are the public interface, and
+--- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, keymaps?: { ask?: string|false, ask_visual?: string|false, batch?: string|false, batch_visual?: string|false, batch_send?: string|false, alias?: string|false }|false }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -975,49 +975,6 @@ function M.setup(opts)
 		bang = true,
 		desc = "Ask agent: give an instance an alias (shown in lists, same color in the map)",
 	})
-
-	-- Keymaps: defaults match the historical <leader> mappings; keymaps = false disables all of them
-	local keymaps = opts.keymaps
-	if keymaps == nil then
-		keymaps = {
-			ask = "<leader>aq",
-			ask_visual = "<leader>aq",
-			alias = "<leader>ai",
-			batch = "<leader>ab",
-			batch_visual = "<leader>ab",
-			batch_send = "<leader>aB",
-		}
-	end
-	if keymaps then
-		if type(keymaps.ask) == "string" and keymaps.ask ~= "" then
-			vim.keymap.set("n", keymaps.ask, function()
-				M.ask()
-			end, { desc = "Ask agent: ask the current backend (cursor anchor)" })
-		end
-		if type(keymaps.ask_visual) == "string" and keymaps.ask_visual ~= "" then
-			vim.keymap.set("v", keymaps.ask_visual, function()
-				M.ask({ visual = true })
-			end, { desc = "Ask agent: ask the current backend (selection anchor)" })
-		end
-		if type(keymaps.batch) == "string" and keymaps.batch ~= "" then
-			vim.keymap.set("n", keymaps.batch, function()
-				M.batch_ask()
-			end, { desc = "Ask agent: queue a question at the cursor (batch)" })
-		end
-		if type(keymaps.batch_visual) == "string" and keymaps.batch_visual ~= "" then
-			vim.keymap.set("v", keymaps.batch_visual, function()
-				M.batch_ask({ visual = true })
-			end, { desc = "Ask agent: queue a question anchored to the selection (batch)" })
-		end
-		if type(keymaps.batch_send) == "string" and keymaps.batch_send ~= "" then
-			vim.keymap.set("n", keymaps.batch_send, function()
-				M.batch_send()
-			end, { desc = "Ask agent: send all queued questions" })
-		end
-		if type(keymaps.alias) == "string" and keymaps.alias ~= "" then
-			vim.keymap.set("n", keymaps.alias, "<cmd>AskAgentAlias<cr>", { desc = "Ask agent: alias an instance" })
-		end
-	end
 end
 
 return M
