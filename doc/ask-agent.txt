@@ -133,11 +133,18 @@ menus are centered rather than attached to the cursor.
 Every entry starts with a live status dot, re-probed when the picker opens:
 
   ●  idle — the agent is free, the question is handled right away
-  ◐  busy — a turn is running; the question is still delivered now
+  ◐  busy (rotating spinner when the picker animates) — a turn is running; the
+     question is still delivered now
      (pi queues it as a follow-up and runs it after the current one), and a
      notice tells you so
   ○  not running — process exited, socket missing, pane gone/dead, or the pane
      fell back to a shell
+
+Busy rows animate only if the picker implementation supports it. ask-agent passes
+`tick = 90` in the `vim.ui.select` opts and reads `format_item(item, frame)`; that is
+the contract `lib/menu.lua` honours (re-render every tick while waiting for a key).
+Other implementations (telescope, fzf-lua, snacks, dropbar) ignore the key and show
+the first spinner frame as a static icon.
 
 The probe may add a short detail next to the dot (the pane's command, "busy",
 "process exited", ...). `pi` reports busy via the `busy` field its extension

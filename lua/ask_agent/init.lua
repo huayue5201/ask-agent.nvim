@@ -42,6 +42,11 @@ local picker = "map"
 --- chosen; this exists so the user can see that the agent they expect is gone)
 local show_stale = true
 
+--- Frames for the busy spinner. Only the picker implementation decides whether it animates: menu.lua
+--- honours `opts.tick` and re-renders every tick, passing the frame to `format_item(item, frame)`. Everywhere
+--- else (telescope/fzf-lua/snacks/dropbar) the frame is nil and the first frame is shown static.
+local spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+
 --- Layout adapter id (nil = first available). See ask_agent.layouts
 local layout_id = nil
 
@@ -308,14 +313,30 @@ local function list_select(mod, cands, note_avoid, cb, back)
 		note_avoid(c.target)
 		cb(c.target)
 	end
+	-- An animation tick is only requested when some candidate is busy: static lists keep the old
+	-- blocking read (no wakeups, identical behaviour). Implementations that ignore `tick` just show
+	-- the first spinner frame instead of a rotating one.
+	local animate = false
+	for _, c in ipairs(cands) do
+		local st = candidate_status(mod, c)
+		if st.running and st.busy then
+			animate = true
+			break
+		end
+	end
 	vim.ui.select(cands, {
 		prompt = ("Send to which %s%s? (:AskAgentTarget remembers the choice; <Tab> in the map also gets you here)"):format(
 			icon_prefix(mod),
 			mod.label or mod.id
 		),
-		format_item = function(c)
+		tick = animate and 90 or nil,
+		format_item = function(c, frame)
 			local t = c.target
-			local mark, detail = status_mark(candidate_status(mod, c))
+			local st = candidate_status(mod, c)
+			local mark, detail = status_mark(st)
+			if st.running and st.busy then
+				mark = spinner[(frame or 0) % #spinner + 1]
+			end
 			local parts = {
 				("#%d"):format(t.index or 0),
 				("%s %s%s"):format(mark, icon_prefix(mod, t), name_of(t)),
