@@ -45,7 +45,15 @@ local show_stale = true
 --- Frames for the busy spinner. Only the picker implementation decides whether it animates: menu.lua
 --- honours `opts.tick` and re-renders every tick, passing the frame to `format_item(item, frame)`. Everywhere
 --- else (telescope/fzf-lua/snacks/dropbar) the frame is nil and the first frame is shown static.
-local spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local default_spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+--- Active frames: `setup({ spinner = {...} })` can point this at the picker menu's own spinner
+--- (e.g. `require("lib.menu").frames`) so the list and the map animate with the same glyphs.
+local spinner = default_spinner
+
+--- Animation interval in ms for the busy spinner (`setup({ tick = ... })`). Both pickers honour
+--- `opts.tick`: the list picker re-renders every tick, the map repaints on a uv timer. Point it at
+--- the picker menu's own interval (`require("lib.menu").config.tick`) to keep the cadence identical.
+local tick = 90
 
 --- Layout adapter id (nil = first available). See ask_agent.layouts
 local layout_id = nil
@@ -329,7 +337,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			icon_prefix(mod),
 			mod.label or mod.id
 		),
-		tick = animate and 90 or nil,
+		tick = animate and tick or nil,
 		format_item = function(c, frame)
 			local t = c.target
 			local st = candidate_status(mod, c)
@@ -458,7 +466,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 	end
 
 	require("ask_agent.map").select({
-		tick = animate and 90 or nil,
+		tick = animate and tick or nil,
 		panes = panes,
 		labels = type(layout.labels) == "function" and layout.labels(data) or {},
 		items = items,
@@ -971,13 +979,21 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
 	picker = opts.picker or "map"
 	show_stale = opts.show_stale ~= false
 	layout_id = opts.layout or nil
+	-- Empty/missing falls back to the built-in braille frames; equal-width glyphs are required
+	-- (the map centers rows by cell width, the list just swaps one cell).
+	if type(opts.spinner) == "table" and #opts.spinner > 0 then
+		spinner = opts.spinner
+	end
+	if type(opts.tick) == "number" and opts.tick > 0 then
+		tick = opts.tick
+	end
 	require("ask_agent.icons").setup(opts.icons, opts.icon_colors)
 	backends.register(require("ask_agent.backends.pi"))
 	for _, mod in ipairs(opts.extra or {}) do

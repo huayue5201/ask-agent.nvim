@@ -138,6 +138,14 @@ require("ask_agent").setup({
   -- also list exited instances in the list picker as "not running" (default true)
   show_stale = true,
 
+  -- frames for the busy icon (default: a 10-frame braille spinner). Point it at the
+  -- spinner your picker already uses, e.g. require("lib.menu").frames, and both the
+  -- list and the map animate with the same glyphs.
+  spinner = { "⠋", "⠙", "⠹", "⠸" },
+
+  -- animation interval for the busy icon, in ms (default 90); match your picker's tick
+  tick = 90,
+
   -- default backend id
   default = "pi",
 
