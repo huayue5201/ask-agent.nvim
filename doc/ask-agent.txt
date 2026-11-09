@@ -144,7 +144,9 @@ Busy rows animate only if the picker implementation supports it. ask-agent passe
 `tick = 90` in the `vim.ui.select` opts and reads `format_item(item, frame)`; that is
 the contract `lib/menu.lua` honours (re-render every tick while waiting for a key).
 Other implementations (telescope, fzf-lua, snacks, dropbar) ignore the key and show
-the first spinner frame as a static icon.
+the first spinner frame as a static icon. The map is callback-driven instead of
+blocking, so it animates with a uv timer that repaints busy cells and is stopped
+when the map closes (no option to set).
 
 The probe may add a short detail next to the dot (the pane's command, "busy",
 "process exited", ...). `pi` reports busy via the `busy` field its extension

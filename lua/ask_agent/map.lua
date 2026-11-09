@@ -293,7 +293,8 @@ local function geometry(panes, by_pane, W, H)
 end
 
 --- Draw one frame. The whole area is cells, with no footer — content is fixed and does not jump with candidate count.
-local function paint(panes, by_pane, W, H, sel)
+---@param frame? integer animation frame (0,1,2,...): items carrying `icon_frames` swap their icon per frame
+local function paint(panes, by_pane, W, H, sel, frame)
 	local geom = geometry(panes, by_pane, W, H)
 	local g = grid_new(W, H)
 	local hit, owner = {}, {}
@@ -339,6 +340,11 @@ local function paint(panes, by_pane, W, H, sel)
 			end
 			-- Treat icon + space + letter as one unit when centering; if a floating pane cuts the cell too narrow, keep only the letter
 			local icon = t.item and t.item.icon or nil
+			-- Animated icons: `icon_frames` is a list of equal-width glyphs (e.g. a braille spinner), picked by frame
+			local anim = t.item and t.item.icon_frames
+			if anim and #anim > 0 then
+				icon = anim[((frame or 0) % #anim) + 1]
+			end
 			if icon == "" then
 				icon = nil
 			end
@@ -565,8 +571,12 @@ function M.select(opts)
 		})
 	end
 
+	local frame = 0
+	local tick = tonumber(opts.tick) or 0
+	local timer
+
 	local function repaint()
-		local painted = paint(panes, by_pane, W, H, sel)
+		local painted = paint(panes, by_pane, W, H, sel, frame)
 		local lines, segs, h = painted[1], painted[2], painted[3]
 		hit = h
 		vim.bo[buf].modifiable = true
@@ -631,6 +641,13 @@ function M.select(opts)
 			return
 		end
 		finished = true
+		if timer then
+			timer:stop()
+			if not timer:is_closing() then
+				timer:close()
+			end
+			timer = nil
+		end
 		if api.nvim_win_is_valid(win) then
 			api.nvim_win_close(win, true)
 		end
@@ -798,6 +815,23 @@ function M.select(opts)
 				end
 			end
 		end, "Jump to candidate " .. i)
+	end
+
+	-- Animation: the map is callback-driven (no blocking read loop), so a plain uv timer repaints it.
+	-- Only started when someone asked for it (opts.tick) — a static map costs nothing.
+	if tick > 0 then
+		timer = vim.uv.new_timer()
+		timer:start(
+			tick,
+			tick,
+			vim.schedule_wrap(function()
+				if finished or not api.nvim_win_is_valid(win) then
+					return
+				end
+				frame = frame + 1
+				repaint()
+			end)
+		)
 	end
 
 	-- Read-only canvas: does not follow the cursor, no CursorMoved repaint, content stays stable

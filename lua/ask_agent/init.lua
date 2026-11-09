@@ -422,7 +422,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		in_window[pane.id] = true
 	end
 
-	local items, located = {}, 0
+	local items, located, animate = {}, 0, false
 	for i, c in ipairs(cands) do
 		-- The map cannot grey a cell out, so exited instances are list-only
 		if not c.stale then
@@ -431,6 +431,11 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 			if pane_id and in_window[pane_id] then
 				located = located + 1
 			end
+			local st = candidate_status(mod, c)
+			local busy = st.running and st.busy == true
+			if busy then
+				animate = true
+			end
 			table.insert(items, {
 				index = i,
 				pane_id = pane_id,
@@ -438,9 +443,12 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 				label = t.label,
 				name = vim.fn.fnamemodify(t.cwd or "?", ":t"),
 				icon = icon_prefix(mod, t):gsub("%s+$", ""),
+				-- busy cells get a rotating icon instead of the agent glyph (map.lua repaints per frame)
+				icon_frames = busy and spinner or nil,
 				icon_hl = icon_color(mod, t),
 				tier = c.tier,
-				status = candidate_status(mod, c),
+				status = st,
+				busy = busy,
 			})
 		end
 	end
@@ -450,6 +458,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 	end
 
 	require("ask_agent.map").select({
+		tick = animate and 90 or nil,
 		panes = panes,
 		labels = type(layout.labels) == "function" and layout.labels(data) or {},
 		items = items,
