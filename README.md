@@ -38,7 +38,8 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   `show_stale = false` hides them.
 - **Optional RPC bridge** — lets the agent pull *live* Neovim context back (unsaved
   buffers, diagnostics, quickfix, project overview) instead of reading stale files.
-- **Extensible backends** — a backend is four fields; a tmux backend is ~10 lines.
+- **Extensible backends** — a backend is four fields; a tmux-based agent (Claude Code, codex,
+  opencode, aider…) is a five-line `generic.tmux(...)` call, busy state included.
 
 ## Requirements
 
@@ -185,7 +186,10 @@ Each target is one instance:
 }
 ```
 
-### Adding a tmux-based agent in ten lines
+### Porting it to another agent (5 minutes)
+
+If the agent runs in a tmux pane, the bundled factory is all you need — no new
+file, no plugin change:
 
 ```lua
 local generic = require("ask_agent.backends.generic")
@@ -195,25 +199,85 @@ require("ask_agent").setup({
     generic.tmux({
       id = "claude",
       label = "Claude Code",
-      -- how to find instances: return { { id =, label =, cwd =, pane = } }
-      list = function() ... end,
-      -- how to deliver: paste the text into the pane and press enter
-      deliver = function(target, text) ... end,
+      -- which panes host it (command name, Lua pattern)
+      panes = generic.tmux_panes_by_cmd("claude"),
+      -- optional: a different key than Enter, e.g. "C-m" or "Escape"
+      keys_after = "Enter",
+      -- optional: how to know it is mid-turn (see below)
+      busy = generic.state_file("~/.cache/ask-agent/claude", { field = "cwd" }),
     }),
   },
 })
 ```
 
-For non-tmux transports (unix socket, HTTP, file drop) write a module returning the
-table above and register it with `require("ask_agent.backends").register(mod)` — or pass
-it through `setup({ extra = { mod } })`.
+The factory already implements `targets()` (from the pane list), `send()` (tmux
+`load-buffer` → `paste-buffer` → `keys_after`, so multi-line text never turns into
+several Enters and nothing goes through shell quoting) and `probe()` (pane alive,
+not dead, still running the agent). Everything else — picker, status dots, batch
+queue, aliases, the map — comes from the core.
+
+That covers: Claude Code, codex, opencode, gemini-cli, aider, or anything else
+that reads typed input from a TTY. Agents that only accept a socket/HTTP call
+(pi, its ACP cousins) need a module: return the table from the contract above and
+register it with `setup({ extra = { mod } })` or
+`require("ask_agent.backends").register(mod)`.
+
+### Busy / idle, the one non-obvious part
+
+tmux can tell you a pane exists but not whether the agent is thinking. Two ways,
+both without touching the plugin:
+
+1. **Agent-side hooks writing a marker file** (recommended, accurate):
+
+   ```sh
+   # ~/.cache/ask-agent/claude/_Users_me_proj.json  <- written by the hook
+   {"busy": true}
+   ```
+
+   ```lua
+   busy = generic.state_file("~/.cache/ask-agent/claude", { field = "cwd" })
+   ```
+
+   `generic.state_file(dir, opts)` resolves `<dir>/<slug(key)>.json`, treats
+   missing/invalid markers as "unknown" (never blocks sending), and a marker older
+   than `opts.ttl` (default one hour) as unknown too, so a crashed session cannot
+   look busy forever. `generic.slug()` is the same escaping a shell hook can
+   reproduce (`tr -c '[:alnum:]._-' '_'`).
+
+   Claude Code hooks, for example: `UserPromptSubmit` writes `{"busy":true}`,
+   `Stop` writes `{"busy":false}`, both keyed by the `cwd` in the hook's stdin JSON.
+   Then the picker shows `●` idle, a spinner while busy, and tells you the question
+   will be queued.
+
+2. **Screen scraping** — match on the pane's visible text (`capture-pane`) for a
+   spinner or an "esc to interrupt" hint and pass that as `busy`. Zero agent-side
+   setup, but it breaks when the UI changes; that is why it is not built in.
+
+Providing `busy` is entirely optional: without it every live target is shown as
+idle and delivery goes straight to the pane, which is what the agent's own input
+buffer is for.
+
+### Non-tmux discovery
+
+`generic.tmux_panes(match)` is the low-level version of the filter: it hands you
+`{ id, command, cwd, title }` for every pane and takes a predicate, which is what
+you want when the agent runs under a wrapper (`node`, `bun`, `python`) or you can
+only tell panes apart by title. For zellij/wezterm/kitty or an embedded terminal,
+write the panes function yourself — it only has to return
+`{ { id=, label=, cwd=, <how to deliver>= } }`.
+
+`tests/backends.lua` (run it from the repo root with
+`nvim --headless --clean -l tests/backends.lua`) is the reference: a hand-written
+backend, the generic factory with a stubbed tmux, hook-written busy markers, and
+the pane helpers.
 
 Bundled backends:
 
 - `pi` — reads `~/.cache/pi-agent/ask/<pid>.json` registrations written by the pi
   extension in [`extensions/nvim-context.ts`](extensions/nvim-context.ts), talks to the
   instance's unix socket.
-- `generic` — the tmux factory above.
+- `generic` — the tmux factory above, plus `tmux_panes(match)`,
+  `tmux_panes_by_cmd(pattern)` and `state_file(dir, opts)` for hook-written busy markers.
 
 ## The map picker
 
@@ -320,7 +384,9 @@ ask.pin(id) / ask.pinned()    -- pin a target
 ask.alias(target, name) / ask.alias_of(target)
 ask.picker("map" | "list")
 ask.layout(id)                -- active layout adapter (nil/"auto" = first usable)
-ask.generic                   -- tmux backend factory
+ask.generic                   -- tmux backend factory; also
+                              -- generic.tmux_panes(match), generic.tmux_panes_by_cmd(pat),
+                              -- generic.state_file(dir, opts), generic.slug(s)
 ask.register(mod)             -- register a backend at runtime
 ask.register_layout(mod)      -- register a layout adapter at runtime
 ```

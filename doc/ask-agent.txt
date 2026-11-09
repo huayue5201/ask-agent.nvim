@@ -188,8 +188,42 @@ A target is one instance:
   icon      optional per-instance glyph
   avoid     optional warning to show before sending
 
-`ask_agent.backends.generic.tmux()` builds a tmux backend; register it with
-`setup({ extra = { ... } })` or `require("ask_agent.backends").register(mod)`.
+Porting to another agent, in five lines: if it runs in a tmux pane, the bundled
+factory is all you need (no new file, no plugin change):
+
+  local generic = require("ask_agent.backends.generic")
+  require("ask_agent").setup({ extra = {
+    generic.tmux({ id = "claude", label = "Claude Code",
+                   panes = generic.tmux_panes_by_cmd("claude") }),
+  } })
+
+`generic.tmux(opts)` implements `targets()` from the pane list, `send()` (tmux
+load-buffer -> paste-buffer -> keys_after, so multi-line text does not turn into
+several Enters and quoting is not involved) and `probe()` (pane alive, not dead,
+still running the agent). Options: `panes`, `keys_after` (default "Enter"),
+`icon`, `busy`. The picker, status dots, batch queue, aliases and the map all come
+from the core. Other options for `panes`:
+  generic.tmux_panes(match)      all panes as { id, command, cwd, title }
+  generic.tmux_panes_by_cmd(pat) filter by pane_current_command
+
+Busy is the one thing tmux cannot report. The recommended route is the agent's own
+hooks writing a marker file, read by `generic.state_file(dir, opts)`:
+
+  busy = generic.state_file("~/.cache/ask-agent/claude", { field = "cwd" })
+
+The marker is `<dir>/<slug(key)>.json` holding `{"busy": true}`;
+`generic.slug()` is the same escaping a shell hook can reproduce. Missing or
+invalid markers mean "unknown" (never blocks sending), and a marker older than
+`opts.ttl` (default 3600s) also means unknown, so a crashed session does not look
+busy forever. Screen scraping (capture-pane) is possible by writing your own
+`busy` function, but it breaks with UI changes, so it is not built in.
+
+For non-tmux transports (unix socket, HTTP, file drop, ACP) write a module
+returning the table above and register it with `setup({ extra = { mod } })` or
+`require("ask_agent.backends").register(mod)`. `tests/backends.lua` in the repo is
+a reference: run it from the repo root with
+`nvim --headless --clean -l tests/backends.lua` and read how little a
+hand-written backend needs.
 
 Individual instances are told apart by a stable color (hash of `id:ts`) and by
 an optional name; see |ask-agent-aliases|.
@@ -277,7 +311,8 @@ ask.alias(target, name) / ask.alias_of(target)
 ask.picker("map"|"list")
 ask.register(backend)
 ask.register_layout(adapter) / ask.layout(id)
-ask.generic  -- tmux backend factory
+ask.generic  -- tmux backend factory; also tmux_panes(match),
+             -- tmux_panes_by_cmd(pat), state_file(dir, opts), slug(s)
 <
 
  vim:tw=78:ts=8:noet:ft=help:norl:

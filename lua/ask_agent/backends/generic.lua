@@ -16,6 +16,13 @@
 --  10    },
 --  11  })
 --
+-- "Is it busy?" is the one thing tmux cannot tell you cheaply. Two zero-plugin-code ways:
+--
+--   * the agent's own hooks write a marker file and you read it with `generic.state_file()`:
+--       local busy = generic.state_file("~/.cache/ask-agent/claude", { field = "cwd" })
+--       generic.tmux({ id = "claude", panes = ..., busy = busy })
+--   * obviously fragile: screen scraping with `generic.tmux_panes(match)` + your own `busy`.
+--
 -- For a backend that is not tmux-based, write `lua/ask_agent/backends/<name>.lua`
 -- instead; see the provider contract in `lua/ask_agent/backends/init.lua`.
 --
@@ -29,7 +36,8 @@ local M = {}
 ---Generic backend: type the text plus a carriage return into a tmux pane.
 ---Uses load-buffer/paste-buffer instead of send-keys so multi-line text is not
 ---turned into several Enters and shell/quote escaping never gets involved.
----@param opts { id: string, label: string, panes: fun(): table[], keys_after?: string, icon?: string }
+---@param opts { id: string, label: string, panes: fun(): table[], keys_after?: string, icon?: string,
+---              busy?: fun(target: table): boolean?, string? }
 ---@return table backend
 function M.tmux(opts)
 	local id, label = opts.id, opts.label
@@ -91,6 +99,13 @@ function M.tmux(opts)
 		if pattern and cmd and cmd ~= "" and not cmd:find(pattern) then
 			return { running = false, detail = ("pane runs %s"):format(cmd) }
 		end
+		-- Busy is opt-in and never fatal: a hook that has not written anything yet just means "unknown".
+		if type(opts.busy) == "function" then
+			local okb, is_busy, why = pcall(opts.busy, target)
+			if okb and is_busy == true then
+				return { running = true, busy = true, detail = why or "busy" }
+			end
+		end
 		return { running = true, detail = cmd ~= "" and cmd or nil }
 	end
 
@@ -112,6 +127,94 @@ function M.tmux(opts)
 	end
 
 	return backend
+end
+
+---Helper: list every tmux pane matching a predicate, as a panes() factory.
+---More flexible than `tmux_panes_by_cmd` when the agent runs under a wrapper
+---(node/python) or you want to match on the pane title instead of the command.
+---@param match fun(pane: { id: string, command: string, cwd: string, title: string }): boolean
+---@return fun(): table[]
+function M.tmux_panes(match)
+	return function()
+		local ok, res = pcall(function()
+			return vim.system({
+				"tmux",
+				"list-panes",
+				"-a",
+				"-F",
+				"#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}",
+			}, { text = true }):wait()
+		end)
+		if not ok or res.code ~= 0 then
+			return {}
+		end
+		local out = {}
+		for line in (res.stdout or ""):gmatch("[^\n]+") do
+			local pane, command, cwd, title = line:match("^(%S+)\t([^\t]*)\t([^\t]*)\t(.*)$")
+			if pane and match({ id = pane, command = command, cwd = cwd, title = title }) then
+				table.insert(out, { id = pane, label = pane, pane = pane, cwd = cwd })
+			end
+		end
+		return out
+	end
+end
+
+---Slug for state-file names: stable, filesystem-safe, and reproducible from a shell hook.
+---"/Users/me/proj/a" -> "_Users_me_proj_a"
+---@param s string
+---@return string
+function M.slug(s)
+	return (tostring(s):gsub("[^%w%-%._]", "_"))
+end
+
+---Read a "this instance is busy" marker written by the agent's own hook.
+---
+---File layout: `<dir>/<slug(key)>.json`, written by the hook, e.g.
+---  echo '{"busy":true}' > ~/.cache/ask-agent/claude/_Users_me_proj.json
+---Anything missing/unreadable/without `busy: true` counts as "not busy" (nil), so a
+---crashed hook can never block sending. `ttl` (seconds, default 3600) turns stale markers
+---into "unknown" so a killed session does not look busy forever.
+---
+---@param dir string directory (a leading ~ and env vars are expanded)
+---@param opts? { field?: "id"|"cwd"|fun(target: table): string, ttl?: integer }
+---@return fun(target: table): boolean?, string?
+function M.state_file(dir, opts)
+	opts = opts or {}
+	local field = opts.field or "cwd"
+	local ttl = opts.ttl or 3600
+	dir = vim.fs.normalize(vim.fn.expand(dir))
+	local function key_of(target)
+		if type(field) == "function" then
+			return field(target)
+		end
+		return target[field] or target.id or target.pane
+	end
+	return function(target)
+		local key = key_of(target)
+		if not key then
+			return nil
+		end
+		local file = ("%s/%s.json"):format(dir, M.slug(key))
+		local stat = vim.uv.fs_stat(file)
+		if not stat then
+			return nil
+		end
+		if ttl > 0 and os.time() - (stat.mtime.sec or 0) > ttl then
+			return nil
+		end
+		local ok, text = pcall(vim.fn.readfile, file)
+		if not ok or type(text) ~= "table" then
+			return nil
+		end
+		local okj, data = pcall(vim.json.decode, table.concat(text, "\n"))
+		if not okj or type(data) ~= "table" then
+			return nil
+		end
+		if data.busy == true then
+			return true, data.detail or "busy (hook)"
+		end
+		return nil
+	end
 end
 
 ---Helper: filter tmux panes by command name and return a panes() factory.
