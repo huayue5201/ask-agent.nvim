@@ -89,7 +89,9 @@ vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 | `:AskAgentBatchVisual` | Queue a question anchored to the selection |
 | `:AskAgentBatchSend` | Send every queued question (one message each) to one target |
 | `:AskAgentBatchList` | List queued questions (jump / edit / delete) |
-| `:AskAgentBatchClear` | Drop every queued question |
+| `:AskAgentBatchDelete` | Delete the queued question on the cursor line (undoable) |
+| `:AskAgentBatchUndo` | Undo the last delete / clear, restoring markers |
+| `:AskAgentBatchClear` | Drop every queued question (undoable) |
 
 No keymaps are installed: the plugin only defines commands. Map them yourself, e.g.
 
@@ -315,7 +317,9 @@ When a question comes up while browsing, `:AskAgentBatch` (or
 on, queue more. `:AskAgentBatchSend` sends every entry as its own
 message — each keeps the anchor captured when it was queued — to a single target
 chosen once. Entries follow buffer edits through their extmarks, and
-`:AskAgentBatchList` jumps/edits/deletes them.
+`:AskAgentBatchList` jumps/edits/deletes them. `:AskAgentBatchDelete` removes the
+entry on the cursor line; every delete and `:AskAgentBatchClear` can be undone
+with `:AskAgentBatchUndo` (in-memory, last 20 operations).
 
 ## Health
 

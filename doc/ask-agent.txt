@@ -80,8 +80,17 @@ require("ask_agent").setup({
 :AskAgentBatchList      List queued questions; choose jump to code, edit or
                         delete.
 
+                                                  *:AskAgentBatchDelete*
+:AskAgentBatchDelete    Delete the queued question(s) on the cursor line (asks
+                        which one when several sit there).
+
+                                                  *:AskAgentBatchUndo*
+:AskAgentBatchUndo      Undo the last delete or clear: put the entries back with
+                        their markers. Entries whose buffer was wiped meanwhile
+                        are skipped.
+
                                                   *:AskAgentBatchClear*
-:AskAgentBatchClear     Drop every queued question and its marker.
+:AskAgentBatchClear     Drop every queued question and its marker (undoable).
 
 ==============================================================================
 4. KEYMAPS                                                 *ask-agent-keymaps*
@@ -214,9 +223,11 @@ follows buffer edits through its extmark. |:AskAgentBatchSend| sends every
 entry as its own message to a single target chosen once.
 
 In the ask window: `<C-s>` queues the question, `<Esc>`/`<C-c>` cancels.
-Use |:AskAgentBatchList| to jump to an entry's code, edit its text or delete it;
-|:AskAgentBatchClear| drops them all. The queue lives in memory for the current
-Neovim session.
+Use |:AskAgentBatchList| to jump to an entry's code, edit its text or delete it,
+or |:AskAgentBatchDelete| to drop the entry under the cursor. Every delete and
+|:AskAgentBatchClear| can be reversed with |:AskAgentBatchUndo| (the last 20
+operations are kept in memory, as is the queue itself — the current session
+only).
 
 ==============================================================================
 11. API                                                    *ask-agent-api*

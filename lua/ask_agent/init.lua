@@ -15,7 +15,8 @@
 -- Neither approach requires touching this file.
 --
 -- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register/
---             layout/register_layout/batch_ask/batch_send/batch_list/batch_clear/batch_count.
+--             layout/register_layout/batch_ask/batch_send/batch_list/batch_delete/batch_undo
+--             /batch_clear/batch_count.
 
 local backends = require("ask_agent.backends")
 local generic = require("ask_agent.backends.generic")
@@ -637,17 +638,81 @@ function M.batch_list()
 				})
 			elseif action == "delete" then
 				queue.remove(entry.id)
-				vim.notify(("[ask_agent] Deleted queued question #%d"):format(entry.index), vim.log.levels.INFO)
+				vim.notify(
+					("[ask_agent] Deleted queued question #%d (:AskAgentBatchUndo restores it)"):format(entry.index),
+					vim.log.levels.INFO
+				)
 			end
 		end)
 	end)
 end
 
---- Drop every queued question and its marker.
+--- Delete the queued question(s) sitting on the cursor line of the current buffer.
+--- With several entries on the line, asks which one; undo with M.batch_undo().
+function M.batch_delete()
+	local buf = vim.api.nvim_get_current_buf()
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+	local hits = {}
+	for _, it in ipairs(queue.list()) do
+		if it.buf == buf then
+			queue.sync(it)
+			if it.line == line then
+				table.insert(hits, it)
+			end
+		end
+	end
+	if #hits == 0 then
+		vim.notify(
+			("[ask_agent] No queued question on this line (queue has %d)"):format(queue.count()),
+			vim.log.levels.INFO
+		)
+		return
+	end
+	local function drop(entry)
+		queue.remove(entry.id)
+		vim.notify(("[ask_agent] Deleted queued question on line %d (:AskAgentBatchUndo restores it)"):format(line))
+	end
+	if #hits == 1 then
+		return drop(hits[1])
+	end
+	vim.ui.select(hits, {
+		prompt = ("%d queued questions on this line"):format(#hits),
+		format_item = function(entry)
+			return ("#%d  %s"):format(entry.index, (entry.prompt:gsub("\n.*", "")))
+		end,
+	}, function(entry)
+		if entry then
+			drop(entry)
+		end
+	end)
+end
+
+--- Undo the last delete (or clear): put the question(s) back with their markers.
+function M.batch_undo()
+	local restored, skipped, label = queue.undo()
+	if not label then
+		vim.notify("[ask_agent] Nothing to undo in the batch queue", vim.log.levels.INFO)
+		return
+	end
+	local msg = ("[ask_agent] Restored %d queued question(s) from last %s"):format(restored, label)
+	if skipped > 0 then
+		msg = msg .. (" (%d skipped: buffer was wiped)"):format(skipped)
+	end
+	vim.notify(msg, skipped > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
+end
+
+--- Drop every queued question and its marker. Undoable with M.batch_undo().
 function M.batch_clear()
 	local n = queue.count()
+	if n == 0 then
+		vim.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
+		return
+	end
 	queue.clear()
-	vim.notify(("[ask_agent] Cleared %d queued question(s)"):format(n), vim.log.levels.INFO)
+	vim.notify(
+		("[ask_agent] Cleared %d queued question(s) (:AskAgentBatchUndo restores them)"):format(n),
+		vim.log.levels.INFO
+	)
 end
 
 ---@return integer
@@ -824,9 +889,15 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("AskAgentBatchList", function()
 		M.batch_list()
 	end, { desc = "Ask agent: list queued questions (jump/edit/delete)" })
+	vim.api.nvim_create_user_command("AskAgentBatchDelete", function()
+		M.batch_delete()
+	end, { desc = "Ask agent: delete the queued question on the cursor line (undoable)" })
+	vim.api.nvim_create_user_command("AskAgentBatchUndo", function()
+		M.batch_undo()
+	end, { desc = "Ask agent: undo the last queue delete/clear" })
 	vim.api.nvim_create_user_command("AskAgentBatchClear", function()
 		M.batch_clear()
-	end, { desc = "Ask agent: drop every queued question" })
+	end, { desc = "Ask agent: drop every queued question (undoable)" })
 	-- Legacy name
 	vim.api.nvim_create_user_command("AskAgentPi", function()
 		M.ask()

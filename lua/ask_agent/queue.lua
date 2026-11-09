@@ -17,6 +17,12 @@ local items = {}
 local next_id = 0
 local hl_done = false
 
+-- Undo history: every destructive operation pushes one group of { entry, pos } pairs.
+-- Kept in memory with the queue, so an undo only lives as long as the session.
+---@type { items: { entry: table, pos: integer }[], label: string }[]
+local undo_groups = {}
+local UNDO_LIMIT = 20
+
 local function ensure_hl()
 	if hl_done then
 		return
@@ -133,13 +139,38 @@ function M.update(id, prompt)
 	return false
 end
 
----Drop one entry and its marker.
+local function push_undo(items_snapshot, label)
+	if #items_snapshot == 0 then
+		return
+	end
+	table.insert(undo_groups, { items = items_snapshot, label = label })
+	while #undo_groups > UNDO_LIMIT do
+		table.remove(undo_groups, 1)
+	end
+end
+
+---Follow the marker once more so an undo puts the question back where the code is now,
+---then forget the extmark (the entry leaves the list, so the marker must go too).
+---@param entry table
+local function detach(entry)
+	if entry.mark and loaded(entry.buf) then
+		local pos = vim.api.nvim_buf_get_extmark_by_id(entry.buf, NS, entry.mark, {})
+		if pos and pos[1] then
+			entry.line = pos[1] + 1
+		end
+	end
+	entry.mark = nil
+end
+
+---Drop one entry and its marker. Undoable with M.undo().
 ---@param id integer
 ---@return boolean ok
 function M.remove(id)
 	for i, it in ipairs(items) do
 		if it.id == id then
+			detach(it)
 			table.remove(items, i)
+			push_undo({ { entry = it, pos = i } }, "delete")
 			M.redraw()
 			return true
 		end
@@ -147,8 +178,13 @@ function M.remove(id)
 	return false
 end
 
----Drop everything (and remove all markers).
+---Drop everything (and remove all markers). Undoable with M.undo().
 function M.clear()
+	local snapshot = {}
+	for i, it in ipairs(items) do
+		detach(it)
+		snapshot[i] = { entry = it, pos = i }
+	end
 	local all = bufs()
 	items = {}
 	for _, b in ipairs(all) do
@@ -156,6 +192,42 @@ function M.clear()
 			vim.api.nvim_buf_clear_namespace(b, NS, 0, -1)
 		end
 	end
+	push_undo(snapshot, "clear")
+end
+
+---Restore the most recently deleted entry (or everything removed by the last clear).
+---Entries whose buffer has been wiped in the meantime cannot be restored.
+---@return integer restored, integer skipped, string|nil label
+function M.undo()
+	local group = table.remove(undo_groups)
+	if not group then
+		return 0, 0, nil
+	end
+	local restored, skipped = 0, 0
+	table.sort(group.items, function(a, b)
+		return a.pos < b.pos
+	end)
+	for _, rec in ipairs(group.items) do
+		local it = rec.entry
+		if loaded(it.buf) then
+			it.base = it.line or it.base
+			it.mark = nil
+			local at = math.min(rec.pos, #items + 1)
+			table.insert(items, at, it)
+			restored = restored + 1
+		else
+			skipped = skipped + 1
+		end
+	end
+	if restored > 0 then
+		M.redraw()
+	end
+	return restored, skipped, group.label
+end
+
+---@return integer
+function M.undo_depth()
+	return #undo_groups
 end
 
 ---Entries in creation order (a copy: batch_send removes entries while iterating).
