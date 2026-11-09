@@ -15,9 +15,11 @@
 --   icon       string                        glyph for pickers/notifications
 --   available  fun(): ok, reason?            default = #targets() > 0
 --   status     fun(): ok, reason?            alias for available, if provided
---   probe      fun(target): { running: boolean, detail?: string }
+--   probe      fun(target): { running: boolean, busy?: boolean, detail?: string }
 --                                            live check for the picker (default: a target is
---                                            assumed to be running unless it is stale)
+--                                            assumed to be running unless it is stale).
+--                                            `busy` = the agent is mid-turn, so the question
+--                                            will be queued (shown as a spinner in the picker).
 --   stale_targets fun(): table[]             recently exited instances, shown greyed out in
 --                                            the picker so the user sees what is *not* running
 --
