@@ -635,18 +635,11 @@ function M.send(text, opts)
 	return deliver_text(mod, target, text, { correlation = opts.correlation, anchor = opts.anchor })
 end
 
----The newest task handed to an agent: { text, ts, status, correlation, anchor, output? }.
+---The newest task handed to an agent: { text, ts, status, correlation, anchor }.
 ---@param key string
 ---@return table|nil
 function M.task(key)
 	return state.task(key)
-end
-
----Output of an agent's newest turn, captured from its terminal on demand (cached afterwards).
----@param key string
----@param cb fun(task: table|nil, err: string|nil)
-function M.result(key, cb)
-	state.result(key, cb)
 end
 
 ---Every observed agent instance, most attention-worthy first (blocked > done > error > working > idle).
@@ -682,7 +675,7 @@ function M.goto_anchor(anchor)
 end
 
 ---Register a jump adapter: the thing that brings an agent's window to the front.
----`{ id, can(target), focus(target), capture?(target, cb), priority? }` — rex and tmux
+---`{ id, can(target), focus(target), priority? }` — rex and tmux
 ---are built in; see ask_agent/jump.lua for the contract.
 ---@param mod table
 function M.register_jump(mod)
@@ -692,14 +685,13 @@ end
 ---Open the sidebar: agents as the top level of a tree, their tasks below.
 ---<CR> jumps (agent window through a jump adapter, task through its anchor),
 ---`s` sends, `S` flushes the queue routed to that agent, `a` acks, `d` deletes a
----queued task or dismisses a dead agent, `C` shows recent output, `q` closes.
+---queued task or dismisses a dead agent, `q` closes.
 ---@param opts { pos?: "left"|"right", width?: integer }|nil
 function M.dashboard(opts)
 	require("ask_agent.dashboard").open({
 		send = M.send,
 		batch_send = M.batch_send,
 		goto_anchor = M.goto_anchor,
-		result = M.result,
 	}, opts)
 end
 

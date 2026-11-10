@@ -113,29 +113,6 @@ assert(state.get("fake:a").source == "probe", "probe source: " .. tostring(state
 assert(state.get("fake:b").source == "rex", "rex source: " .. tostring(state.get("fake:b").source))
 assert(watched["s"], "rex events are streamed for the session the agents live in")
 
--- result captures the last turn's output once and caches it
-state.dispatch("fake", "b", "review this")
-local jump = require("ask_agent.jump")
-local captures = 0
-jump.capture = function(_, cb)
-	captures = captures + 1
-	cb("all tests passed\nbuilt in 2s")
-end
-local got, rerr = nil, nil
-state.result("fake:b", function(task, e)
-	got, rerr = task, e
-end)
-vim.wait(20)
-assert(
-	rerr == nil and got and got.output:find("all tests passed"),
-	"result returns the captured output: " .. tostring(rerr) .. " / " .. tostring(got and got.text)
-)
-state.result("fake:b", function()
-	got = "second call"
-end)
-vim.wait(20)
-assert(captures == 1, "output is cached, captured once")
-
 -- heuristic completion is labelled as such
 probe_a = { running = true, state = "working" }
 state.refresh()

@@ -15,7 +15,6 @@
 --   state.on("done"|"blocked"|"error", fn)
 --   state.all()              -- every instance, most attention-worthy first
 --   state.dispatch(backend, id, text, { correlation, anchor })
---   state.result(key, cb)    -- the last turn's output (captured on demand)
 --
 -- Each record carries `source`: "rex" (OSC 7501, authoritative), "probe" (the
 -- backend's own marker/probe) or "heuristic" (a turn that ended after our send).
@@ -235,8 +234,6 @@ end
 
 ---@param task table
 ---@return table
-local journal_output = 4000 -- keep the journal small: output can be a whole screen
-
 local function slim_task(task)
 	return {
 		text = task.text,
@@ -244,8 +241,6 @@ local function slim_task(task)
 		status = task.status,
 		correlation = task.correlation,
 		anchor = task.anchor,
-		-- the last turn's output survives a restart too, so `C` still works tomorrow
-		output = task.output and task.output:sub(1, journal_output) or nil,
 	}
 end
 
@@ -612,50 +607,12 @@ function M.dispatch(backend, id, text, opts)
 	schedule_save()
 end
 
----Newest task handed to an instance: { text, ts, status, correlation, anchor, output? }.
+---Newest task handed to an instance: { text, ts, status, correlation, anchor }.
 ---@param key string
 ---@return table|nil
 function M.task(key)
 	local rec = agents[key]
 	return rec and rec.tasks and rec.tasks[1] or nil
-end
-
----Output of the newest turn, captured from the terminal on demand and cached on the task.
----`cb(task|nil, err?)`; the task then carries `output`.
----@param key string
----@param cb fun(task: table|nil, err: string|nil)
-function M.result(key, cb)
-	local rec = agents[key]
-	if not rec then
-		return vim.schedule(function()
-			cb(nil, ("unknown agent %s"):format(tostring(key)))
-		end)
-	end
-	local task = rec.tasks and rec.tasks[1]
-	if not task then
-		return vim.schedule(function()
-			cb(nil, "nothing has been sent to this agent yet")
-		end)
-	end
-	if task.output then
-		return vim.schedule(function()
-			cb(task)
-		end)
-	end
-	local _, target = M.resolve(rec)
-	if not target then
-		return vim.schedule(function()
-			cb(nil, ("%s is not running"):format(M.name(rec)))
-		end)
-	end
-	jump.capture(target, function(text)
-		if not text or text == "" then
-			return cb(nil, "this agent has no capture adapter")
-		end
-		task.output = text
-		schedule_save()
-		cb(task)
-	end)
 end
 
 ---Mark a finished instance as seen (keeps the row, drops the unread mark).

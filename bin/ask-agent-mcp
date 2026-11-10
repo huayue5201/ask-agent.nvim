@@ -64,15 +64,6 @@ TOOLS = [
         },
     },
     {
-        "name": "result",
-        "description": "The agent's last turn as it appears in its terminal (captured on demand).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"key": {"type": "string"}, "wait_ms": {"type": "integer"}},
-            "required": ["key"],
-        },
-    },
-    {
         "name": "status",
         "description": "Counts by state plus the statusline chunk nvim shows.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -164,8 +155,6 @@ def tool_call(name, args, call=None):
         )
     if name == "task":
         return call("task", key=args.get("key"))
-    if name == "result":
-        return call("result", key=args.get("key"), wait_ms=args.get("wait_ms"))
     if name == "status":
         return call("status")
     return {"ok": False, "error": "unknown tool: %s" % name}

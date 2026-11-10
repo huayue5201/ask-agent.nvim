@@ -19,7 +19,7 @@
 --      | {"action":"diagnostics"} | {"action":"quickfix"} | {"action":"list"}
 --      | {"action":"agents","state":..} | {"action":"ask","text":..,"backend":..,"target":..}
 --      | {"action":"task","key":..}
---      | {"action":"result","key":..,"wait_ms":..} | {"action":"status"}
+--      | {"action":"status"}
 --      | {"action":"project","root":..,"full":..,"wait_ms":..}
 -- The `project` action is not built in: register a handler with
 -- `require("ask_agent.bridge").extend("project", fn)`; `fn` receives the request
@@ -392,40 +392,7 @@ local function task(req)
 			status = t.status,
 			correlation = t.correlation,
 			anchor = t.anchor,
-			output = t.output,
 		},
-	}
-end
-
----Output of an agent's newest turn (action: "result"): {key, wait_ms?}.
----Waits up to wait_ms (default 2000) for the terminal capture.
----@param req table
----@return table
-local function result(req)
-	if type(req.key) ~= "string" then
-		return { ok = false, error = "result requires key" }
-	end
-	local st = require("ask_agent.state")
-	local done, payload, failure = false, nil, nil
-	st.result(req.key, function(t, err)
-		done, payload, failure = true, t, err
-	end)
-	vim.wait(math.max(0, tonumber(req.wait_ms) or 2000), function()
-		return done
-	end, 20)
-	if not done then
-		return { ok = false, error = "capture timed out" }
-	end
-	if not payload then
-		return { ok = false, error = tostring(failure or "no output") }
-	end
-	return {
-		ok = true,
-		action = "result",
-		key = req.key,
-		text = payload.text,
-		output = payload.output,
-		status = payload.status,
 	}
 end
 
@@ -438,7 +405,6 @@ end
 
 local handlers = {
 	task = task,
-	result = result,
 	status = function()
 		return status()
 	end,

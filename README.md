@@ -478,7 +478,7 @@ nvim --server <sock> --remote-expr \
 
 Requests: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
 `agents` (`{state?}` filter), `ask` (`{text, backend?, target?}`), `task`
-(`{key}`), `result` (`{key, wait_ms?}`) and `status` — the last five make the
+(`{key}`) and `status` — the last four make the
 whole control plane reachable from a terminal agent, not just from your own Lua
 config.
 Every handler returns a JSON string; failures are `{"ok":false,"error":…}` and never
@@ -506,7 +506,7 @@ speaks MCP (Claude Desktop, another agent) gets tools without any Lua:
 {"mcpServers": {"ask-agent": {"command": "/Users/you/neovim-plugins/ask-agent.nvim/bin/ask-agent-mcp"}}}
 ```
 
-Tools: `agents`, `ask`, `task`, `result`, `status` — the same actions as the
+Tools: `agents`, `ask`, `task`, `status` — the same actions as the
 bridge, forwarded to the nvim instance working in the current directory (or
 `$ASK_AGENT_SOCK`). It is python3 + `nvim` only; nothing to install.
 
@@ -524,7 +524,6 @@ ask.batch_list()              -- list queued questions (send/route/jump/edit/del
 ask.batch_clear() / ask.batch_count()
 ask.send(text, opts)          -- send without the ask window ({ correlation = { plugin, key }, anchor = a })
 ask.task(key)                 -- newest task handed to that agent
-ask.result(key, cb)           -- cb(task) with the newest turn's output, captured from the terminal once
 ask.agents(opts)              -- every instance, most urgent first ({ state, backend, correlation })
 ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
 ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(nil) on timeout)
@@ -575,10 +574,6 @@ show `blocked` (with the agent's own message) and `<CR>` brings its terminal win
 to the front. Permission prompts, choices and passwords are answered in that
 terminal — the protocol carries no structured options, so injecting text would be
 a guess.
-
-`ask.result(key, cb)` gives you what an agent actually answered: it captures the
-instance's terminal once (`jump` adapter's `capture`), caches the text on the task
-as `output`, and calls back on the main loop. `C` in the sidebar does the same.
 
 Journal: the tasks and unread marks are written to
 `stdpath("cache")/ask-agent/journal.json` (1 s debounce, tasks older than a week
@@ -637,7 +632,6 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | --- | --- | --- |
 | `<CR>` | bring its window to the front | jump to the task's code anchor |
 | `s` / `S` | send / flush every queued question routed to it | |
-| `C` | show the output of its last turn | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `<Tab>` | fold the agent's tasks | |
 | `?` | key help (a float; `q` closes it) | |
@@ -662,11 +656,6 @@ require("ask_agent").register_jump({
   priority = 10,                     -- higher wins when several adapters match
   can = function(target) return target.pane ~= nil end,
   focus = function(target) vim.system({ "herdr", "focus", target.pane }) end,
-  capture = function(target, cb)     -- optional: powers `C`
-    vim.system({ "herdr", "capture", target.pane }, { text = true }, function(res)
-      vim.schedule(function() cb(res.code == 0 and res.stdout or nil) end)
-    end)
-  end,
 })
 ```
 

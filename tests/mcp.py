@@ -29,7 +29,7 @@ assert init["result"]["capabilities"] == {"tools": {}}, "capabilities"
 
 tools = mcp.respond({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]
 names = [t["name"] for t in tools]
-assert names == ["agents", "ask", "task", "result", "status"], names
+assert names == ["agents", "ask", "task", "status"], names
 for t in tools:
     assert t["description"] and t["inputSchema"]["type"] == "object", t["name"]
 

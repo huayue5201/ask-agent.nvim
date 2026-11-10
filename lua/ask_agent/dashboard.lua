@@ -334,30 +334,6 @@ local function open_node(node)
 	end
 end
 
----@param title string
----@param text string
-local function show_text(title, text)
-	local b = vim.api.nvim_create_buf(false, true)
-	vim.bo[b].buftype, vim.bo[b].bufhidden = "nofile", "wipe"
-	vim.api.nvim_buf_set_lines(b, 0, -1, false, vim.split(text, "\n", { plain = true }))
-	local w = vim.api.nvim_open_win(b, true, {
-		relative = "editor",
-		style = "minimal",
-		border = "rounded",
-		width = math.max(40, math.min(vim.o.columns - 8, 120)),
-		height = math.max(8, math.min(vim.o.lines - 8, 24)),
-		row = 2,
-		col = 2,
-		title = " " .. title .. " ",
-	})
-	vim.keymap.set("n", "q", function()
-		pcall(vim.api.nvim_win_close, w, true)
-	end, { buffer = b, nowait = true })
-	vim.keymap.set("n", "<Esc>", function()
-		pcall(vim.api.nvim_win_close, w, true)
-	end, { buffer = b, nowait = true })
-end
-
 ---Dismiss a dead agent — but never while questions are still routed to it,
 ---or they would silently disappear from this view.
 ---@param rec table
@@ -379,7 +355,6 @@ local HELP = {
 	{ "<CR>", "Agent: bring its window to the front · Task: jump to its code anchor" },
 	{ "s", "Send a question to that agent" },
 	{ "S", "Send every queued question routed to it" },
-	{ "C", "Show the output of its last turn (captured from the terminal)" },
 	{ "a", "Acknowledge a done/blocked agent" },
 	{ "d", "Delete the queued task · dismiss a dead agent" },
 	{ "<Tab>", "Fold or unfold the agent's tasks" },
@@ -465,27 +440,6 @@ local function flush_queue(rec)
 	api.batch_send({ ids = table.concat(ids, ",") })
 end
 
----@param rec table
-local function capture(rec)
-	if api and api.result then
-		api.result(rec.key, function(task, err)
-			if not task or not task.output then
-				vim.notify("[ask_agent] " .. (err or "no output captured yet"), vim.log.levels.INFO)
-				return
-			end
-			show_text(state.name(rec) .. " · last turn", task.output)
-		end)
-		return
-	end
-	jump.capture(rec.target, function(text)
-		if not text then
-			vim.notify("[ask_agent] No capture source for " .. state.name(rec), vim.log.levels.INFO)
-			return
-		end
-		show_text(state.name(rec) .. " · recent output", text)
-	end)
-end
-
 local function attach(bufnr)
 	local opts_buf = { buffer = bufnr, nowait = true, silent = true }
 	local function with(kind, fn)
@@ -510,14 +464,6 @@ local function attach(bufnr)
 		"S",
 		with("agent", function(node)
 			flush_queue(node.rec)
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"C",
-		with("agent", function(node)
-			capture(node.rec)
 		end),
 		opts_buf
 	)

@@ -40,7 +40,6 @@ state.dispatch("fake", "a", "sent question", { anchor = { buf = vim.api.nvim_get
 state.refresh()
 
 local sent = {}
-local results = {}
 dashboard.open({
 	result = function(_, cb)
 		results[#results + 1] = true
@@ -83,8 +82,8 @@ vim.api.nvim_feedkeys("\\r", "x", false)
 vim.wait(50)
 assert(queue.count() == 1, "jumping does not consume the queued question")
 
--- the rex adapter must use the CLI shapes we verified (`focus` takes a positional
--- block, `capture` takes -b); a -b on focus exits 2 and silently does nothing
+-- the rex adapter must use the CLI shape we verified (`focus` takes a positional
+-- block); a -b on focus exits 2 and silently does nothing
 local systems = {}
 local real_system = vim.system
 vim.system = function(cmd, _, cb)
@@ -96,7 +95,6 @@ vim.system = function(cmd, _, cb)
 end
 store.focus({ rex = { session = "s", block = "b" } })
 vim.wait(50)
-store.capture({ rex = { session = "s", block = "b" } }, function() end)
 vim.system = real_system
 vim.wait(20)
 -- switching the app to the block's session is a client action (`rex do
@@ -110,7 +108,6 @@ assert(
 	vim.deep_equal(systems[2], { "rex", "block", "focus", "b", "-s", "s" }),
 	"focus argv: " .. vim.inspect(systems[2])
 )
-assert(systems[3][4] == "-b" and systems[3][5] == "b", "capture argv: " .. vim.inspect(systems[3]))
 
 -- an anchor captured in another tab switches to that tab instead of opening a
 -- second copy of the buffer in the current one
@@ -160,19 +157,6 @@ store.register({
 })
 assert(store.find({ pane = "%1" }).id == "tmux", "re-registering replaces by id")
 
--- C shows the last turn's output (from ask.result, not a raw capture)
-local sb = vim.api.nvim_get_current_win()
-vim.api.nvim_set_current_win(sb)
-vim.api.nvim_win_set_cursor(sb, { 1, 0 })
-vim.api.nvim_feedkeys("C", "x", false)
-vim.wait(30)
-assert(#results == 1, "C asked for the last result")
-local out_win = vim.api.nvim_get_current_win()
-local out_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(out_win), 0, -1, false)
-assert(table.concat(out_lines, "\n"):find("all green", 1, true), "output float shows the turn")
-vim.api.nvim_feedkeys("q", "x", false)
-vim.wait(30)
-
 -- opening again focuses the same sidebar instead of stacking another one
 local first = vim.api.nvim_get_current_win()
 dashboard.open(nil)
@@ -208,7 +192,7 @@ end, vim.api.nvim_tabpage_list_wins(0))
 assert(#floats == 1, "help float is open")
 local help_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(floats[1]), 0, -1, false)
 assert(help_lines[1]:match("Show these keys"), "help lists the keys: " .. help_lines[1])
-assert(#help_lines == 10, "every key has a row")
+assert(#help_lines == 9, "every key has a row")
 vim.api.nvim_feedkeys("q", "x", false)
 vim.wait(30)
 assert(#vim.tbl_filter(function(w)
