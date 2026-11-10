@@ -343,6 +343,12 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			mod.label or mod.id
 		),
 		tick = animate and tick or nil,
+		-- ui-menu supports these; other implementations ignore unknown opts.
+		-- The list is a screen-centered chooser, not a cursor-attached menu.
+		position = "center",
+		on_tab = back and function()
+			vim.schedule(back)
+		end or nil,
 		format_item = function(c, frame)
 			local t = c.target
 			local st = candidate_status(mod, c)
