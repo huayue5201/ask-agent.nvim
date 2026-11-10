@@ -557,6 +557,13 @@ A target matches the first adapter (by `priority`) whose `can(target)` returns
 true; `target.rex = { session, block }` is what the built-in rex adapter looks for,
 `target.pane` what tmux uses.
 
+The rex adapter runs two steps, because a Rex app keeps showing whichever session it
+had selected — moving focus inside another session changes server state but not what
+you see: `rex do session.select session_id=…` (the app-side action; `REX_CLIENT`
+selects the app when more than one is connected) and then `rex block focus <block> -s
+<session>`, which also activates the block's window. Failures surface as warnings
+instead of failing silently.
+
 ## Batch questions
 
 When a question comes up while browsing, `:AskAgentBatch` (or

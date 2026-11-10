@@ -72,9 +72,12 @@ function M.jump_to(a)
 	if a.bufname and a.bufname ~= "" and vim.api.nvim_buf_get_name(buf) ~= a.bufname then
 		return false, "the buffer number was reused by another file"
 	end
-	local win = vim.fn.bufwinid(buf)
-	if win ~= -1 then
-		vim.api.nvim_set_current_win(win)
+	-- win_findbuf looks in every tab, bufwinid only in the current one; an
+	-- anchor captured in another tab has to switch tabs, not open a second copy.
+	local wins = vim.fn.win_findbuf(buf)
+	if #wins > 0 then
+		vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(wins[1]))
+		vim.api.nvim_set_current_win(wins[1])
 	else
 		vim.api.nvim_set_current_buf(buf)
 	end

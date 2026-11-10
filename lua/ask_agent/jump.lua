@@ -94,6 +94,27 @@ end
 -- Built-in adapters
 -- ================================
 
+---Run commands one after another; `on_error(cmd, res)` gets the first failure.
+local function run(cmds, on_error)
+	local function step(i)
+		if i > #cmds then
+			return
+		end
+		vim.system(cmds[i], { text = true }, function(res)
+			if res.code ~= 0 then
+				vim.schedule(function()
+					on_error(cmds[i], res)
+				end)
+				return
+			end
+			vim.schedule(function()
+				step(i + 1)
+			end)
+		end)
+	end
+	step(1)
+end
+
 M.register({
 	id = "rex",
 	priority = 20,
@@ -101,20 +122,31 @@ M.register({
 		return type(target.rex) == "table" and target.rex.block ~= nil
 	end,
 	focus = function(target)
-		-- focus takes the block as a positional argument (capture takes -b)
-		local cmd = { "rex", "block", "focus", target.rex.block }
+		-- Two steps, because neither alone is enough off the current tab/session:
+		-- `session.select` is the app-side action that makes a session *visible*
+		-- (focusing a block only touches server state, the app keeps showing
+		-- whatever session it had selected), and `block focus` then puts the
+		-- cursor in the pane, switching windows within that session.
+		local cmds = {}
 		if target.rex.session then
-			vim.list_extend(cmd, { "-s", target.rex.session })
-		end
-		vim.system(cmd, nil, function(res)
-			if res.code ~= 0 then
-				vim.schedule(function()
-					vim.notify(
-						"[ask_agent] rex block focus failed: " .. (res.stderr or ""):gsub("%s+$", ""),
-						vim.log.levels.WARN
-					)
-				end)
+			local select = { "rex" }
+			if vim.env.REX_CLIENT and vim.env.REX_CLIENT ~= "" then
+				vim.list_extend(select, { "-C", vim.env.REX_CLIENT })
 			end
+			vim.list_extend(select, { "do", "session.select", "session_id=" .. target.rex.session })
+			cmds[#cmds + 1] = select
+		end
+		-- focus takes the block as a positional argument (capture takes -b)
+		local focus = { "rex", "block", "focus", target.rex.block }
+		if target.rex.session then
+			vim.list_extend(focus, { "-s", target.rex.session })
+		end
+		cmds[#cmds + 1] = focus
+		run(cmds, function(cmd, res)
+			vim.notify(
+				("[ask_agent] %s failed: %s"):format(cmd[1] .. " " .. cmd[2], (res.stderr or ""):gsub("%s+$", "")),
+				vim.log.levels.WARN
+			)
 		end)
 	end,
 	capture = function(target, cb)

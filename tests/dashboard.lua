@@ -89,14 +89,47 @@ vim.system = function(cmd, _, cb)
 	return { pid = 1 }
 end
 store.focus({ rex = { session = "s", block = "b" } })
+vim.wait(50)
 store.capture({ rex = { session = "s", block = "b" } }, function() end)
 vim.system = real_system
 vim.wait(20)
+-- switching the app to the block's session is a client action (`rex do
+-- session.select`), not part of `block focus`: without it a block in another
+-- session stays invisible even though the server-side focus moved
 assert(
-	vim.deep_equal(systems[1], { "rex", "block", "focus", "b", "-s", "s" }),
-	"focus argv: " .. vim.inspect(systems[1])
+	vim.deep_equal(systems[1], { "rex", "do", "session.select", "session_id=s" }),
+	"session.select argv: " .. vim.inspect(systems[1])
 )
-assert(systems[2][4] == "-b" and systems[2][5] == "b", "capture argv: " .. vim.inspect(systems[2]))
+assert(
+	vim.deep_equal(systems[2], { "rex", "block", "focus", "b", "-s", "s" }),
+	"focus argv: " .. vim.inspect(systems[2])
+)
+assert(systems[3][4] == "-b" and systems[3][5] == "b", "capture argv: " .. vim.inspect(systems[3]))
+
+-- an anchor captured in another tab switches to that tab instead of opening a
+-- second copy of the buffer in the current one
+local tab_buf = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(tab_buf, "/tmp/ask-agent-anchor.lua")
+vim.api.nvim_buf_set_lines(tab_buf, 0, -1, false, { "local x = 1", "local y = 2" })
+vim.cmd("tabnew")
+local tab = vim.api.nvim_get_current_tabpage()
+vim.api.nvim_win_set_buf(0, tab_buf)
+vim.cmd("tabprevious")
+local first_tab = vim.api.nvim_get_current_tabpage()
+assert(first_tab ~= tab)
+local jumped, why = require("ask_agent.context").jump_to({
+	buf = tab_buf,
+	bufname = vim.api.nvim_buf_get_name(tab_buf), -- /tmp is a symlink on macOS
+	line = 2,
+	col = 1,
+})
+assert(jumped, "cross-tab jump: " .. tostring(why))
+assert(vim.api.nvim_get_current_tabpage() == tab, "jump switched to the anchor's tab")
+assert(vim.api.nvim_win_get_cursor(0)[1] == 2, "jump put the cursor on the line")
+assert(vim.api.nvim_buf_get_name(0) == vim.api.nvim_buf_get_name(tab_buf))
+vim.cmd("tabclose")
+vim.cmd("bwipeout! " .. tab_buf)
+assert(vim.api.nvim_get_current_tabpage() == first_tab, "back on the original tab")
 
 -- adapters: rex and tmux both claim their targets, custom ones can win
 assert(store.find({ rex = { session = "s", block = "b" } }).id == "rex", "rex adapter")
