@@ -38,12 +38,37 @@ require("ask_agent").setup({
   state_notify = true,           -- notify on finished/blocked agents (default true)
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time
-  icons = { pi = "π" },          -- per-agent glyphs
+  icons = {                      -- every glyph: flat key = an agent icon,
+    pi = "π",                    -- "ui" group = the interface (see *ask-agent-icons*)
+    ui = { state = { done = "✓" }, spinner = { "⠋", "⠙" } },
+  },
   icon_colors = {},              -- per-agent brand colors (hex)
   aliases = { file = vim.fn.stdpath("cache") .. "/ask-agent/aliases.json" },
   bridge = { dir = vim.fn.stdpath("cache") .. "/pi-ctx" },  -- false disables
 })
 <
+
+                                                 *ask-agent-icons*
+Icons and marks
+Everything the plugin draws is configured through the `icons` option and defined
+in `lua/ask_agent/icons.lua`:
+
+  flat key       an agent icon, keyed by backend or instance id; `fallback` is
+                 used for unknown agents
+  ui.header      dashboard winbar and notification prefix
+  ui.state       blocked done error working idle unknown gone
+  ui.task        queued done error (dashboard tree)
+  ui.tree        collapsed expanded leaf
+  ui.spinner     busy frames; the list replaces the default frames entirely
+
+  >lua
+  require("ask_agent").setup({
+    icons = { claude = "", ui = { state = { blocked = "!" } } },
+    icon_colors = { claude = "#d97757" },
+  })
+  <
+Only the keys you pass change; everything else keeps its default. A top-level
+`spinner` option still wins over `ui.spinner`.
 
 ==============================================================================
 3. COMMANDS                                               *ask-agent-commands*

@@ -173,8 +173,31 @@ require("ask_agent").setup({
   -- extra backends declared inline (see Backends); they are registered at setup time
   extra = {},
 
-  -- per-agent glyphs and brand colors
-  icons = { pi = "π", claude = "✻" },
+  -- every glyph in the plugin: a flat key is an agent icon (backend or instance id),
+  -- the `ui` group styles the interface. This block is the default, verbatim.
+  icons = {
+    pi = "π",
+    claude = vim.fn.nr2char(0x273B),
+    generic = vim.fn.nr2char(0xF120),
+    fallback = vim.fn.nr2char(0xF06A9), -- unknown agents
+    ui = {
+      header = vim.fn.nr2char(0xF06A9), -- dashboard winbar / notification prefix
+      state = {
+        blocked = "⚠",
+        done = "✓",
+        error = "✗",
+        working = "◐",
+        idle = "●",
+        unknown = "◌",
+        gone = "○",
+      },
+      task = { queued = "◐", done = "✓", error = "✗" },
+      tree = { collapsed = "▸", expanded = "▾", leaf = "·" },
+      spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
+    },
+  },
+
+  -- brand colors, keyed like agent icons
   icon_colors = { claude = "#d97757" },
 
   -- instance names live here by default
@@ -184,6 +207,34 @@ require("ask_agent").setup({
   bridge = { dir = vim.fn.stdpath("cache") .. "/pi-ctx" },
 })
 ```
+
+### Icons
+
+Everything drawn by the plugin comes from `lua/ask_agent/icons.lua`: agent glyphs,
+state marks (`⚠ ✓ ✗ ◐ ● ◌ ○`), task marks in the dashboard tree, the tree folds,
+the busy spinner and the header. Override them in one place:
+
+```lua
+require("ask_agent").setup({
+  icons = {
+    claude = "",                      -- agent icon
+    fallback = "",                    -- unknown agent
+    ui = {
+      header = "",                     -- dashboard / notifications
+      state = { done = "" },           -- only the keys you want to change
+      task = { queued = "…" },
+      tree = { collapsed = "▸" },
+      spinner = { "1", "2", "3" },      -- a frame list replaces the default entirely
+    },
+  },
+  icon_colors = { claude = "#d97757" }, -- brand colors
+})
+```
+
+`icons.all()` returns the active registry (glyphs + `ui`), and `icons.ui(group, key)`
+/ `icons.spin(frame)` / `icons.header()` are the read accessors other plugins can use.
+A top-level `spinner` setup option still wins over `icons.ui.spinner` (it exists so the
+picker can share its own animation frames).
 
 ## Backends
 

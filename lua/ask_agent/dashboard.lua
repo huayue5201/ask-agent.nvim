@@ -28,15 +28,9 @@ local icons = require("ask_agent.icons")
 local M = {}
 
 local NS = vim.api.nvim_create_namespace("ask_agent.dashboard")
-local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
-local GLYPH =
-	{ blocked = "⚠", done = "✓", error = "✗", working = "◐", idle = "●", unknown = "◌", gone = "○" }
 local HL = { blocked = "DiagnosticWarn", done = "DiagnosticOk", error = "DiagnosticError", working = "DiagnosticInfo" }
-local TASK_GLYPH = { queued = "◐", done = "✓", error = "✗" }
 local TASK_HL = { queued = "DiagnosticInfo", done = "DiagnosticOk", error = "DiagnosticError" }
 local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
-
-local ICON_AI = "󰚩"
 
 local buf, win, api, opts
 local rows = {} -- line number -> node
@@ -153,8 +147,9 @@ end
 ---@param n integer tasks below this agent
 ---@return string line, table[] marks
 local function agent_line(rec, name_w, show_backend, now, n)
-	local fold = n == 0 and "·" or (collapsed[rec.key] and "▸" or "▾")
-	local glyph = rec.state == "working" and FRAMES[frame % #FRAMES + 1] or GLYPH[rec.state] or "?"
+	local fold = n == 0 and icons.ui("tree", "leaf")
+		or (collapsed[rec.key] and icons.ui("tree", "collapsed") or icons.ui("tree", "expanded"))
+	local glyph = rec.state == "working" and icons.spin(frame) or (icons.ui("state", rec.state) or "?")
 	local glyph_start = #fold + 1
 	local name_start = glyph_start + #glyph + 1
 	local name = state.name(rec)
@@ -187,10 +182,11 @@ end
 local function task_line(node, now)
 	local glyph, text, right, hl
 	if node.kind == "queued" then
-		glyph, text, right, hl = TASK_GLYPH.queued, node.entry.prompt, "queued", TASK_HL.queued
+		glyph, text, right, hl = icons.ui("task", "queued"), node.entry.prompt, "queued", TASK_HL.queued
 	else
 		local task = node.task
-		glyph = node.kind == "running" and FRAMES[frame % #FRAMES + 1] or (TASK_GLYPH[node.kind] or "·")
+		glyph = node.kind == "running" and icons.spin(frame)
+			or (icons.ui("task", node.kind) or icons.ui("tree", "leaf"))
 		text, right, hl = task.text, node.kind, TASK_HL[node.kind] or "DiagnosticInfo"
 		if task.ts then
 			right = right .. "  " .. age(now - task.ts)
@@ -278,7 +274,7 @@ local function render()
 		local cur = vim.api.nvim_win_get_cursor(win)
 		vim.api.nvim_win_set_cursor(win, { math.min(cur[1], math.max(1, #map)), cur[2] })
 		local help = width >= 56 and "  ⏎ jump · s send · S flush · ? keys" or ""
-		vim.wo[win].winbar = ("%s ask-agent · %d%s"):format(ICON_AI, #list, help)
+		vim.wo[win].winbar = ("%s ask-agent · %d%s"):format(icons.header(), #list, help)
 	end
 	if working then
 		ensure_timer()

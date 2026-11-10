@@ -48,7 +48,7 @@ local show_stale = true
 --- Frames for the busy spinner. Only the picker implementation decides whether it animates: menu.lua
 --- honours `opts.tick` and re-renders every tick, passing the frame to `format_item(item, frame)`. Everywhere
 --- else (telescope/fzf-lua/snacks/dropbar) the frame is nil and the first frame is shown static.
-local default_spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local default_spinner = require("ask_agent.icons").frames()
 --- Active frames: `setup({ spinner = {...} })` can point this at the picker menu's own spinner
 --- (e.g. `require("lib.menu").frames`) so the list and the map animate with the same glyphs.
 local spinner = default_spinner
@@ -112,25 +112,26 @@ end
 ---@param st { running: boolean, state?: string, msg?: string, detail?: string }
 ---@return string mark, string|nil detail
 local function status_mark(st)
+	local icons = require("ask_agent.icons")
 	if not st.running then
-		return "○", st.detail or "not running"
+		return icons.ui("state", "gone"), st.detail or "not running"
 	end
 	if st.state == "blocked" then
-		return "⚠", st.msg or st.detail or "needs you"
+		return icons.ui("state", "blocked"), st.msg or st.detail or "needs you"
 	end
 	if st.state == "done" then
-		return "✓", st.msg or st.detail or "finished"
+		return icons.ui("state", "done"), st.msg or st.detail or "finished"
 	end
 	if st.state == "error" then
-		return "✗", st.msg or st.detail or "error"
+		return icons.ui("state", "error"), st.msg or st.detail or "error"
 	end
 	if st.state == "working" then
-		return "◐", st.msg or st.detail or "busy"
+		return icons.ui("state", "working"), st.msg or st.detail or "busy"
 	end
 	if st.state == "unknown" then
-		return "◌", st.detail
+		return icons.ui("state", "unknown"), st.detail
 	end
-	return "●", st.detail
+	return icons.ui("state", "idle"), st.detail
 end
 
 --- Tell the user that a busy target will not answer right away (pi queues the message
@@ -1209,15 +1210,14 @@ function M.setup(opts)
 	picker = opts.picker or "map"
 	show_stale = opts.show_stale ~= false
 	layout_id = opts.layout or nil
-	-- Empty/missing falls back to the built-in braille frames; equal-width glyphs are required
-	-- (the map centers rows by cell width, the list just swaps one cell).
-	if type(opts.spinner) == "table" and #opts.spinner > 0 then
-		spinner = opts.spinner
-	end
 	if type(opts.tick) == "number" and opts.tick > 0 then
 		tick = opts.tick
 	end
 	require("ask_agent.icons").setup(opts.icons, opts.icon_colors)
+	-- Empty/missing falls back to icons.ui.spinner (braille by default); equal-width glyphs are
+	-- required (the map centers rows by cell width, the list just swaps one cell).
+	spinner = (type(opts.spinner) == "table" and #opts.spinner > 0) and opts.spinner
+		or require("ask_agent.icons").frames()
 	backends.register(require("ask_agent.backends.pi"))
 	for _, mod in ipairs(opts.extra or {}) do
 		backends.register(mod)

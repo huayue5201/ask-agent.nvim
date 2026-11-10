@@ -9,12 +9,43 @@
 --
 -- To switch to a Nerd Font glyph, write the entry as vim.fn.nr2char(0xF0C0B) or
 -- override it with setup({ icons = { pi = "π" } }).
+--
+-- Everything the UI draws -- state marks, task marks, tree folds, spinner frames and
+-- the dashboard header -- lives here too, under the "ui" group, so one table
+-- overrides every glyph in the plugin:
+--
+--   setup({ icons = { claude = "", ui = { state = { done = "" }, header = "" } } })
+--
 local M = {}
 
 local api = vim.api
 
 ---Unknown agents get a robot: nf-md-robot (U+F06A9)
 M.fallback = vim.fn.nr2char(0xF06A9)
+
+---Everything that is not an agent icon, so users can restyle the whole UI from one place.
+local DEFAULTS = {
+	-- dashboard winbar / notification prefix
+	header = vim.fn.nr2char(0xF06A9),
+	-- one mark per agent state (state.lua states)
+	state = {
+		blocked = "⚠",
+		done = "✓",
+		error = "✗",
+		working = "◐",
+		idle = "●",
+		unknown = "◌",
+		gone = "○",
+	},
+	-- one mark per task in the dashboard tree
+	task = { queued = "◐", done = "✓", error = "✗" },
+	-- tree decorations: fold, and the leaf used for "no tasks"/plain rows
+	tree = { collapsed = "▸", expanded = "▾", leaf = "·" },
+	-- busy spinner; the first frame is used wherever animation is not possible
+	spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
+}
+
+local ui = vim.deepcopy(DEFAULTS)
 
 local glyphs = {
 	-- pi's mark is π
@@ -122,6 +153,34 @@ function M.accent(key)
 	return color
 end
 
+---A UI glyph (`icons.ui("state", "done")`); nil when the key is unknown.
+---@param group "state"|"task"|"tree"
+---@param key string
+---@return string|nil
+function M.ui(group, key)
+	local g = ui[group]
+	return type(g) == "table" and g[key] or nil
+end
+
+---Dashboard / notification header mark.
+---@return string
+function M.header()
+	return ui.header
+end
+
+---Spinner frame (wraps), so pickers, the map and the dashboard share one cadence.
+---@param frame integer|nil
+---@return string
+function M.spin(frame)
+	local frames = ui.spinner
+	return frames[((frame or 0) % #frames) + 1]
+end
+
+---@return string[]
+function M.frames()
+	return ui.spinner
+end
+
 ---Highlight group name for an instance colour (already defined, ready to use).
 ---@param key string|nil
 ---@return string|nil
@@ -135,11 +194,36 @@ function M.accent_hl(key)
 	return name
 end
 
----@param map table<string, string>|nil glyph overrides
+---@param dst table
+---@param src table
+local function merge(dst, src)
+	for k, v in pairs(src) do
+		if type(v) == "table" and type(dst[k]) == "table" then
+			merge(dst[k], v)
+		elseif type(v) == "string" and v ~= "" then
+			dst[k] = v
+		end
+	end
+end
+
+---@param map table<string, string>|nil agent glyphs, plus an optional `ui` group
 ---@param palette table<string, string>|nil colour overrides (hex)
 function M.setup(map, palette)
 	for k, v in pairs(map or {}) do
-		if type(v) == "string" and v ~= "" then
+		if k == "fallback" and type(v) == "string" and v ~= "" then
+			M.fallback = v
+		elseif k == "ui" and type(v) == "table" then
+			for group, value in pairs(v) do
+				if group == "spinner" and type(value) == "table" then
+					-- a frame list is replaced, not merged: a shorter list must not keep old frames
+					ui.spinner = value
+				elseif type(value) == "table" and type(ui[group]) == "table" then
+					merge(ui[group], value)
+				elseif type(value) == "string" and value ~= "" then
+					ui[group] = value
+				end
+			end
+		elseif type(v) == "string" and v ~= "" then
 			glyphs[k] = v
 		end
 	end
@@ -150,9 +234,11 @@ function M.setup(map, palette)
 	end
 end
 
----@return table<string, string>
+---@return table<string, string|table>
 function M.all()
-	return vim.deepcopy(glyphs)
+	local out = vim.deepcopy(glyphs)
+	out.ui = vim.deepcopy(ui)
+	return out
 end
 
 ---@return table<string, string>
