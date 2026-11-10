@@ -35,6 +35,10 @@ ask.setup({
 	},
 })
 
+-- This test is about queue routing, not the picker: the list picker sends a sole
+-- candidate directly instead of opening a map.
+ask.picker("list")
+
 local buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two", "three" })
 local cwd = vim.fn.getcwd()

@@ -216,8 +216,9 @@ end, marked `○ … (exited)`, so a vanished agent is visible instead of absent
 They can never be chosen: picking one only warns and nothing is sent. Disable
 with `show_stale = false`. The map shows running instances only.
 
-Without a layout adapter, or when fewer than two candidates can be located on
-screen, the map silently falls back to the list.
+The map is the primary picker even for a single locatable candidate. Without a
+layout adapter, or when no candidate can be located on screen, it falls back to
+the list (where <Tab> returns to the map).
 
 ==============================================================================
 6. BACKENDS                                               *ask-agent-backends*

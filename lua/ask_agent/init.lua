@@ -488,8 +488,9 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 			})
 		end
 	end
-	-- With only 1 locatable pane the map is meaningless (the user cannot see where the others are), so fall back to the list
-	if located < 2 then
+	-- The map is the primary picker: one locatable pane is enough. Candidates
+	-- outside the layout stay reachable through <Tab> (the list has all of them).
+	if located < 1 then
 		return false
 	end
 
@@ -555,9 +556,15 @@ local function choose_target(mod, cb)
 		vim.notify(("[%s] %s"):format(mod.label or mod.id, reason or "no available instances"), vim.log.levels.WARN)
 		return cb(nil)
 	end
-	-- Sole exact-cwd candidate: no picker at all, unless its process just went away
-	-- (then the picker opens with it marked "not running", instead of silently sending into the void)
-	if #live == 1 and live[1].tier == 1 and not live[1].target.avoid then
+	-- When the map can open, a sole exact-cwd candidate still goes through it: the
+	-- map is the primary picker (and <Tab> reveals agents outside the layout).
+	-- Without a layout there is nothing to draw, so keep the direct send.
+	local map_ready = false
+	if picker == "map" then
+		local layout = require("ask_agent.layouts").active(layout_id)
+		map_ready = layout ~= nil and (type(layout.available) ~= "function" or layout.available() == true)
+	end
+	if not map_ready and #live == 1 and live[1].tier == 1 and not live[1].target.avoid then
 		local st = candidate_status(mod, live[1])
 		if st.running then
 			note_busy(mod, live[1].target, st)

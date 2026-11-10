@@ -418,8 +418,9 @@ Colors, icons and letters: each instance has a stable color derived from its `id
 used both in the map and in the list, plus its agent glyph. The letter is bold.
 The map itself is compact (blocks touch) and centered on screen.
 
-No adapter is required: without one (or when fewer than two candidates can be located)
-the picker silently falls back to the list.
+No adapter is required. The map is the primary picker even for a single locatable
+candidate; only when no candidate can be placed in the layout (or there is no
+adapter) does it fall back to the list, where `<Tab>` goes back to the map.
 
 ## Layout adapters
 
