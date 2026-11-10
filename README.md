@@ -436,7 +436,7 @@ ask.agents(opts)              -- every instance, most urgent first ({ state, bac
 ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
 ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(nil) on timeout)
 ask.statusline()              -- "⚠1 ✓2 ◐3", empty when nothing needs attention
-ask.dashboard(opts)           -- open the sidebar ({ pos = "left"|"right", width = 40 })
+ask.dashboard(opts)           -- open the sidebar ({ pos = "right", width = 40 }; pos = "left" moves it)
 ask.goto_anchor(a)            -- jump to a captured anchor (false + reason if gone)
 ask.use(id) / ask.current()   -- default backend
 ask.list() / ask.targets(id)  -- backends / instances
@@ -498,9 +498,10 @@ sidebar shows under each agent. Tasks finish when the instance reports `done` /
 
 ## Dashboard
 
-`:AskAgentDashboard` opens a sidebar: a tree whose top level is the agents (most
-urgent first) and whose children are that agent's tasks — the questions still queued
-for it and the turns already sent to it:
+`:AskAgentDashboard` opens a sidebar on the right (40 columns; `:lua
+require("ask_agent").dashboard({ pos = "left", width = 30 })` moves/resizes it): a
+tree whose top level is the agents (most urgent first) and whose children are that
+agent's tasks — the questions still queued for it and the turns already sent to it:
 
 ```
 ▾ ⚠ reviewer (2)  claude  needs permission: run the test suite?  2m
@@ -524,9 +525,13 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `<Tab>` | fold the agent's tasks | |
 | `r` / `q` | poll now / close | |
 
-The buffer updates itself from state and queue events (no polling of its own; the
-spinner is the only timer, and it only runs while a turn is actually in progress)
-and keeps your cursor where it was.
+Row layout: fold marker, state glyph, name (padded to the longest name) with the task
+count, then the message; the age is flushed right, and the backend appears on the
+right too when more than one backend is running. Rows are truncated to the window
+width, narrow windows included, and re-flow when the sidebar is resized. The buffer
+updates itself from state and queue events (no polling of its own; the spinner is the
+only timer, and it only runs while a turn is actually in progress) and keeps your
+cursor where it was.
 
 ### Jumping to an agent's window
 

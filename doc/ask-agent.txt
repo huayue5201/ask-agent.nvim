@@ -371,8 +371,9 @@ with `status` = `running` / `done` / `error`.
 ==============================================================================
 11. DASHBOARD                                        *ask-agent-dashboard*
 
-|:AskAgentDashboard| opens a sidebar tree. Top level: agent instances, most urgent
-first. Children: that agent's tasks — questions still queued for it (`◐`) and
+|:AskAgentDashboard| opens a sidebar tree on the right (40 columns; pass
+`{ pos = "left", width = 30 }` to `ask.dashboard()` to move or resize it). Top
+level: agent instances, most urgent first. Children: that agent's tasks — questions still queued for it (`◐`) and
 turns already sent (spinner running, `✓` done, `✗` failed). Agent glyphs: `●`
 idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `○` exited.
 
@@ -442,7 +443,7 @@ ask.send(text, opts)                    -- { backend, target, correlation, ancho
 ask.agents({ state = "blocked" })       -- instances, most urgent first
 ask.on(event, fn)                       -- state | update | done | blocked | error
 ask.wait(key, want, ms, cb)             -- one-shot wait; cb(nil) on timeout
-ask.statusline() / ask.dashboard(opts)  -- sidebar; { pos, width }
+ask.statusline() / ask.dashboard(opts)  -- sidebar; { pos = "right", width = 40 }
 ask.goto_anchor(a)                      -- jump to a captured anchor
 ask.use("pi") / ask.current()
 ask.list() / ask.targets("pi")

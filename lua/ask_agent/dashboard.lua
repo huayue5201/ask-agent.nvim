@@ -80,16 +80,55 @@ local function inner_width()
 	return win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_width(win) - 1 or 40
 end
 
----Tasks of one agent: queue entries routed to it plus its dispatch log.
----@param rec table
----@return table[]
-local function tasks_of(rec)
+---@param text string
+---@param w integer
+---@return string
+local function pad(text, w)
+	local have = vim.fn.strdisplaywidth(text)
+	if have > w then
+		return fit(text, w)
+	end
+	return text .. string.rep(" ", w - have)
+end
+
+---Left column flushed left, right column flushed right, the gap absorbs the slack.
+---@param left string
+---@param right string
+---@param width integer
+---@return string
+local function columns(left, right, width)
+	local rw = vim.fn.strdisplaywidth(right)
+	if rw >= width then
+		return fit(right, width)
+	end
+	local room = width - rw - 1
+	local l = vim.fn.strdisplaywidth(left) > room and fit(left, room) or left
+	return l .. string.rep(" ", math.max(1, width - vim.fn.strdisplaywidth(l) - rw)) .. right
+end
+
+---Queue entries per agent, so one render scans the queue once.
+---@return table<string, table[]>
+local function queued_by_agent()
 	local out = {}
 	for _, entry in ipairs(queue.list()) do
 		local r = entry.route
-		if r and r.backend == rec.backend and tostring(r.id) == rec.id then
-			out[#out + 1] = { kind = "queued", entry = entry, ts = 0 }
+		if r then
+			local key = ("%s:%s"):format(r.backend, r.id)
+			out[key] = out[key] or {}
+			table.insert(out[key], entry)
 		end
+	end
+	return out
+end
+
+---Tasks of one agent: queue entries routed to it plus its dispatch log.
+---@param rec table
+---@param queued table<string, table[]>
+---@return table[]
+local function tasks_of(rec, queued)
+	local out = {}
+	for _, entry in ipairs(queued[rec.key] or {}) do
+		out[#out + 1] = { kind = "queued", entry = entry, ts = 0, index = entry.index }
 	end
 	for _, task in ipairs(rec.tasks or {}) do
 		out[#out + 1] = { kind = task.status, task = task, ts = task.ts }
@@ -99,48 +138,71 @@ local function tasks_of(rec)
 		if oa ~= ob then
 			return oa < ob
 		end
+		if a.kind == "queued" then
+			return (a.index or 0) < (b.index or 0)
+		end
 		return (a.ts or 0) > (b.ts or 0)
 	end)
 	return out
 end
 
 ---@param rec table
+---@param name_w integer
+---@param show_backend boolean
 ---@param now integer
----@return string
-local function agent_line(rec, now)
-	local fold = collapsed[rec.key] and "▸" or "▾"
+---@param n integer tasks below this agent
+---@return string line, table[] marks
+local function agent_line(rec, name_w, show_backend, now, n)
+	local fold = n == 0 and "·" or (collapsed[rec.key] and "▸" or "▾")
 	local glyph = rec.state == "working" and FRAMES[frame % #FRAMES + 1] or GLYPH[rec.state] or "?"
+	local glyph_start = #fold + 1
+	local name_start = glyph_start + #glyph + 1
+	local name = state.name(rec)
+	if n > 0 then
+		name = name .. (" (%d)"):format(n)
+	end
+	local left = ("%s %s %s"):format(fold, glyph, pad(fit(name, name_w), name_w))
 	local msg = rec.msg or (rec.gone and "exited" or rec.state)
 	if rec.kind then
-		msg = msg .. " (" .. rec.kind .. ")"
+		msg = msg .. " · " .. rec.kind
 	end
-	local name = state.name(rec)
-	local n = #tasks_of(rec)
-	local head = ("%s %s %s"):format(fold, glyph, name)
-	if n > 0 then
-		head = head .. (" (%d)"):format(n)
+	left = left .. "  " .. msg
+	local right = age(now - (rec.since or now))
+	if show_backend then
+		right = rec.backend .. "  " .. right
 	end
-	local tail = ("%s  %s"):format(msg, age(now - (rec.since or now)))
-	return fit(head .. "  " .. tail, inner_width())
+	local marks = {
+		{ glyph_start, glyph_start + #glyph, HL[rec.state] or "Comment" },
+	}
+	local accent = rec.target and icons.accent_hl(icons.key(rec.target))
+	if accent then
+		marks[#marks + 1] = { name_start, name_start + #name, accent }
+	end
+	return columns(left, right, inner_width()), marks
 end
 
 ---@param node table
----@return string
-local function task_line(node)
-	local glyph
-	local text
-	local when
+---@param now integer
+---@return string line, table[] marks
+local function task_line(node, now)
+	local glyph, text, right, hl
 	if node.kind == "queued" then
-		glyph = TASK_GLYPH.queued
-		text = node.entry.prompt
-		when = "queued"
+		glyph, text, right, hl = TASK_GLYPH.queued, node.entry.prompt, "queued", TASK_HL.queued
 	else
+		local task = node.task
 		glyph = node.kind == "running" and FRAMES[frame % #FRAMES + 1] or (TASK_GLYPH[node.kind] or "·")
-		text = node.task.text
-		when = node.kind
+		text, right, hl = task.text, node.kind, TASK_HL[node.kind] or "DiagnosticInfo"
+		if task.ts then
+			right = right .. "  " .. age(now - task.ts)
+		end
 	end
 	local first = vim.split(text or "", "\n")[1] or ""
-	return fit(("  %s %s  %s"):format(glyph, first, when), inner_width())
+	local line = columns(("  %s %s"):format(glyph, first), right, inner_width())
+	local marks = { { 2, 2 + #glyph, hl } }
+	if node.kind == "done" or node.kind == "error" then
+		marks[#marks + 1] = { 0, #line, "Comment" }
+	end
+	return line, marks
 end
 
 local ensure_timer
@@ -151,19 +213,48 @@ local function render()
 	end
 	local now = vim.uv.now()
 	local list = state.all()
-	local lines, map = {}, {}
+	local queued = queued_by_agent()
+	local width = inner_width()
+
+	-- name column: as wide as the longest name shown, but never wider than a third of the view
+	local name_w = 8
+	local backends_seen = {}
+	local seen = 0
+	local counts = {}
+	for _, rec in ipairs(list) do
+		counts[rec.key] = #tasks_of(rec, queued)
+		local name = state.name(rec)
+		if counts[rec.key] > 0 then
+			name = name .. (" (%d)"):format(counts[rec.key])
+		end
+		name_w = math.max(name_w, vim.fn.strdisplaywidth(name))
+		if not backends_seen[rec.backend] then
+			backends_seen[rec.backend] = true
+			seen = seen + 1
+		end
+	end
+	name_w = math.min(name_w, math.max(8, math.floor(width / 2) - 6))
+
+	local lines, map, marks = {}, {}, {}
 	local working = false
 	for _, rec in ipairs(list) do
 		working = working or rec.state == "working"
-		lines[#lines + 1] = agent_line(rec, now)
-		map[#map + 1] = { kind = "agent", rec = rec }
+		local children = tasks_of(rec, queued)
+		local line, m = agent_line(rec, name_w, seen > 1, now, counts[rec.key])
+		lines[#lines + 1], map[#map + 1], marks[#marks + 1] = line, { kind = "agent", rec = rec }, m
 		if not collapsed[rec.key] then
-			for _, node in ipairs(tasks_of(rec)) do
+			for _, node in ipairs(children) do
 				node.rec = rec
-				lines[#lines + 1] = task_line(node)
-				map[#map + 1] = node
+				local tline, tm = task_line(node, now)
+				lines[#lines + 1], map[#map + 1], marks[#marks + 1] = tline, node, tm
 				working = working or node.kind == "running"
 			end
+		end
+	end
+	-- forget fold state of agents that went away
+	for key in pairs(collapsed) do
+		if not state.get(key) then
+			collapsed[key] = nil
 		end
 	end
 	if #lines == 0 then
@@ -172,33 +263,13 @@ local function render()
 	vim.bo[buf].modifiable = true
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 	vim.api.nvim_buf_clear_namespace(buf, NS, 0, -1)
-	for i, node in ipairs(map) do
-		if node.kind == "agent" then
-			local rec = node.rec
-			local hl = HL[rec.state]
-			if hl then
-				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 2, { end_col = 3, hl_group = hl })
-			end
-			local accent = icons.accent_hl(icons.key(rec.target))
-			if accent then
-				pcall(
-					vim.api.nvim_buf_set_extmark,
-					buf,
-					NS,
-					i - 1,
-					4,
-					{ end_line = i - 1, end_col = 30, hl_group = accent }
-				)
-			end
-		else
-			local hl = TASK_HL[node.kind]
-			if hl then
-				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 2, { end_col = 3, hl_group = hl })
-			elseif node.kind == "running" then
-				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 2, { end_col = 3, hl_group = "DiagnosticInfo" })
-			else
-				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 0, { end_col = 3, hl_group = "Comment" })
-			end
+	for i, m in ipairs(marks) do
+		for _, mark in ipairs(m) do
+			pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, mark[1], {
+				end_col = math.min(mark[2], #lines[i]),
+				hl_group = mark[3],
+				priority = mark[3] == "Comment" and 1 or 10,
+			})
 		end
 	end
 	vim.bo[buf].modifiable = false
@@ -206,7 +277,8 @@ local function render()
 	if win and vim.api.nvim_win_is_valid(win) then
 		local cur = vim.api.nvim_win_get_cursor(win)
 		vim.api.nvim_win_set_cursor(win, { math.min(cur[1], math.max(1, #map)), cur[2] })
-		vim.wo[win].winbar = (" %s %d agent(s)  ⏎ jump · s send · a ack · q close"):format(ICON_AI, #list)
+		local help = width >= 56 and "  ⏎ jump · s send · S flush · a ack · q close" or ""
+		vim.wo[win].winbar = ("%s ask-agent · %d%s"):format(ICON_AI, #list, help)
 	end
 	if working then
 		ensure_timer()
@@ -274,6 +346,21 @@ local function show_text(title, text)
 	vim.keymap.set("n", "<Esc>", function()
 		pcall(vim.api.nvim_win_close, w, true)
 	end, { buffer = b, nowait = true })
+end
+
+---Dismiss a dead agent — but never while questions are still routed to it,
+---or they would silently disappear from this view.
+---@param rec table
+local function dismiss(rec)
+	local queued = queued_by_agent()[rec.key]
+	if queued and #queued > 0 then
+		vim.notify(
+			("[ask_agent] %d question(s) are still routed to %s"):format(#queued, state.name(rec)),
+			vim.log.levels.WARN
+		)
+		return
+	end
+	state.dismiss(rec.key)
 end
 
 ---@param rec table
@@ -369,7 +456,7 @@ local function attach(bufnr)
 			if node.kind == "queued" then
 				queue.remove(node.entry.id)
 			elseif node.kind == "agent" then
-				state.dismiss(node.rec.key)
+				dismiss(node.rec)
 			end
 		end),
 		opts_buf
@@ -401,8 +488,11 @@ end
 ---@param o { pos?: "left"|"right", width?: integer }|nil
 function M.open(callbacks, o)
 	api = callbacks or api
-	opts = vim.tbl_extend("force", { pos = "left", width = 40 }, o or {})
+	opts = vim.tbl_extend("force", { pos = "right", width = 40 }, o or {})
 	if win and vim.api.nvim_win_is_valid(win) then
+		if vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_get_current_tabpage() then
+			vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(win))
+		end
 		vim.api.nvim_set_current_win(win)
 		render()
 		return
@@ -423,8 +513,14 @@ function M.open(callbacks, o)
 	vim.wo[win].spell, vim.wo[win].wrap = false, false
 	vim.wo[win].cursorline = true
 	attach(buf)
+	local group = vim.api.nvim_create_augroup("AskAgentDashboard", { clear = true })
+	vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+		group = group,
+		callback = render,
+	})
 	vim.api.nvim_buf_attach(buf, false, {
 		on_detach = function()
+			pcall(vim.api.nvim_del_augroup_by_id, group)
 			buf, win = nil, nil
 			if timer then
 				timer:stop()
@@ -433,6 +529,7 @@ function M.open(callbacks, o)
 			end
 		end,
 	})
+	state.refresh()
 	render()
 end
 
