@@ -49,6 +49,21 @@ assert(bg("AiMapPane") ~= bg("AiMapBg"), "panes stand out from the canvas")
 assert(bg("AiMapAgent") ~= bg("AiMapPane"), "agent cells stand out from the pane")
 assert(bg("AiMapSel") ~= bg("AiMapAgent"), "the selected agent stands out")
 
+-- A state badge follows the letter, and a running turn animates it.
+items[1].status_glyph = "W"
+items[1].status_state = "working"
+map.select({ panes = panes, items = items })
+local badge = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+assert(table.concat(badge, "\n"):find("W", 1, true), "the agent state is drawn next to its letter")
+vim.api.nvim_buf_delete(0, { force = true })
+
+items[1].status_glyph = "x"
+items[1].status_frames = { "1", "2" }
+map.select({ panes = panes, items = items })
+local frame1 = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+assert(frame1:find("1", 1, true), "the running badge starts on frame 1")
+vim.api.nvim_buf_delete(0, { force = true })
+
 vim.api.nvim_buf_delete(buf, { force = true })
 
 -- Zoom only changes what rex draws: the map still needs the full split tree,

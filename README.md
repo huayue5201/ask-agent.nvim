@@ -129,14 +129,16 @@ vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentRename<cr>", { desc = "Ask agent
 In the **ask window**: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` is a newline.
 In the **map**: letter picks that pane, `<Tab>` switches to the list, `<Esc>` cancels.
 In the **list**: number (or `<M-a>` for items past 9) picks, `<Tab>` goes back to the map.
-The dot next to each entry is its live status: `●` idle, a spinner while busy (your
-question is delivered immediately but pi processes it after the current turn — you get a
-notice saying so), `⚠` blocked (a send would sit unread), `✓` done, `✗` error,
-`○` not running. Choosing a `○` entry only warns — nothing is sent.
+Each entry carries its live status: `●` idle, a spinner while busy (your question is
+delivered immediately but pi processes it after the current turn — you get a notice
+saying so), `⚠` blocked (a send would sit unread), `✓` done, `✗` error, `○` not
+running. In the map the status is a colored badge after the pane letter, so the
+agent glyph stays visible; a running turn animates that badge. Choosing a `○` entry
+only warns — nothing is sent.
 
 Busy rows animate when the picker implementation supports it: the plugin passes
 `tick = 90` in the `vim.ui.select` opts and uses `frame` in `format_item(item, frame)`,
-the contract `lib/menu.lua` honours (it re-renders every tick while waiting for a key).
+the contract `ui-menu.nvim` honours (it re-renders every tick while waiting for a key).
 telescope/fzf-lua/snacks/dropbar ignore `tick`, so there you see the first spinner frame
 as a static icon.
 
@@ -155,7 +157,7 @@ require("ask_agent").setup({
   show_stale = true,
 
   -- frames for the busy icon (default: a 10-frame braille spinner). Point it at the
-  -- spinner your picker already uses, e.g. require("lib.menu").frames, and both the
+  -- spinner your picker already uses, e.g. require("ui_menu").frames, and both the
   -- list and the map animate with the same glyphs.
   spinner = { "⠋", "⠙", "⠹", "⠸" },
 

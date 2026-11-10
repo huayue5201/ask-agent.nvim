@@ -90,6 +90,38 @@ local function define_hl()
 		"AiMapFloatSel",
 		{ bg = blend(blend(chip_bg, chip_fg, 0.12), green, 0.34), fg = green, bold = true }
 	)
+	-- Status badge colors: foreground only, layered on top of the cell background
+	local function state_fg(names, fallback)
+		for _, name in ipairs(names) do
+			local ok, got = pcall(api.nvim_get_hl, 0, { name = name, link = false })
+			if ok and type(got) == "table" and got.fg then
+				return got.fg
+			end
+		end
+		return fallback
+	end
+	api.nvim_set_hl(0, "AiMapWorking", { fg = state_fg({ "DiagnosticInfo", "Function" }, chip_fg) })
+	api.nvim_set_hl(0, "AiMapBlocked", { fg = state_fg({ "DiagnosticWarn", "WarningMsg" }, green) })
+	api.nvim_set_hl(0, "AiMapDone", { fg = state_fg({ "DiagnosticOk", "Added" }, green) })
+	api.nvim_set_hl(0, "AiMapError", { fg = state_fg({ "DiagnosticError", "ErrorMsg" }, green) })
+	api.nvim_set_hl(0, "AiMapGone", { fg = dim })
+	api.nvim_set_hl(0, "AiMapIdle", { fg = dim })
+end
+
+--- Badge highlight for a state name (see ask_agent.state).
+local function state_group(state)
+	if state == "working" then
+		return "AiMapWorking"
+	elseif state == "blocked" then
+		return "AiMapBlocked"
+	elseif state == "done" then
+		return "AiMapDone"
+	elseif state == "error" then
+		return "AiMapError"
+	elseif state == "gone" then
+		return "AiMapGone"
+	end
+	return "AiMapIdle"
 end
 
 -- Icons use the agent's own brand color: set fg only, the background still comes from the cell group
@@ -357,32 +389,47 @@ local function paint(panes, by_pane, W, H, sel, frame)
 			else
 				group = float and "AiMapFloat" or "AiMapPane"
 			end
-			-- Treat icon + space + letter as one unit when centering; if a floating pane cuts the cell too narrow, keep only the letter
+			-- Cell content: agent glyph + space + letter + space + status badge.
+			-- The badge is a spinner for a running turn and a state glyph otherwise.
 			local icon = t.item and t.item.icon or nil
-			-- Animated icons: `icon_frames` is a list of equal-width glyphs (e.g. a braille spinner), picked by frame
-			local anim = t.item and t.item.icon_frames
-			if anim and #anim > 0 then
-				icon = anim[((frame or 0) % #anim) + 1]
-			end
 			if icon == "" then
 				icon = nil
 			end
-			local iw = icon and vim.fn.strdisplaywidth(icon) or 0
-			local lw = vim.fn.strdisplaywidth(letter)
-			local y, x, stop
-			if icon then
-				y, x, stop = place_label(t, owner, iw + 1 + lw)
+			local letter_w = vim.fn.strdisplaywidth(letter)
+			local status = t.item and t.item.status_glyph or nil
+			local frames = t.item and t.item.status_frames
+			if frames and #frames > 0 then
+				status = frames[((frame or 0) % #frames) + 1]
 			end
-			if not y then
-				icon, iw = nil, 0
-				y, x, stop = place_label(t, owner, lw)
+			if status == "" then
+				status = nil
+			end
+			local icon_w = icon and vim.fn.strdisplaywidth(icon) or 0
+			local status_w = status and vim.fn.strdisplaywidth(status) or 0
+			local need = (icon and (icon_w + 1) or 0) + letter_w
+			if status then
+				need = need + 1 + status_w
+			end
+			local y, x, stop = place_label(t, owner, need)
+			if not y and status then
+				-- Narrow pane: the state badge is the first thing to drop
+				status, status_w, need = nil, 0, (icon and (icon_w + 1) or 0) + letter_w
+				y, x, stop = place_label(t, owner, need)
+			end
+			if not y and icon then
+				icon, icon_w = nil, 0
+				y, x, stop = place_label(t, owner, letter_w)
 			end
 			if y then
+				local cx = x
 				if icon then
-					text(g, y, x, stop, icon, hl(group, icon_group(t.item.icon_hl)))
-					text(g, y, x + iw + 1, stop, letter, hl(group, "Bold"))
-				else
-					text(g, y, x, stop, letter, hl(group, "Bold"))
+					text(g, y, cx, stop, icon, hl(group, icon_group(t.item.icon_hl)))
+					cx = cx + icon_w + 1
+				end
+				text(g, y, cx, stop, letter, hl(group, "Bold"))
+				cx = cx + letter_w
+				if status then
+					text(g, y, cx + 1, stop, status, hl(group, state_group(t.item.status_state)))
 				end
 			end
 		end

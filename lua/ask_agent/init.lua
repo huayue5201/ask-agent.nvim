@@ -468,10 +468,12 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 				located = located + 1
 			end
 			local st = candidate_status(mod, c)
-			local busy = st.running and st.busy == true
+			local busy = st.running and (st.busy == true or st.state == "working")
 			if busy then
 				animate = true
 			end
+			local mark = status_mark(st)
+			local state = (not st.running) and "gone" or (st.state or "idle")
 			table.insert(items, {
 				index = i,
 				pane_id = pane_id,
@@ -479,9 +481,12 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 				label = t.label,
 				name = vim.fn.fnamemodify(t.cwd or "?", ":t"),
 				icon = icon_prefix(mod, t):gsub("%s+$", ""),
-				-- busy cells get a rotating icon instead of the agent glyph (map.lua repaints per frame)
-				icon_frames = busy and spinner or nil,
 				icon_hl = icon_color(mod, t),
+				-- The agent glyph stays put; a badge after the letter carries the state,
+				-- and a running turn animates that badge (map.lua repaints per frame).
+				status_glyph = mark,
+				status_state = state,
+				status_frames = busy and spinner or nil,
 				tier = c.tier,
 				status = st,
 				busy = busy,

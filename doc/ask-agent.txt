@@ -185,6 +185,9 @@ menus are centered rather than attached to the cursor.
 Every entry starts with the agent's state, re-probed when the picker opens:
 
   ●  idle — the agent is free, the question is handled right away
+
+The map draws the agent glyph, the pane letter, then the same status as a colored
+badge; a working agent's badge is the rotating spinner.
   ◐  working (rotating spinner when the picker animates) — a turn is running; the
      question is still delivered now
      (pi queues it as a follow-up and runs it after the current one), and a
@@ -198,12 +201,12 @@ Every entry starts with the agent's state, re-probed when the picker opens:
 
 Busy rows animate only if the picker implementation supports it. ask-agent passes
 `tick` (default 90 ms, see the `tick` setup option) in the `vim.ui.select` opts and
-reads `format_item(item, frame)`; that is the contract `lib/menu.lua` honours
+reads `format_item(item, frame)`; that is the contract `ui-menu.nvim` honours
 (re-render every tick while waiting for a key).
 Other implementations (telescope, fzf-lua, snacks, dropbar) ignore the key and show
 the first spinner frame as a static icon. The frames themselves come from the
 `spinner` setup option (default: a 10-frame braille spinner); point it at whatever
-spinner your picker uses -- e.g. `require("lib.menu").frames` -- so busy rows look
+spinner your picker uses -- e.g. `require("ui_menu").frames` -- so busy rows look
 the same in the list and in the map. The map is callback-driven instead of
 blocking, so it animates with a uv timer that repaints busy cells and is stopped
 when the map closes (no option to set).
