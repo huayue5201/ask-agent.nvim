@@ -77,6 +77,27 @@ vim.api.nvim_feedkeys("\\r", "x", false)
 vim.wait(50)
 assert(queue.count() == 1, "jumping does not consume the queued question")
 
+-- the rex adapter must use the CLI shapes we verified (`focus` takes a positional
+-- block, `capture` takes -b); a -b on focus exits 2 and silently does nothing
+local systems = {}
+local real_system = vim.system
+vim.system = function(cmd, _, cb)
+	systems[#systems + 1] = cmd
+	if cb then
+		cb({ code = 0, stdout = "screen" })
+	end
+	return { pid = 1 }
+end
+store.focus({ rex = { session = "s", block = "b" } })
+store.capture({ rex = { session = "s", block = "b" } }, function() end)
+vim.system = real_system
+vim.wait(20)
+assert(
+	vim.deep_equal(systems[1], { "rex", "block", "focus", "b", "-s", "s" }),
+	"focus argv: " .. vim.inspect(systems[1])
+)
+assert(systems[2][4] == "-b" and systems[2][5] == "b", "capture argv: " .. vim.inspect(systems[2]))
+
 -- adapters: rex and tmux both claim their targets, custom ones can win
 assert(store.find({ rex = { session = "s", block = "b" } }).id == "rex", "rex adapter")
 assert(store.find({ pane = "%1" }).id == "tmux", "tmux adapter")

@@ -308,19 +308,30 @@ local function current()
 	return rows[vim.api.nvim_win_get_cursor(0)[1]]
 end
 
+---@param rec table
+local function focus_agent(rec)
+	local ok, err = jump.focus(rec.target)
+	if not ok then
+		vim.notify("[ask_agent] " .. err, vim.log.levels.INFO)
+	end
+end
+
 ---@param node table
 local function open_node(node)
 	if node.kind == "agent" then
-		local ok, err = jump.focus(node.rec.target)
-		if not ok then
-			vim.notify("[ask_agent] " .. err, vim.log.levels.INFO)
-		end
-	elseif node.kind == "queued" then
-		api.goto_anchor(node.entry.anchor)
-	elseif node.task and node.task.anchor then
-		api.goto_anchor(node.task.anchor)
-	else
-		vim.notify("[ask_agent] This task was sent without an anchor", vim.log.levels.INFO)
+		focus_agent(node.rec)
+		return
+	end
+	local anchor = node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor)
+	if not anchor then
+		-- a task sent from this very sidebar has no anchor: the agent's window is the best we can do
+		vim.notify("[ask_agent] No anchor for this task — focusing the agent instead", vim.log.levels.INFO)
+		focus_agent(node.rec)
+		return
+	end
+	local ok, err = api.goto_anchor(anchor)
+	if not ok then
+		vim.notify("[ask_agent] " .. err, vim.log.levels.WARN)
 	end
 end
 

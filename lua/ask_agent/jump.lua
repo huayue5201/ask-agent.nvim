@@ -101,11 +101,21 @@ M.register({
 		return type(target.rex) == "table" and target.rex.block ~= nil
 	end,
 	focus = function(target)
-		local cmd = { "rex", "block", "focus", "-b", target.rex.block }
+		-- focus takes the block as a positional argument (capture takes -b)
+		local cmd = { "rex", "block", "focus", target.rex.block }
 		if target.rex.session then
 			vim.list_extend(cmd, { "-s", target.rex.session })
 		end
-		vim.system(cmd)
+		vim.system(cmd, nil, function(res)
+			if res.code ~= 0 then
+				vim.schedule(function()
+					vim.notify(
+						"[ask_agent] rex block focus failed: " .. (res.stderr or ""):gsub("%s+$", ""),
+						vim.log.levels.WARN
+					)
+				end)
+			end
+		end)
 	end,
 	capture = function(target, cb)
 		local cmd = { "rex", "block", "capture", "-b", target.rex.block, "--trim" }
