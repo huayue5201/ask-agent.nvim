@@ -133,7 +133,7 @@ function M.watch(session, cb)
 	if watches[session] or not M.available() then
 		return false
 	end
-	local w = { buf = "", failures = 0 }
+	local w = { buf = "", failures = 0, err = "" }
 	watches[session] = w
 	local function feed(chunk)
 		w.buf = w.buf .. chunk
@@ -161,8 +161,16 @@ function M.watch(session, cb)
 		local started = vim.uv.now()
 		w.proc = vim.system({ "rex", "events", "-s", session, "--json" }, {
 			text = true,
-			stdout = function(_, chunk)
-				feed(chunk)
+			stdout = function(err, chunk)
+				-- vim.system calls this with err set and chunk=nil when the pipe breaks
+				if not err and chunk then
+					feed(chunk)
+				end
+			end,
+			stderr = function(_, chunk)
+				if chunk then
+					w.err = (w.err .. chunk):sub(-400)
+				end
 			end,
 		}, function()
 			if w.stopped then
@@ -172,6 +180,12 @@ function M.watch(session, cb)
 			w.failures = vim.uv.now() - started < 3000 and w.failures + 1 or 0
 			if w.failures >= 3 then
 				watches[session] = nil
+				local why = vim.trim(w.err)
+				if why ~= "" then
+					vim.schedule(function()
+						vim.notify(("[ask_agent] rex events for %s: %s"):format(session, why), vim.log.levels.DEBUG)
+					end)
+				end
 				return
 			end
 			w.timer = vim.defer_fn(start, 2000)
