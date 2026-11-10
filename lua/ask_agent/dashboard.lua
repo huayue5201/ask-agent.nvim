@@ -277,7 +277,7 @@ local function render()
 	if win and vim.api.nvim_win_is_valid(win) then
 		local cur = vim.api.nvim_win_get_cursor(win)
 		vim.api.nvim_win_set_cursor(win, { math.min(cur[1], math.max(1, #map)), cur[2] })
-		local help = width >= 56 and "  ⏎ jump · s send · S flush · a ack · q close" or ""
+		local help = width >= 56 and "  ⏎ jump · s send · S flush · ? keys" or ""
 		vim.wo[win].winbar = ("%s ask-agent · %d%s"):format(ICON_AI, #list, help)
 	end
 	if working then
@@ -361,6 +361,66 @@ local function dismiss(rec)
 		return
 	end
 	state.dismiss(rec.key)
+end
+
+-- Keys, in the order they appear in the help float.
+local HELP = {
+	{ "?", "Show these keys" },
+	{ "<CR>", "Agent: bring its window to the front · Task: jump to its code anchor" },
+	{ "s", "Send a question to that agent" },
+	{ "S", "Send every queued question routed to it" },
+	{ "C", "Show its recent output (when the jump adapter can read it)" },
+	{ "a", "Acknowledge a done/blocked agent" },
+	{ "d", "Delete the queued task · dismiss a dead agent" },
+	{ "<Tab>", "Fold or unfold the agent's tasks" },
+	{ "r", "Poll every agent now" },
+	{ "q", "Close the sidebar" },
+}
+
+---Help float, bottom-right, `q` / `<Esc>` / `?` closes it.
+local function show_help()
+	local lines = {}
+	for _, item in ipairs(HELP) do
+		lines[#lines + 1] = ("%-10s %s"):format(item[1], item[2])
+	end
+	local content = 0
+	for _, line in ipairs(lines) do
+		content = math.max(content, vim.fn.strdisplaywidth(line))
+	end
+	local width = math.min(content + 4, vim.o.columns - 4)
+	local height = math.min(#lines, vim.o.lines - 3)
+	local b = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+	vim.bo[b].modifiable, vim.bo[b].bufhidden = false, "wipe"
+	vim.api.nvim_set_hl(0, "AskAgentHelpKey", { link = "Identifier", default = true })
+	local ok, help = pcall(vim.api.nvim_open_win, b, true, {
+		relative = "editor",
+		width = width,
+		height = height,
+		row = math.max(0, vim.o.lines - height - 2),
+		col = math.max(0, vim.o.columns - width - 2),
+		style = "minimal",
+		border = "rounded",
+		title = " ask-agent keys ",
+		title_pos = "center",
+		zindex = 200,
+	})
+	if not ok then
+		return
+	end
+	local ns = vim.api.nvim_create_namespace("ask_agent.dashboard.help")
+	for i, item in ipairs(HELP) do
+		vim.api.nvim_buf_set_extmark(b, ns, i - 1, 0, {
+			end_col = #item[1],
+			hl_group = "AskAgentHelpKey",
+		})
+	end
+	local function hide()
+		pcall(vim.api.nvim_win_close, help, true)
+	end
+	for _, key in ipairs({ "q", "<Esc>", "?" }) do
+		vim.keymap.set("n", key, hide, { buffer = b, silent = true, nowait = true, desc = "Close help" })
+	end
 end
 
 ---@param rec table
@@ -470,6 +530,7 @@ local function attach(bufnr)
 		end),
 		opts_buf
 	)
+	vim.keymap.set("n", "?", show_help, opts_buf)
 	vim.keymap.set("n", "r", function()
 		state.refresh()
 		render()

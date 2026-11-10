@@ -77,7 +77,7 @@ require("ask_agent").setup({
                         task anchor), `s` send, `S` flush its queued questions,
                         `C` capture its output, `a` acknowledge, `d` delete a
                         queued task or dismiss a dead agent, `<Tab>` fold,
-                        `r` poll now, `q` close.
+                        `?` key help, `r` poll now, `q` close.
 
                                                   *:AskAgentBatch*
 :AskAgentBatch          Queue a question at the cursor instead of sending it.
@@ -380,8 +380,8 @@ idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `�
 `<CR>` on an agent brings its window to the front; on a task it jumps to the code
 anchor the task was written at. `s` sends, `S` flushes every queued question
 routed to that agent, `C` shows its recent output, `a` acknowledges, `d` deletes a
-queued task or dismisses a dead agent, `<Tab>` folds its tasks, `r` polls now,
-`q` closes. The view is event-driven (state + queue notifications) and keeps the
+queued task or dismisses a dead agent, `<Tab>` folds its tasks, `?` opens the key
+help float, `r` polls now, `q` closes. The view is event-driven (state + queue notifications) and keeps the
 cursor where it was; the spinner is the only timer and only runs while a turn is
 in progress.
 

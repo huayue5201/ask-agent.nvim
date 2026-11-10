@@ -523,6 +523,7 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `C` | show its recent output (when the adapter can read it) | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `<Tab>` | fold the agent's tasks | |
+| `?` | key help (a float; `q` closes it) | |
 | `r` / `q` | poll now / close | |
 
 Row layout: fold marker, state glyph, name (padded to the longest name) with the task

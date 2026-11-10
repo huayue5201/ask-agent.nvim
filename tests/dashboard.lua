@@ -125,6 +125,24 @@ vim.api.nvim_feedkeys("d", "x", false)
 vim.wait(30)
 assert(state.get("fake:a") == nil, "agent dismissed")
 
+-- ? opens a help float; q closes the float first, then the sidebar
+vim.api.nvim_set_current_win(first)
+vim.api.nvim_feedkeys("?", "x", false)
+vim.wait(30)
+local floats = vim.tbl_filter(function(w)
+	return vim.api.nvim_win_get_config(w).relative ~= ""
+end, vim.api.nvim_tabpage_list_wins(0))
+assert(#floats == 1, "help float is open")
+local help_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(floats[1]), 0, -1, false)
+assert(help_lines[1]:match("Show these keys"), "help lists the keys: " .. help_lines[1])
+assert(#help_lines == 10, "every key has a row")
+vim.api.nvim_feedkeys("q", "x", false)
+vim.wait(30)
+assert(#vim.tbl_filter(function(w)
+	return vim.api.nvim_win_get_config(w).relative ~= ""
+end, vim.api.nvim_tabpage_list_wins(0)) == 0, "help closes with q")
+assert(vim.api.nvim_win_is_valid(first), "sidebar still open behind it")
+
 -- q closes the sidebar, and later state events do not touch a dead buffer
 vim.api.nvim_feedkeys("q", "x", false)
 vim.wait(30)
