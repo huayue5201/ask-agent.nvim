@@ -57,10 +57,13 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 ## Requirements
 
 - Neovim 0.10+ (uses `vim.json`, `vim.uv`).
-- No picker dependency: list mode goes through `vim.ui.select`, so whichever plugin
-  overrides it (dropbar, telescope, fzf-lua, snacks, mini.pick …) is what you get.
-  Float menus get centered and each item's glyph is painted with its instance color;
-  `<Tab>` (back to the map) is only added when the implementation does not use it.
+- List mode prefers **ui-menu.nvim** when it is installed: that is what makes the
+  list screen-centered, animates the spinner, and gives a real `<Tab>` round-trip
+  back to the map. It is recommended but **not required** — without it (or with
+  `list_impl = "vim_ui"`) the list goes through `vim.ui.select`, so whichever
+  plugin overrides it (dropbar, telescope, fzf-lua, snacks, mini.pick …) is what
+  you get. Float menus are centered and glyphs are colored on a best-effort basis;
+  `<Tab>` is only added when the implementation does not use it.
 - Optional: a *layout adapter* for the split-layout map view — `rex` ships built in, and
   `layouts/generic.lua` has a tmux factory; anything else can be plugged in (see
   [Layout adapters](#layout-adapters)).
@@ -152,6 +155,11 @@ require("ask_agent").setup({
 
   -- "map" (split-layout map, default) or "list"
   picker = "map",
+
+  -- list implementation: "auto" (ui-menu if installed, else vim.ui.select),
+  -- "ui_menu" (require it), or "vim_ui". ui-menu gives centering, spinner
+  -- animation and <Tab> back to the map; it is recommended, not required.
+  list_impl = "auto",
 
   -- also list exited instances in the list picker as "not running" (default true)
   show_stale = true,

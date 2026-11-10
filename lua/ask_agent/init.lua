@@ -45,6 +45,10 @@ local picker = "map"
 --- chosen; this exists so the user can see that the agent they expect is gone)
 local show_stale = true
 
+--- Which implementation the list picker uses: "auto" (ui-menu when installed, else vim.ui.select),
+--- "ui_menu", or "vim_ui". The map always uses its own renderer.
+local list_impl = "auto"
+
 --- Frames for the busy spinner. Only the picker implementation decides whether it animates: menu.lua
 --- honours `opts.tick` and re-renders every tick, passing the frame to `format_item(item, frame)`. Everywhere
 --- else (telescope/fzf-lua/snacks/dropbar) the frame is nil and the first frame is shown static.
@@ -296,6 +300,22 @@ end
 
 --- The old picker: a plain list that also includes candidates across tabs/windows (the map only covers the current window)
 ---@param back fun()|nil go back to the map (nil when the map is unavailable)
+--- Pick the list implementation. ui-menu understands the centered layout and the <Tab>
+--- round-trip, so it is preferred when available; everything else still works through
+--- vim.ui.select.
+local function list_ui(items, opts, on_choice)
+	if list_impl ~= "vim_ui" then
+		local ok, ui = pcall(require, "ui_menu")
+		if ok and type(ui) == "table" and type(ui.select) == "function" then
+			return ui.select(items, opts, on_choice)
+		end
+		if list_impl == "ui_menu" then
+			vim.notify("[ask_agent] ui-menu is not installed; falling back to vim.ui.select", vim.log.levels.WARN)
+		end
+	end
+	return vim.ui.select(items, opts, on_choice)
+end
+
 local function list_select(mod, cands, note_avoid, cb, back)
 	local before = float_wins()
 	-- Only record the choice here and hand it to cb *after* the post-processing below: on_choice fires before
@@ -337,7 +357,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			break
 		end
 	end
-	vim.ui.select(cands, {
+	list_ui(cands, {
 		prompt = ("Send to which %s%s? (:AskAgentTarget remembers the choice; <Tab> in the map also gets you here)"):format(
 			icon_prefix(mod),
 			mod.label or mod.id
@@ -929,6 +949,24 @@ function M.picker(value)
 	return picker
 end
 
+--- List picker implementation, read/write: "auto" (ui-menu when installed, else vim.ui.select),
+--- "ui_menu", or "vim_ui". The map always uses its own renderer.
+---@param value string|nil read-only when omitted
+---@return string
+function M.list_impl(value)
+	if value ~= nil then
+		if value ~= "auto" and value ~= "ui_menu" and value ~= "vim_ui" then
+			vim.notify(
+				("[ask_agent] list_impl must be auto, ui_menu, or vim_ui (currently %s)"):format(list_impl),
+				vim.log.levels.WARN
+			)
+		else
+			list_impl = value
+		end
+	end
+	return list_impl
+end
+
 --- Ready-made backend factory (tmux) for declaring a new agent in a few lines inside setup
 M.generic = generic
 
@@ -968,6 +1006,9 @@ function M.setup(opts)
 	matching = opts.matching or "exact"
 	picker = opts.picker or "map"
 	show_stale = opts.show_stale ~= false
+	if opts.list_impl ~= nil then
+		M.list_impl(opts.list_impl)
+	end
 	layout_id = opts.layout or nil
 	if type(opts.tick) == "number" and opts.tick > 0 then
 		tick = opts.tick
