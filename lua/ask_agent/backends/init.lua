@@ -15,11 +15,15 @@
 --   icon       string                        glyph for pickers/notifications
 --   available  fun(): ok, reason?            default = #targets() > 0
 --   status     fun(): ok, reason?            alias for available, if provided
---   probe      fun(target): { running: boolean, busy?: boolean, detail?: string }
---                                            live check for the picker (default: a target is
---                                            assumed to be running unless it is stale).
---                                            `busy` = the agent is mid-turn, so the question
---                                            will be queued (shown as a spinner in the picker).
+--   probe      fun(target): { running: boolean, state?: string, kind?: string,
+--                              progress?: integer, msg?: string, busy?: boolean, detail?: string }
+--                                            live check for pickers and the state layer (default: a
+--                                            target is assumed to be running unless stale).
+--                                            `state` is one of idle/working/blocked/done/error;
+--                                            prefer it when the agent can report it, `busy` is the
+--                                            legacy shorthand for working, and no `state` at all
+--                                            means "unknown" (the picker still sends).
+--                                            `kind` (permission/question/auth) refines blocked.
 --   stale_targets fun(): table[]             recently exited instances, shown greyed out in
 --                                            the picker so the user sees what is *not* running
 --
@@ -151,25 +155,38 @@ function M.candidates(mod, cwd, opts)
 	return out
 end
 
----Is this target usable right now? Backends may implement probe(); stale candidates are never
----running, and a backend without probe() is trusted (its targets() already filtered).
+local STATES = { idle = true, working = true, blocked = true, done = true, error = true }
+
+---Is this target usable right now, and what is it doing? Backends may implement probe();
+---stale candidates are never running, and a backend without probe() is trusted to be
+---running but its state stays unknown (its targets() already filtered).
 ---@param mod table
 ---@param target table
 ---@param stale boolean|nil candidate came from stale_targets()
----@return { running: boolean, detail?: string }
+---@return { running: boolean, state: string, kind?: string, progress?: integer, msg?: string, busy?: boolean, detail?: string }
 function M.probe(mod, target, stale)
 	if stale then
-		return { running = false }
+		return { running = false, state = "gone" }
 	end
 	if type(mod.probe) == "function" then
 		local ok, res = pcall(mod.probe, target)
 		if ok and type(res) == "table" then
-			return { running = res.running ~= false, busy = res.busy == true, detail = res.detail }
+			local running = res.running ~= false
+			local state = running and (STATES[res.state] and res.state or (res.busy and "working") or "idle") or "gone"
+			return {
+				running = running,
+				state = state,
+				kind = res.kind,
+				progress = res.progress,
+				msg = res.msg,
+				busy = state == "working",
+				detail = res.detail or res.msg,
+			}
 		elseif ok and res == false then
-			return { running = false }
+			return { running = false, state = "gone" }
 		end
 	end
-	return { running = true }
+	return { running = true, state = "unknown" }
 end
 
 ---Pick a target. Strict by default: only an identical cwd (after realpath

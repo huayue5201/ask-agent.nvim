@@ -15,8 +15,9 @@
 -- Neither approach requires touching this file.
 --
 -- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register/
---             layout/register_layout/batch_ask/batch_send/batch_list/batch_delete/batch_undo
---             /batch_clear/batch_count.
+--             layout/register_layout/batch_ask/batch_send/batch_route/batch_list/batch_delete
+--             /batch_undo/batch_clear/batch_count/agents/on/statusline/wait/dashboard.
+-- UI: :AskAgentDashboard (all agents, most urgent first), ask_agent.statusline().
 
 local backends = require("ask_agent.backends")
 local generic = require("ask_agent.backends.generic")
@@ -25,6 +26,7 @@ local message = require("ask_agent.message")
 local ui = require("ask_agent.ui")
 local aliases = require("ask_agent.aliases")
 local queue = require("ask_agent.queue")
+local state = require("ask_agent.state")
 
 local NS_LIST = vim.api.nvim_create_namespace("ask_agent.list")
 
@@ -73,23 +75,14 @@ local function icon_prefix(mod, t)
 	return icon .. " "
 end
 
---- Instance color (matching color in list and map): preferred over the brand color — otherwise two instances of the same brand are indistinguishable
----@param t table|nil
----@return string|nil
-local function inst_key(t)
-	if type(t) ~= "table" or t.id == nil then
-		return nil
-	end
-	return ("%s:%s"):format(tostring(t.id), tostring(t.ts or ""))
-end
-
---- Main icon color: instance color first (stable within a single run), then the brand color
+--- Main icon color: instance color first (stable within a single run, so the same agent is the
+---same color in list, map and queue marker), then the brand color
 ---@param mod table|nil
 ---@param t table|nil
 ---@return string|nil
 local function icon_color(mod, t)
 	local icons = require("ask_agent.icons")
-	return icons.accent(inst_key(t)) or icons.color(t and t.id) or icons.color(mod and mod.id)
+	return icons.accent(icons.key(t)) or icons.color(t and t.id) or icons.color(mod and mod.id)
 end
 
 --- Name shown in lists: alias > instance label > id
@@ -112,19 +105,29 @@ local function candidate_status(mod, c)
 	return c._status
 end
 
---- Picker prefix: filled dot = idle, half dot = busy (the question gets queued as a
----follow-up), hollow dot = gone. The detail text ("busy", "process exited", ...) rides along.
----@param st { running: boolean, busy?: boolean, stale?: boolean, detail?: string }
+--- Picker prefix, straight from the state layer's vocabulary: filled dot = idle, half dot = a
+---turn in progress (the question queues behind it), ⚠ = the agent is waiting for you (a send
+---would sit in its prompt unread), ✓ = finished, hollow = gone / no state to report.
+---@param st { running: boolean, state?: string, msg?: string, detail?: string }
 ---@return string mark, string|nil detail
 local function status_mark(st)
-	if st.stale then
-		return "○", st.detail or "exited"
-	end
 	if not st.running then
 		return "○", st.detail or "not running"
 	end
-	if st.busy then
-		return "◐", st.detail or "busy"
+	if st.state == "blocked" then
+		return "⚠", st.msg or st.detail or "needs you"
+	end
+	if st.state == "done" then
+		return "✓", st.msg or st.detail or "finished"
+	end
+	if st.state == "error" then
+		return "✗", st.msg or st.detail or "error"
+	end
+	if st.state == "working" then
+		return "◐", st.msg or st.detail or "busy"
+	end
+	if st.state == "unknown" then
+		return "◌", st.detail
 	end
 	return "●", st.detail
 end
@@ -275,7 +278,7 @@ local function paint_list(win, mod, cands)
 	vim.api.nvim_buf_clear_namespace(buf, NS_LIST, 0, -1)
 	for i, c in ipairs(cands) do
 		local t = c.target
-		local hl = icons.accent_hl(inst_key(t))
+		local hl = icons.accent_hl(icons.key(t))
 		local glyph = icon_prefix(mod, t):gsub("%s+$", "")
 		local line = lines[i] or ""
 		local s, e = line:find(glyph, 1, true)
@@ -567,10 +570,11 @@ end
 
 --- Send text directly to the current backend (for reuse by other commands/plugins; skips the floating window)
 ---@param text string
----@param opts { backend?: string, target?: string }|nil
+---@param opts { backend?: string, target?: string, correlation?: table }|nil
 ---@return boolean ok, string? err
 function M.send(text, opts)
-	local mod, target, err = resolve(opts and opts.backend, opts and opts.target)
+	opts = opts or {}
+	local mod, target, err = resolve(opts.backend, opts.target)
 	if not mod then
 		return false, err
 	end
@@ -578,7 +582,70 @@ function M.send(text, opts)
 	if not ok then
 		return false, send_err
 	end
+	state.dispatch(mod.id, target.id, text, opts.correlation)
 	return true, nil
+end
+
+---Every observed agent instance, most attention-worthy first (blocked > done > error > working > idle).
+---Fields: key, backend, id, state, kind, progress, msg, since, unread, gone, target,
+---dispatch = { text, ts, correlation }.
+---@param opts { state?: string, backend?: string, correlation?: table }|nil
+---@return table[]
+function M.agents(opts)
+	return state.all(opts)
+end
+
+---Subscribe to state changes. Events: "state" (fn(rec, prev)), "update" (fn(rec), any change),
+---"done", "blocked", "error" (same arguments as "state"). Returns an unsubscribe function.
+---@param event string
+---@param fn function
+---@return fun()
+function M.on(event, fn)
+	return state.on(event, fn)
+end
+
+---One statusline chunk (`⚠1 ✓2 ◐3`), empty when there is nothing to report.
+---@return string
+function M.statusline()
+	return state.statusline()
+end
+
+---Open the dashboard: every agent, most urgent first; keys act on the cursor line.
+function M.dashboard()
+	require("ask_agent.dashboard").open({ send = M.send, batch_send = M.batch_send })
+end
+
+---Call `cb(rec)` once the instance reaches `want` (`cb(nil)` on timeout).
+---@param key string agent key (rec.key)
+---@param want string "done" | "blocked" | ...
+---@param timeout integer|nil ms
+---@param cb fun(rec: table|nil)
+function M.wait(key, want, timeout, cb)
+	local off, fired
+	local function finish(rec)
+		if fired then
+			return
+		end
+		fired = true
+		if off then
+			off()
+		end
+		cb(rec)
+	end
+	local rec = state.get(key)
+	if rec and rec.state == want then
+		return finish(rec)
+	end
+	off = state.on("state", function(r)
+		if r.key == key and r.state == want then
+			finish(r)
+		end
+	end)
+	if timeout then
+		vim.defer_fn(function()
+			finish(nil)
+		end, timeout)
+	end
 end
 
 --- Open the floating window and ask. opts.visual=true includes the current selection
@@ -614,11 +681,13 @@ function M.ask(opts)
 				opts.note and (" · " .. opts.note) or ""
 			),
 			on_submit = function(prompt)
-				local ok, send_err = mod.send(target, message.render(anchor, prompt))
+				local text = message.render(anchor, prompt)
+				local ok, send_err = mod.send(target, text)
 				if not ok then
 					vim.notify(("[%s] %s"):format(mod.label, send_err), vim.log.levels.WARN)
 					return
 				end
+				state.dispatch(mod.id, target.id, text)
 				local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
 				vim.notify(
 					("[%s] Sent → #%d %s (%s)"):format(mod.label, target.index or 0, name_of(target), where),
@@ -660,16 +729,171 @@ function M.batch_ask(opts)
 	})
 end
 
---- Send every queued question, one message each, to a single target chosen once.
---- Successfully sent entries are removed (their markers disappear); failed ones stay queued.
----@param opts { backend?: string }|nil
+---Entries named by an index spec ("3", "3,5-7"), or every entry when spec is nil.
+---@param spec string|nil
+---@return table[]|nil entries, string|nil err
+local function select_entries(spec)
+	if spec == nil or vim.trim(spec) == "" then
+		return queue.list()
+	end
+	local want = {}
+	for token in tostring(spec):gmatch("[^,%s]+") do
+		local from, to = token:match("^(%d+)%-(%d+)$")
+		if from then
+			for i = tonumber(from), tonumber(to) do
+				want[i] = true
+			end
+		elseif token:match("^%d+$") then
+			want[tonumber(token)] = true
+		else
+			return nil, ("Invalid selection %q (use e.g. 3 or 3,5-7)"):format(token)
+		end
+	end
+	local out = {}
+	for _, entry in ipairs(queue.list()) do
+		if want[entry.index] then
+			out[#out + 1] = entry
+		end
+	end
+	return out
+end
+
+---Resolve a queued entry's stored route (backend id + instance id) to a live target.
+---@param route { backend: string, id: string, name?: string }
+---@return table|nil mod, table|nil target, string|nil err
+local function resolve_route(route)
+	local mod = backends.get(route.backend)
+	if not mod then
+		return nil, nil, ("no backend with id %s"):format(route.backend)
+	end
+	for _, t in ipairs(mod.targets()) do
+		if tostring(t.id) == tostring(route.id) then
+			return mod, t
+		end
+	end
+	return nil, nil, ("%s is not running"):format(route.name or route.id)
+end
+
+---Send one group of entries to one target, dropping the ones that went out.
+---@param mod table backend
+---@param target table
+---@param entries table[]
+local function deliver(mod, target, entries)
+	local sent, failed = 0, {}
+	for _, entry in ipairs(entries) do
+		local index = entry.index
+		local text = message.render(queue.sync(entry), entry.prompt)
+		local ok, send_err = mod.send(target, text)
+		if ok then
+			sent = sent + 1
+			state.dispatch(mod.id, target.id, text)
+			queue.remove(entry.id)
+		else
+			failed[#failed + 1] = { index = index, err = send_err }
+		end
+	end
+	if sent > 0 then
+		local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
+		vim.notify(
+			("[%s] Sent %d batched question(s) → %s (%s)"):format(mod.label, sent, name_of(target), where),
+			vim.log.levels.INFO
+		)
+	end
+	for _, f in ipairs(failed) do
+		vim.notify(
+			("[%s] Batch #%d failed: %s"):format(mod.label, f.index, f.err or "unknown error"),
+			vim.log.levels.WARN
+		)
+	end
+end
+
+---Send queued questions, one message each. Entries with a route go to their own agent;
+---the unrouted rest shares a single picker. Successfully sent entries are removed (their
+---markers disappear); failed or unreachable ones stay queued.
+---@param opts { backend?: string, ids?: string }|nil ids = "3", "3,5-7"; nil = all
 ---@return boolean ok
 function M.batch_send(opts)
 	opts = opts or {}
-	local pending = queue.list()
+	local pending, sel_err = select_entries(opts.ids)
+	if not pending then
+		vim.notify("[ask_agent] " .. sel_err, vim.log.levels.WARN)
+		return false
+	end
 	if #pending == 0 then
+		vim.notify(
+			opts.ids and ("[ask_agent] No queued question matches %s (queue has %d)"):format(opts.ids, queue.count())
+				or "[ask_agent] Batch queue is empty",
+			vim.log.levels.INFO
+		)
+		return false
+	end
+
+	-- Group by route (keyed by backend + instance id), keeping creation order
+	local groups, keyed, rest = {}, {}, {}
+	for _, entry in ipairs(pending) do
+		if entry.route then
+			local key = ("%s:%s"):format(entry.route.backend, tostring(entry.route.id))
+			if not keyed[key] then
+				keyed[key] = { route = entry.route, entries = {} }
+				groups[#groups + 1] = keyed[key]
+			end
+			table.insert(keyed[key].entries, entry)
+		else
+			rest[#rest + 1] = entry
+		end
+	end
+	for _, group in ipairs(groups) do
+		local mod, target, why = resolve_route(group.route)
+		if target then
+			deliver(mod, target, group.entries)
+		else
+			local indices = {}
+			for _, entry in ipairs(group.entries) do
+				indices[#indices + 1] = "#" .. entry.index
+			end
+			vim.notify(("[ask_agent] Kept %s queued: %s"):format(table.concat(indices, ", "), why), vim.log.levels.WARN)
+		end
+	end
+	if #rest > 0 then
+		local mod = backends.get(opts.backend or current)
+		if not mod then
+			vim.notify(
+				("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
+				vim.log.levels.WARN
+			)
+			return false
+		end
+		choose_target(mod, function(target)
+			if target then
+				deliver(mod, target, rest)
+			end
+		end)
+	end
+	return true
+end
+
+---Route queued questions to the agent that should handle them (shown in the marker).
+---A route survives for the session: `:AskAgentBatchSend` then honours it per entry.
+---@param ids string|nil "3", "3,5-7"; nil = every entry
+---@param opts { backend?: string, clear?: boolean }|nil
+---@return boolean ok
+function M.batch_route(ids, opts)
+	opts = opts or {}
+	local entries, sel_err = select_entries(ids)
+	if not entries then
+		vim.notify("[ask_agent] " .. sel_err, vim.log.levels.WARN)
+		return false
+	end
+	if #entries == 0 then
 		vim.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
 		return false
+	end
+	if opts.clear then
+		for _, entry in ipairs(entries) do
+			queue.route(entry.id, nil)
+		end
+		vim.notify(("[ask_agent] Cleared the route of %d queued question(s)"):format(#entries), vim.log.levels.INFO)
+		return true
 	end
 	local mod = backends.get(opts.backend or current)
 	if not mod then
@@ -683,37 +907,14 @@ function M.batch_send(opts)
 		if not target then
 			return
 		end
-		local sent, failed = 0, {}
-		for _, entry in ipairs(pending) do
-			local index = entry.index
-			local anchor = queue.sync(entry)
-			local ok, send_err = mod.send(target, message.render(anchor, entry.prompt))
-			if ok then
-				sent = sent + 1
-				queue.remove(entry.id)
-			else
-				table.insert(failed, { index = index, err = send_err })
-			end
+		local route = { backend = mod.id, id = tostring(target.id), ts = target.ts, name = name_of(target) }
+		for _, entry in ipairs(entries) do
+			queue.route(entry.id, route)
 		end
-		if sent > 0 then
-			local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
-			vim.notify(
-				("[%s] Sent %d batched question(s) → #%d %s (%s)"):format(
-					mod.label,
-					sent,
-					target.index or 0,
-					name_of(target),
-					where
-				),
-				vim.log.levels.INFO
-			)
-		end
-		for _, f in ipairs(failed) do
-			vim.notify(
-				("[%s] Batch #%d failed: %s"):format(mod.label, f.index, f.err or "unknown error"),
-				vim.log.levels.WARN
-			)
-		end
+		vim.notify(
+			("[ask_agent] Routed %d queued question(s) → %s"):format(#entries, route.name),
+			vim.log.levels.INFO
+		)
 	end)
 	return true
 end
@@ -751,7 +952,13 @@ function M.batch_list()
 	local function describe(entry)
 		local a = entry.anchor
 		local first = (entry.prompt:gsub("\n.*", ""))
-		return ("#%d  %s:%d  %s"):format(entry.index, a.path or "<no filename>", entry.line or 1, first)
+		return ("#%d  %s%s:%d  %s"):format(
+			entry.index,
+			entry.route and ("[→ %s] "):format(entry.route.name or entry.route.id) or "",
+			a.path or "<no filename>",
+			entry.line or 1,
+			first
+		)
 	end
 	vim.ui.select(list, {
 		prompt = ("Queued questions (%d)"):format(#list),
@@ -760,10 +967,14 @@ function M.batch_list()
 		if not entry then
 			return
 		end
-		vim.ui.select({ "jump to code", "edit question", "delete" }, {
+		vim.ui.select({ "send now", "route to an agent", "jump to code", "edit question", "delete" }, {
 			prompt = describe(entry),
 		}, function(action)
-			if action == "jump to code" then
+			if action == "send now" then
+				M.batch_send({ ids = tostring(entry.index) })
+			elseif action == "route to an agent" then
+				M.batch_route(tostring(entry.index))
+			elseif action == "jump to code" then
 				goto_entry(entry)
 			elseif action == "edit question" then
 				ui.input({
@@ -979,7 +1190,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1000,6 +1211,11 @@ function M.setup(opts)
 		backends.register(mod)
 	end
 	current = opts.default or "pi"
+	-- One poller for every backend; views subscribe instead of polling on their own
+	state.notify = opts.state_notify ~= false
+	state.start(opts.state_interval or 2000)
+	local grp = vim.api.nvim_create_augroup("AskAgentState", { clear = true })
+	vim.api.nvim_create_autocmd("VimLeavePre", { group = grp, callback = state.stop })
 
 	-- Bridge to the external agent (RPC socket); a bridge failure must never break setup
 	if opts.bridge ~= false then
@@ -1029,12 +1245,22 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("AskAgentBatchVisual", function()
 		M.batch_ask({ visual = true })
 	end, { desc = "Ask agent: queue a question anchored to the current selection" })
-	vim.api.nvim_create_user_command("AskAgentBatchSend", function()
-		M.batch_send()
-	end, { desc = "Ask agent: send every queued question (one message each) to one target" })
+	vim.api.nvim_create_user_command("AskAgentBatchSend", function(args)
+		M.batch_send({ ids = args.args ~= "" and args.args or nil })
+	end, {
+		nargs = "?",
+		desc = "Ask agent: send queued questions (all, or e.g. 3,5-7) to their agents",
+	})
+	vim.api.nvim_create_user_command("AskAgentBatchRoute", function(args)
+		M.batch_route(args.args ~= "" and args.args or nil, { clear = args.bang })
+	end, {
+		nargs = "?",
+		bang = true,
+		desc = "Ask agent: route queued questions (all, or e.g. 3,5-7) to an agent ('!' clears)",
+	})
 	vim.api.nvim_create_user_command("AskAgentBatchList", function()
 		M.batch_list()
-	end, { desc = "Ask agent: list queued questions (jump/edit/delete)" })
+	end, { desc = "Ask agent: list queued questions (send/route/jump/edit/delete)" })
 	vim.api.nvim_create_user_command("AskAgentBatchDelete", function()
 		M.batch_delete()
 	end, { desc = "Ask agent: delete the queued question on the cursor line (undoable)" })
@@ -1044,6 +1270,9 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("AskAgentBatchClear", function()
 		M.batch_clear()
 	end, { desc = "Ask agent: drop every queued question (undoable)" })
+	vim.api.nvim_create_user_command("AskAgentDashboard", function()
+		M.dashboard()
+	end, { desc = "Ask agent: dashboard of all agents (blocked/done/working), most urgent first" })
 	-- Legacy name
 	vim.api.nvim_create_user_command("AskAgentPi", function()
 		M.ask()

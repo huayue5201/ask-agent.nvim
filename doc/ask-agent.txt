@@ -12,8 +12,9 @@ CONTENTS                                              *ask-agent-contents*
   7. Instance names ............................. |ask-agent-aliases|
   8. Layout adapters ............................ |ask-agent-layouts|
   9. RPC bridge ................................. |ask-agent-bridge|
-  10. Batch questions ........................... |ask-agent-batch|
-  11. API ....................................... |ask-agent-api|
+  10. Agent status .............................. |ask-agent-status|
+  11. Batch questions ........................... |ask-agent-batch|
+  12. API ....................................... |ask-agent-api|
 
 ==============================================================================
 1. DESIGN                                                   *ask-agent-design*
@@ -33,6 +34,8 @@ require("ask_agent").setup({
   show_stale = true,             -- list exited instances too, marked "not running"
   spinner = { "⠋", "⠙", "⠹" },      -- frames for the busy icon (default: braille)
   tick = 90,                     -- animation interval in ms (default 90)
+  state_interval = 2000,         -- state polling interval in ms (default 2000)
+  state_notify = true,           -- notify on finished/blocked agents (default true)
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time
   icons = { pi = "π" },          -- per-agent glyphs
@@ -68,6 +71,12 @@ require("ask_agent").setup({
 :AskAgentAlias          Name an instance; names show up in lists, prompts and
                         notifications. `!` clears a name.
 
+                                                  *:AskAgentDashboard*
+:AskAgentDashboard      Open the dashboard: every agent most urgent first. `<CR>`
+                        jump, `s` send, `S` flush its queued questions, `C`
+                        capture its output (rex), `a` acknowledge, `d` dismiss,
+                        `r` poll now, `q` close.
+
                                                   *:AskAgentBatch*
 :AskAgentBatch          Queue a question at the cursor instead of sending it.
 
@@ -75,13 +84,23 @@ require("ask_agent").setup({
 :AskAgentBatchVisual    Queue a question anchored to the visual selection.
 
                                                   *:AskAgentBatchSend*
-:AskAgentBatchSend      Send every queued question, one message each, to one
-                        target instance (chosen once). Successful entries leave
+:AskAgentBatchSend [ids]
+                        Send queued questions, one message each. Routed entries
+                        go to their own agent; the unrouted rest shares one
+                        target picker. `ids` picks a subset (`3`, `3,5-7`);
+                        without it every entry is sent. Successful entries leave
                         the queue; failed ones stay for a retry.
 
+                                                  *:AskAgentBatchRoute*
+:AskAgentBatchRoute [ids]
+                        Route queued questions to one target (`ids` as above;
+                        without it every entry). The marker then reads
+                        `[3→name]` in that instance's color, and a batch send
+                        delivers the entry there. `!` clears the route again.
+
                                                   *:AskAgentBatchList*
-:AskAgentBatchList      List queued questions; choose jump to code, edit or
-                        delete.
+:AskAgentBatchList      List queued questions; choose send now, route to an
+                        agent, jump to code, edit or delete.
 
                                                   *:AskAgentBatchDelete*
 :AskAgentBatchDelete    Delete the queued question(s) on the cursor line (asks
@@ -132,13 +151,17 @@ windows, shown through `vim.ui.select` — so it is whatever your config provide
 shows the instance glyph in its own stable color, the name, and the cwd. Float
 menus are centered rather than attached to the cursor.
 
-Every entry starts with a live status dot, re-probed when the picker opens:
+Every entry starts with the agent's state, re-probed when the picker opens:
 
   ●  idle — the agent is free, the question is handled right away
-  ◐  busy (rotating spinner when the picker animates) — a turn is running; the
+  ◐  working (rotating spinner when the picker animates) — a turn is running; the
      question is still delivered now
      (pi queues it as a follow-up and runs it after the current one), and a
      notice tells you so
+  ⚠  blocked — the agent is waiting for you (permission, a question, auth); a
+     send would sit in its input unread
+  ✓  done — the last turn finished and nobody looked at it yet
+  ✗  error — the turn ended in an error
   ○  not running — process exited, socket missing, pane gone/dead, or the pane
      fell back to a shell
 
@@ -301,13 +324,60 @@ end)
 project tooling.
 
 ==============================================================================
-10. BATCH QUESTIONS                                        *ask-agent-batch*
+10. AGENT STATUS                                            *ask-agent-status*
+
+`ask_agent.state` is the single truth about every instance: the picker, the
+dashboard, the statusline and other plugins all read from it, so they cannot
+disagree. It polls every `state_interval` ms (default 2000, `state_notify =
+false` silences the notifications).
+
+Sources, strongest first:
+
+  rex program status  rex reports each block's OSC 7501 status (`working`,
+                      `blocked` with a kind, `done`, `error`, plus `msg` and
+                      `progress`). Used for targets carrying
+                      `rex = { session, block }`.
+  backend probe       `busy` means working; no probe means unknown;
+                      `running = false` means gone.
+  our send log        a turn that ends after we sent something becomes `done`
+                      with `unread = true` (that survives a source that only
+                      knows idle, until you acknowledge it).
+
+States: `idle`, `working`, `blocked` (kind: permission | question | auth),
+`done`, `error`, `unknown`, `gone`. `done` and `blocked` are reported once per
+instance (30 s), stay in the dashboard and count in the statusline until
+acknowledged. Nothing is accepted or rejected automatically: the agent CLI stays
+the place where work is approved.
+
+>lua
+local ask = require("ask_agent")
+ask.agents({ state = "blocked" })          -- what needs me now, most urgent first
+ask.on("done", function(rec)
+  local c = rec.dispatch and rec.dispatch.correlation
+  if c and c.plugin == "todo2" then require("todo2").complete(c.key) end
+end)
+ask.wait("pi:91841", "done", 600000, function(rec) ... end)
+ask.statusline()                             -- "⚠1 ✓2 ◐3", empty when idle
+<
+
+`rec.dispatch = { text, ts, correlation }` records what was sent and the opaque
+correlation table given to `ask.send(text, { correlation = { plugin, key } })`;
+it comes back with every event for that instance.
+
+==============================================================================
+11. BATCH QUESTIONS                                         *ask-agent-batch*
 
 Queue questions while browsing instead of sending them immediately. Each queued
 entry keeps the anchor captured at the time (cwd, file, line, selection), is
 drawn in the source buffer as a `»` sign plus end-of-line virtual text, and
-follows buffer edits through its extmark. |:AskAgentBatchSend| sends every
-entry as its own message to a single target chosen once.
+follows buffer edits through its extmark. |:AskAgentBatchSend| sends every entry
+as its own message; |:AskAgentBatchSend| `3,5-7` sends only those.
+
+|:AskAgentBatchRoute| routes entries to a specific agent instance of the current
+backend (|:AskAgentBackend| switches backends); the marker shows `[3→name]` in that
+instance's color, so one queue can be split across several running agents: a send
+groups by route, routed entries go to their own agent and the unrouted rest shares
+one picker.
 
 In the ask window: `<C-s>` queues the question, `<Esc>`/`<C-c>` cancels.
 Use |:AskAgentBatchList| to jump to an entry's code, edit its text or delete it,
@@ -316,16 +386,22 @@ or |:AskAgentBatchDelete| to drop the entry under the cursor. Every delete and
 operations are kept in memory, as is the queue itself — the current session
 only).
 
+
 ==============================================================================
-11. API                                                    *ask-agent-api*
+12. API                                                    *ask-agent-api*
 
 >lua
 local ask = require("ask_agent")
 ask.setup(opts)
 ask.ask({ visual = true })
 ask.batch_ask({ visual = true })
-ask.batch_send() / ask.batch_list() / ask.batch_clear() / ask.batch_count()
-ask.send(text, opts)
+ask.batch_send({ ids = "3,5-7" }) / ask.batch_route(ids, opts)
+ask.batch_list() / ask.batch_clear() / ask.batch_count()
+ask.send(text, opts)                    -- { backend, target, correlation }
+ask.agents({ state = "blocked" })       -- instances, most urgent first
+ask.on(event, fn)                       -- state | update | done | blocked | error
+ask.wait(key, want, ms, cb)             -- one-shot wait; cb(nil) on timeout
+ask.statusline() / ask.dashboard()
 ask.use("pi") / ask.current()
 ask.list() / ask.targets("pi")
 ask.pin(id) / ask.pinned()

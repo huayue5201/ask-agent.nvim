@@ -89,6 +89,24 @@ function M.check()
 		info("backends: " .. table.concat(ids, ", "))
 	end
 
+	-- state layer: where the dashboard/statusline get their truth from
+	local state = require("ask_agent.state")
+	local st = require("ask_agent.status.rex")
+	if st.available() then
+		ok("rex program status available (OSC 7501 beats busy markers)")
+	else
+		info("rex not on PATH — agent state comes from backend probes only")
+	end
+	local counts = state.counts()
+	info(
+		("state: %d agent(s), %d blocked, %d finished, %d working"):format(
+			counts.total,
+			counts.blocked,
+			counts.done,
+			counts.working
+		)
+	)
+
 	-- state files
 	local aliases = require("ask_agent.aliases")
 	local names = 0

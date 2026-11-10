@@ -90,6 +90,17 @@ end
 
 local accent_cache = {}
 
+---Stability key of an instance ("<id>:<ts>"): the same instance keeps its colour, a reused
+---id (pid recycling) gets a fresh one.
+---@param t table|nil
+---@return string|nil
+function M.key(t)
+	if type(t) ~= "table" or t.id == nil then
+		return nil
+	end
+	return ("%s:%s"):format(tostring(t.id), tostring(t.ts or ""))
+end
+
 ---Per-instance colour: prefer key "<id>:<ts>", the result is stable across calls.
 ---@param key string|nil
 ---@return string|nil

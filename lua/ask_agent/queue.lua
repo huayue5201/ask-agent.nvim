@@ -1,12 +1,15 @@
 -- lua/ask_agent/queue.lua
 ---@brief Pending-questions queue: collect several anchored questions while browsing, then send them all at once.
 --
--- Each entry keeps the anchor captured at creation time plus the question text. The entry is drawn
--- in the source buffer as an extmark (a sign in the sign column plus virtual text at end-of-line),
--- so the question stays attached to the code it is about even while the buffer is edited. Sending
--- happens elsewhere (init.lua): this module only stores, draws and moves entries.
+-- Each entry keeps the anchor captured at creation time, the question text and an optional route
+-- (the agent instance that should handle it). The entry is drawn in the source buffer as an extmark
+-- (a sign in the sign column plus virtual text at end-of-line), so the question stays attached to
+-- the code it is about even while the buffer is edited. Sending happens elsewhere (init.lua): this
+-- module only stores, draws and moves entries.
 --
 -- The queue is per-Neovim-session, in memory only — the same lifetime as the anchors it refers to.
+
+local icons = require("ask_agent.icons")
 
 local M = {}
 
@@ -52,10 +55,16 @@ local function draw(buf)
 			it.mark = nil
 			local prompt_lines = vim.split(it.prompt, "\n", { plain = true })
 			local first = prompt_lines[1] or ""
+			-- The tag says who this question is routed to, in that instance's fixed color
+			local tag, tag_hl = ("[%d]"):format(it.index), "AskAgentBatchTag"
+			if it.route then
+				tag = ("[%d→%s]"):format(it.index, it.route.name or it.route.id)
+				tag_hl = icons.accent_hl(icons.key(it.route)) or tag_hl
+			end
 			local virt = {
 				{ "  » ", "AskAgentBatchSign" },
 				{ first, "AskAgentBatchText" },
-				{ ("  [%d]"):format(it.index), "AskAgentBatchTag" },
+				{ "  " .. tag, tag_hl },
 			}
 			local extra = {}
 			for i = 2, #prompt_lines do
@@ -122,6 +131,21 @@ function M.add(anchor, prompt)
 	table.insert(items, entry)
 	M.redraw()
 	return entry
+end
+
+---Assign (nil clears) the agent instance an entry is routed to. Drawn in its marker.
+---@param id integer
+---@param route table|nil { backend, id, ts?, name? }
+---@return boolean ok
+function M.route(id, route)
+	for _, it in ipairs(items) do
+		if it.id == id then
+			it.route = route
+			M.redraw()
+			return true
+		end
+	end
+	return false
 end
 
 ---Replace an entry's question text (used by the edit action in the list).

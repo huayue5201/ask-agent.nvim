@@ -20,8 +20,11 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 
 - **Floating ask window** — no buffers, no temp files, no window churn. `<C-s>` sends.
 - **Batch questions** — queue several anchored questions while you browse, each shown as
-  a marker + virtual text in the source buffer, then send them all at once
-  (`:AskAgentBatchSend`). Each question travels with its own anchor.
+  a marker + virtual text in the source buffer, then send them all at once or one by one
+  (`:AskAgentBatchSend [ids]`). Each question travels with its own anchor.
+- **Per-question routing** — route queue entries to different agent instances
+  (`:AskAgentBatchRoute`); a routed entry's marker shows `[3→reviewer]` in that agent's
+  color, and a batch send delivers each entry to its own agent.
 - **Commands only, no keymaps** — the plugin never touches your mappings; you bind
   `:AskAgent*` commands however you like.
 - **Anchor capture** — `cwd`, tab, `file:line`, visual selection, `modified`, plus a
@@ -31,11 +34,19 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   color in the list and in the map. Give instances names with `:AskAgentAlias`.
 - **Two pickers** — a **map** of your terminal split layout (pick the agent by the pane
   it lives in) and a plain **list** (works across tabs/windows). `<Tab>` flips between
-  them. Every row shows a live status dot: `●` idle, a rotating braille spinner while busy (the question is queued
-  behind the running task, same as typing into pi while it works), `○` not running
-  (process gone, socket missing, pane fell back to the shell). Exited pi instances stay
-  visible in the list, greyed out, so you can see the agent is gone instead of guessing;
-  `show_stale = false` hides them.
+  them. Every row shows the agent's state: `●` idle, `◐` working (the question is queued
+  behind the running task, same as typing into pi while it works), `⚠` waiting for you,
+  `✓` finished, `✗` failed, `○` not running (process gone, socket missing, pane fell
+  back to the shell). `show_stale = false` hides the exited ones.
+- **One status board for every agent** — `:AskAgentDashboard` lists all instances most
+  urgent first (permission > question > finished > error > working > idle) with what each
+  one is doing and how long it has been doing it. Jump to it, send to it, flush the
+  questions routed to it, read its output (rex), or acknowledge it. A finished turn or a
+  blocked prompt is reported once through `vim.notify`; `ask_agent.statusline()` puts
+  the counts (`⚠1 ✓2 ◐3`) where you want them.
+- **Status another plugin can act on** — `ask.agents()`, `ask.on("done"|"blocked")`,
+  `ask.wait()` and a `correlation` tag that travels with a send and comes back with the
+  event, so a task list can own the work and the agent only owns the conversation.
 - **Optional RPC bridge** — lets the agent pull *live* Neovim context back (unsaved
   buffers, diagnostics, quickfix, project overview) instead of reading stale files.
 - **Extensible backends** — a backend is four fields; a tmux-based agent (Claude Code, codex,
@@ -90,10 +101,12 @@ vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 | `:AskAgentPicker [map\|list]` | Choose the multi-candidate picker |
 | `:AskAgentTarget [id]` | Pin the target instance (`!` clears) |
 | `:AskAgentAlias` | Name an instance (`!` clears the name) |
+| `:AskAgentDashboard` | All agents, most urgent first (jump / send / flush / capture / ack) |
 | `:AskAgentBatch` | Queue a question at the cursor instead of sending it now |
 | `:AskAgentBatchVisual` | Queue a question anchored to the selection |
-| `:AskAgentBatchSend` | Send every queued question (one message each) to one target |
-| `:AskAgentBatchList` | List queued questions (jump / edit / delete) |
+| `:AskAgentBatchSend [ids]` | Send queued questions (all, or e.g. `3,5-7`) to their agents |
+| `:AskAgentBatchRoute [ids]` | Route queued questions to one agent (`!` clears the route) |
+| `:AskAgentBatchList` | List queued questions (send / route / jump / edit / delete) |
 | `:AskAgentBatchDelete` | Delete the queued question on the cursor line (undoable) |
 | `:AskAgentBatchUndo` | Undo the last delete / clear, restoring markers |
 | `:AskAgentBatchClear` | Drop every queued question (undoable) |
@@ -116,7 +129,8 @@ In the **map**: letter picks that pane, `<Tab>` switches to the list, `<Esc>` ca
 In the **list**: number (or `<M-a>` for items past 9) picks, `<Tab>` goes back to the map.
 The dot next to each entry is its live status: `●` idle, a spinner while busy (your
 question is delivered immediately but pi processes it after the current turn — you get a
-notice saying so), `○` not running. Choosing a `○` entry only warns — nothing is sent.
+notice saying so), `⚠` blocked (a send would sit unread), `✓` done, `✗` error,
+`○` not running. Choosing a `○` entry only warns — nothing is sent.
 
 Busy rows animate when the picker implementation supports it: the plugin passes
 `tick = 90` in the `vim.ui.select` opts and uses `frame` in `format_item(item, frame)`,
@@ -145,6 +159,12 @@ require("ask_agent").setup({
 
   -- animation interval for the busy icon, in ms (default 90); match your picker's tick
   tick = 90,
+
+  -- how often the state layer polls every backend, in ms (default 2000)
+  state_interval = 2000,
+
+  -- report finished/blocked agents through vim.notify (default true)
+  state_notify = true,
 
   -- default backend id
   default = "pi",
@@ -406,10 +426,16 @@ local ask = require("ask_agent")
 ask.setup(opts)
 ask.ask(opts)                 -- ask ({ visual = true })
 ask.batch_ask(opts)           -- queue instead of send ({ visual = true })
-ask.batch_send(opts)          -- send all queued, one message each
-ask.batch_list()              -- list queued questions (jump/edit/delete)
+ask.batch_send(opts)          -- send queued ({ ids = "3,5-7" }; nil = all), route-aware
+ask.batch_route(ids, opts)    -- route queued entries to an agent ({ clear = true } clears)
+ask.batch_list()              -- list queued questions (send/route/jump/edit/delete)
 ask.batch_clear() / ask.batch_count()
-ask.send(text, opts)          -- send without the ask window
+ask.send(text, opts)          -- send without the ask window ({ correlation = { plugin, key } })
+ask.agents(opts)              -- every instance, most urgent first ({ state, backend, correlation })
+ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
+ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(nil) on timeout)
+ask.statusline()              -- "⚠1 ✓2 ◐3", empty when nothing needs attention
+ask.dashboard()               -- open the dashboard buffer
 ask.use(id) / ask.current()   -- default backend
 ask.list() / ask.targets(id)  -- backends / instances
 ask.pin(id) / ask.pinned()    -- pin a target
@@ -423,17 +449,80 @@ ask.register(mod)             -- register a backend at runtime
 ask.register_layout(mod)      -- register a layout adapter at runtime
 ```
 
+## Agent status
+
+`ask_agent.state` is the single truth about every instance: it polls the backends
+every `state_interval` ms (default 2000), and the picker, the dashboard, the
+statusline and other plugins all read from it, so they cannot disagree.
+
+A source that knows the real thing wins: rex reports each block's
+[OSC 7501](https://www.superlogical.com/rex/docs/build/program-status.md) program
+status (`working` / `blocked` with `kind` / `done` / `error` metadata), which is
+used when the target carries `rex = { session, block }`. Otherwise the backend's
+probe decides (`busy` → working, else idle, no probe → unknown, `running = false`
+→ gone). When a turn ends while we know we sent something into it, the state
+becomes `done` with `unread = true`; that survives later polls that only know
+`idle`, until you acknowledge it.
+
+States: `idle`, `working`, `blocked` (`kind` = `permission` / `question` /
+`auth`), `done`, `error`, `unknown`, `gone`. `done` and `blocked` are events: they
+are reported once (30 s per instance), stay in the dashboard, and count in the
+statusline until `a` (acknowledge) or `d` (dismiss) — the CLI stays the place
+where work is accepted.
+
+```lua
+local ask = require("ask_agent")
+
+ask.agents({ state = "blocked" })          -- what needs me right now
+ask.wait("pi:91841", "done", 600000, function(rec)
+  if rec then print("done:", rec.msg) end
+end)
+ask.on("done", function(rec)                -- or: react without polling
+  local c = rec.dispatch and rec.dispatch.correlation
+  if c and c.plugin == "todo2" then require("todo2").complete_by_key(c.key) end
+end)
+require("lua-line").add(ask.statusline)
+```
+
+Correlation is opaque: `ask.send(text, { correlation = { plugin, key } })`
+stores it on the instance's record, `:AskAgent` and batch sends do not set one, and
+`rec.dispatch = { text, ts, correlation }` is handed back with every event.
+
+## Dashboard
+
+`:AskAgentDashboard` opens a scratch buffer (a 14-line split, `q` closes) listing
+every agent most urgent first:
+
+```
+⚠ reviewer        claude   needs permission: run the test suite? (permission)  2m
+✓ worker-1        pi       finished: 12 files changed                           5m   +2 q
+◐ worker-2        pi       busy                                                 41s
+● scratch         codex    idle                                                 8s
+```
+
+`<CR>` jumps to it, `s` sends to it, `S` sends every queued question routed to it,
+`C` captures its pane output (rex), `a` acknowledges, `d` dismisses, `r` polls now.
+The buffer updates itself on state events and keeps your cursor where it was.
+
 ## Batch questions
 
 When a question comes up while browsing, `:AskAgentBatch` (or
 `:AskAgentBatchVisual` for a selection) queues it instead of sending: the text goes nowhere yet, and the source line gets a
 `»` sign plus the question as end-of-line virtual text (`[n]` = queue position). Move
-on, queue more. `:AskAgentBatchSend` sends every entry as its own
-message — each keeps the anchor captured when it was queued — to a single target
-chosen once. Entries follow buffer edits through their extmarks, and
-`:AskAgentBatchList` jumps/edits/deletes them. `:AskAgentBatchDelete` removes the
-entry on the cursor line; every delete and `:AskAgentBatchClear` can be undone
-with `:AskAgentBatchUndo` (in-memory, last 20 operations).
+on, queue more. `:AskAgentBatchSend` sends every entry as its own message — each
+keeps the anchor captured when it was queued — and `:AskAgentBatchSend 3,5-7`
+sends only those entries.
+
+Entries can be routed to different agents: `:AskAgentBatchRoute 3` (or
+`:AskAgentBatchRoute` for all, `!` to clear) picks a target of the current backend
+(`:AskAgentBackend` switches it) and tags the marker `[3→claude]` in that instance's
+color. A batch send then groups by route — routed entries go to their own agent, the
+unrouted rest shares one picker — so one queue can be split across several running
+agents. Entries follow buffer edits through
+their extmarks, and `:AskAgentBatchList` sends/routes/jumps/edits/deletes them.
+`:AskAgentBatchDelete` removes the entry on the cursor line; every delete and
+`:AskAgentBatchClear` can be undone with `:AskAgentBatchUndo` (in-memory, last 20
+operations).
 
 ## Health
 
