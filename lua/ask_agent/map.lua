@@ -14,15 +14,8 @@ local M = {}
 -- Extmark namespace for the map buffer (backgrounds/highlights rely on it)
 local NS = api.nvim_create_namespace("ai_map")
 
---- Colors: reuse the host's terminal palette when it exposes one (the map then matches the statusline/winbar),
----otherwise fall back to plain float colors so the plugin needs no dependency.
+--- Colors: plain float colors, so the plugin needs no host dependency.
 local function palette()
-	local ok, p = pcall(function()
-		return require("feat.terminal.highlights").palette()
-	end)
-	if ok and type(p) == "table" and p.chip_bg then
-		return p
-	end
 	local function hl(name, field)
 		local ok, got = pcall(api.nvim_get_hl, 0, { name = name, link = false })
 		return ok and type(got) == "table" and got[field] or nil
@@ -39,26 +32,18 @@ end
 
 local function define_hl()
 	local p = palette()
-	local blend
-	local ok, h = pcall(require, "feat.terminal.highlights")
-	if ok and type(h.blend) == "function" then
-		blend = function(a, b, ratio)
-			return h.blend(a, b, ratio)
+	-- mix two #rrggbb colors ourselves (ratio = weight of b)
+	local function blend(a, b, ratio)
+		if type(a) ~= "string" or type(b) ~= "string" or #a ~= 7 or #b ~= 7 then
+			return a
 		end
-	else
-		-- no host palette: mix two #rrggbb colors ourselves (ratio = weight of b)
-		blend = function(a, b, ratio)
-			if type(a) ~= "string" or type(b) ~= "string" or #a ~= 7 or #b ~= 7 then
-				return a
-			end
-			local ar, ag, ab = tonumber(a:sub(2, 3), 16), tonumber(a:sub(4, 5), 16), tonumber(a:sub(6, 7), 16)
-			local br, bg, bb = tonumber(b:sub(2, 3), 16), tonumber(b:sub(4, 5), 16), tonumber(b:sub(6, 7), 16)
-			ratio = ratio or 0.5
-			local function mix(x, y)
-				return math.floor(x * (1 - ratio) + y * ratio + 0.5)
-			end
-			return ("#%02x%02x%02x"):format(mix(ar, br), mix(ag, bg), mix(ab, bb))
+		local ar, ag, ab = tonumber(a:sub(2, 3), 16), tonumber(a:sub(4, 5), 16), tonumber(a:sub(6, 7), 16)
+		local br, bg, bb = tonumber(b:sub(2, 3), 16), tonumber(b:sub(4, 5), 16), tonumber(b:sub(6, 7), 16)
+		ratio = ratio or 0.5
+		local function mix(x, y)
+			return math.floor(x * (1 - ratio) + y * ratio + 0.5)
 		end
+		return ("#%02x%02x%02x"):format(mix(ar, br), mix(ag, bg), mix(ab, bb))
 	end
 	api.nvim_set_hl(0, "AiMapBg", { bg = p.bar_strip, fg = p.dim })
 	api.nvim_set_hl(0, "AiMapPane", { bg = p.chip_bg, fg = p.dim })
