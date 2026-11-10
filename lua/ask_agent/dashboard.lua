@@ -160,6 +160,9 @@ local function agent_line(rec, name_w, show_backend, now, n)
 	local msg = rec.msg or (rec.gone and "exited" or rec.state)
 	if rec.kind then
 		msg = msg .. " · " .. rec.kind
+	elseif rec.state == "done" and rec.source == "heuristic" then
+		-- nobody reported the state: the turn simply stopped looking busy
+		msg = msg .. " · inferred"
 	end
 	left = left .. "  " .. msg
 	local right = age(now - (rec.since or now))
@@ -207,7 +210,7 @@ local function render()
 	if not (buf and vim.api.nvim_buf_is_valid(buf)) then
 		return
 	end
-	local now = vim.uv.now()
+	local now = state.now()
 	local list = state.all()
 	local queued = queued_by_agent()
 	local width = inner_width()
@@ -376,7 +379,8 @@ local HELP = {
 	{ "<CR>", "Agent: bring its window to the front · Task: jump to its code anchor" },
 	{ "s", "Send a question to that agent" },
 	{ "S", "Send every queued question routed to it" },
-	{ "C", "Show its recent output (when the jump adapter can read it)" },
+	{ "C", "Show the output of its last turn (captured from the terminal)" },
+	{ "R", "Reply to what it is blocked on, on that same agent" },
 	{ "a", "Acknowledge a done/blocked agent" },
 	{ "d", "Delete the queued task · dismiss a dead agent" },
 	{ "<Tab>", "Fold or unfold the agent's tasks" },
@@ -464,6 +468,16 @@ end
 
 ---@param rec table
 local function capture(rec)
+	if api and api.result then
+		api.result(rec.key, function(task, err)
+			if not task or not task.output then
+				vim.notify("[ask_agent] " .. (err or "no output captured yet"), vim.log.levels.INFO)
+				return
+			end
+			show_text(state.name(rec) .. " · last turn", task.output)
+		end)
+		return
+	end
 	jump.capture(rec.target, function(text)
 		if not text then
 			vim.notify("[ask_agent] No capture source for " .. state.name(rec), vim.log.levels.INFO)
@@ -505,6 +519,28 @@ local function attach(bufnr)
 		"C",
 		with("agent", function(node)
 			capture(node.rec)
+		end),
+		opts_buf
+	)
+	vim.keymap.set(
+		"n",
+		"R",
+		with("agent", function(node)
+			local rec = node.rec
+			ui.input({
+				title = ("Reply to %s%s"):format(
+					state.name(rec),
+					rec.state == "blocked" and (" · " .. (rec.msg or rec.kind or "waiting")) or ""
+				),
+				on_submit = function(text)
+					if text == "" then
+						return
+					end
+					if api and api.reply then
+						api.reply(rec.key, text)
+					end
+				end,
+			})
 		end),
 		opts_buf
 	)

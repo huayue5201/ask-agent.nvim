@@ -17,6 +17,8 @@
 --     'v:lua.require("ask_agent.bridge").handle("<base64(json)>")'
 -- Requests: {"action":"state"} | {"action":"buffer","path":...,"from":..,"to":..}
 --      | {"action":"diagnostics"} | {"action":"quickfix"} | {"action":"list"}
+--      | {"action":"agents","state":..} | {"action":"ask","text":..,"backend":..,"target":..}
+--      | {"action":"reply","key":..,"text":..}
 --      | {"action":"project","root":..,"full":..,"wait_ms":..}
 -- The `project` action is not built in: register a handler with
 -- `require("ask_agent.bridge").extend("project", fn)`; `fn` receives the request
@@ -318,10 +320,73 @@ function M.list()
 	return { ok = true, action = "list", instances = out }
 end
 
+---Every agent this instance tracks, as the sidebar sees it (action: "agents").
+---@param req table|nil
+---@return table
+local function agents(req)
+	local st = require("ask_agent.state")
+	local filter = type(req) == "table" and req.state and { state = req.state } or nil
+	local out = {}
+	for _, rec in ipairs(st.all(filter)) do
+		local task = st.task(rec.key)
+		out[#out + 1] = {
+			key = rec.key,
+			name = st.name(rec),
+			backend = rec.backend,
+			id = rec.id,
+			state = rec.state,
+			kind = rec.kind,
+			progress = rec.progress,
+			msg = rec.msg,
+			source = rec.source,
+			unread = rec.unread and true or nil,
+			gone = rec.gone and true or nil,
+			since = rec.since,
+			task = task and { text = task.text, status = task.status, reply = task.reply, ts = task.ts } or nil,
+		}
+	end
+	return { ok = true, action = "agents", agents = out }
+end
+
+---Hand text to an agent (action: "ask"): {text, backend?, target?, correlation?}.
+---@param req table
+---@return table
+local function ask(req)
+	if type(req.text) ~= "string" or req.text == "" then
+		return { ok = false, error = "ask requires a non-empty text" }
+	end
+	local ok, err = require("ask_agent").send(req.text, {
+		backend = req.backend,
+		target = req.target,
+		correlation = req.correlation,
+	})
+	if not ok then
+		return { ok = false, error = tostring(err) }
+	end
+	return { ok = true, action = "ask" }
+end
+
+---Answer a blocked agent (action: "reply"): {key, text}.
+---@param req table
+---@return table
+local function reply(req)
+	if type(req.key) ~= "string" or type(req.text) ~= "string" or req.text == "" then
+		return { ok = false, error = "reply requires key and text" }
+	end
+	local ok, err = require("ask_agent").reply(req.key, req.text)
+	if not ok then
+		return { ok = false, error = tostring(err) }
+	end
+	return { ok = true, action = "reply" }
+end
+
 local handlers = {
 	state = function()
 		return state()
 	end,
+	agents = agents,
+	ask = ask,
+	reply = reply,
 	buffer = buffer,
 	diagnostics = diagnostics,
 	quickfix = function()

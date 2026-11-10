@@ -17,6 +17,10 @@ local b, why = busy(target)
 assert(b == true and why == "running turn", "marker should report busy: " .. tostring(b) .. " " .. tostring(why))
 vim.fn.writefile({ '{"busy":false}' }, f)
 assert(busy(target) == nil, "busy=false = not busy")
+-- rich form: the hook may report the OSC 7501 shape instead of a bare busy flag
+vim.fn.writefile({ '{"state":"blocked","kind":"permission","msg":"run the tests?"}' }, f)
+local rich = busy(target)
+assert(type(rich) == "table" and rich.state == "blocked" and rich.kind == "permission", "rich marker")
 vim.fn.writefile({ "not json" }, f)
 assert(busy(target) == nil, "broken marker must not block sending")
 vim.fn.writefile({ '{"busy":true}' }, f)
@@ -55,6 +59,12 @@ assert(#be.targets() == 1 and be.targets()[1].pane == "%1", "pattern filter shou
 vim.fn.writefile({ '{"busy":true}' }, dir .. "/" .. g.slug(t2.cwd) .. ".json")
 local st = be.probe(t2)
 assert(st.running and st.busy == true, "probe should surface the hook marker")
+vim.fn.writefile(
+	{ '{"state":"blocked","kind":"permission","msg":"run the tests?"}' },
+	dir .. "/" .. g.slug(t2.cwd) .. ".json"
+)
+local rich = be.probe(t2)
+assert(rich.state == "blocked" and rich.kind == "permission", "probe forwards the rich state")
 vim.fn.writefile({ '{"busy":false}' }, dir .. "/" .. g.slug(t2.cwd) .. ".json")
 local st2 = be.probe(t2)
 assert(st2.running and not st2.busy, "probe: idle when the marker says so")

@@ -36,6 +36,7 @@ require("ask_agent").setup({
   tick = 90,                     -- animation interval in ms (default 90)
   state_interval = 2000,         -- state polling interval in ms (default 2000)
   state_notify = true,           -- notify on finished/blocked agents (default true)
+  persist = true,                -- keep tasks/unread marks in the journal (default true)
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time
   icons = {                      -- every glyph: flat key = an agent icon,
@@ -338,7 +339,10 @@ nvim --server <sock> --remote-expr \
   'v:lua.require("ask_agent.bridge").handle("<base64(json)>")'
 <
 
-Actions: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`.
+Actions: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
+`agents` (optional `state` filter), `ask` (`{text, backend?, target?}`) and
+`reply` (`{key, text}`). The last three expose the agent control plane over the
+same socket, so a terminal agent can list what is blocked and answer it.
 Handlers return JSON and never throw. Register extra actions from your config:
 
 >lua
@@ -363,12 +367,18 @@ Sources, strongest first:
   rex program status  rex reports each block's OSC 7501 status (`working`,
                       `blocked` with a kind, `done`, `error`, plus `msg` and
                       `progress`). Used for targets carrying
-                      `rex = { session, block }`.
-  backend probe       `busy` means working; no probe means unknown;
+                      `rex = { session, block }`, and streamed through
+                      `rex events -s SESSION --json` so changes arrive in
+                      milliseconds instead of at the next poll.
+  backend probe       `busy` means working, a hook marker may also carry
+                      `{state, kind, msg, progress}`; no probe means unknown;
                       `running = false` means gone.
   our send log        a turn that ends after we sent something becomes `done`
                       with `unread = true` (that survives a source that only
                       knows idle, until you acknowledge it).
+
+`rec.source` says which one produced the state: `rex`, `probe`, or `heuristic`
+(the last one only knows idle, so the sidebar labels the turn `inferred`).
 
 States: `idle`, `working`, `blocked` (kind: permission | question | auth),
 `done`, `error`, `unknown`, `gone`. `done` and `blocked` are reported once per
@@ -387,7 +397,14 @@ ask.wait("pi:91841", "done", 600000, function(rec) ... end)
 ask.statusline()                             -- "⚠1 ✓2 ◐3", empty when idle
 <
 
-`rec.dispatch = { text, ts, correlation, anchor }` records what was sent and the
+Answering and reading: `ask.reply(key, text)` sends a reply to a blocked instance
+on the same sender as everything else (sidebar `R`), and `ask.result(key, cb)`
+captures that instance's terminal once and hands back the newest task with its
+`output`. Tasks and unread marks are journaled to
+`<cache>/ask-agent/journal.json` (1 s debounce, week-old tasks dropped, disable
+with `persist = false`), so a restart keeps pending work visible.
+
+`rec.dispatch = { ts, correlation }` records when we last sent and the
 opaque correlation table given to `ask.send(text, { correlation = { plugin, key } })`;
 it comes back with every event for that instance. Every send is also appended to
 `rec.tasks` (newest first, the last 20): `{ text, ts, status, correlation, anchor }`
@@ -404,7 +421,8 @@ idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `�
 
 `<CR>` on an agent brings its window to the front; on a task it jumps to the code
 anchor the task was written at. `s` sends, `S` flushes every queued question
-routed to that agent, `C` shows its recent output, `a` acknowledges, `d` deletes a
+routed to that agent, `C` shows the output of its last turn, `R` replies to a
+blocked agent, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `<Tab>` folds its tasks, `?` opens the key
 help float, `r` polls now, `q` closes. The view is event-driven (state + queue notifications) and keeps the
 cursor where it was; the spinner is the only timer and only runs while a turn is

@@ -12,12 +12,22 @@
 -- nested ones describe sub-programs. We only care about the best first record.
 -- Callers apply it over the backend's own probe result, never instead of it:
 -- an agent that does not report simply has no records.
+--
+-- Polling is only the fallback: `rex events -s SESSION --json` streams
+-- terminal.program_status_changed / _removed, so state.lua can react within
+-- milliseconds instead of up to one interval later.
 
 local M = {}
 
 local TTL = 1500
+
 local cache = {} -- block id -> { ts, value }
 local inflight = {} -- block id -> { fn, ... } callbacks waiting on one rex call
+
+---Drop the cache (called when an event says a record changed).
+function M.invalidate()
+	cache = {}
+end
 
 ---Whether rex is usable at all (installed and reachable).
 ---@return boolean
@@ -95,6 +105,97 @@ function M.query(loc, cb)
 			end
 		end)
 	end)
+end
+
+---Parse one NDJSON line of `rex events --json` into `{ type, payload }`, or nil.
+---@param line string
+---@return table|nil
+function M.parse_line(line)
+	local ok, data = pcall(vim.json.decode, line)
+	if not ok or type(data) ~= "table" or data.type ~= "session_event" then
+		return nil
+	end
+	local ev = (data.payload or {}).event
+	if type(ev) ~= "table" or type(ev.type) ~= "string" then
+		return nil
+	end
+	return { type = ev.type, payload = ev.payload or {} }
+end
+
+local watches = {}
+
+---Stream this session's events (one `rex events` process per session, restarted on exit).
+---The callback runs on the main loop with the parsed event; false when unavailable.
+---@param session string
+---@param cb fun(event: table)
+---@return boolean started
+function M.watch(session, cb)
+	if watches[session] or not M.available() then
+		return false
+	end
+	local w = { buf = "", failures = 0 }
+	watches[session] = w
+	local function feed(chunk)
+		w.buf = w.buf .. chunk
+		while true do
+			local nl = w.buf:find("\n", 1, true)
+			if not nl then
+				return
+			end
+			local line = w.buf:sub(1, nl - 1)
+			w.buf = w.buf:sub(nl + 1)
+			local ev = M.parse_line(line)
+			if ev then
+				vim.schedule(function()
+					if not w.stopped then
+						pcall(cb, ev)
+					end
+				end)
+			end
+		end
+	end
+	local function start()
+		if w.stopped then
+			return
+		end
+		local started = vim.uv.now()
+		w.proc = vim.system({ "rex", "events", "-s", session, "--json" }, {
+			text = true,
+			stdout = function(_, chunk)
+				feed(chunk)
+			end,
+		}, function()
+			if w.stopped then
+				return
+			end
+			-- a stream that dies immediately is not going to start working on retry
+			w.failures = vim.uv.now() - started < 3000 and w.failures + 1 or 0
+			if w.failures >= 3 then
+				watches[session] = nil
+				return
+			end
+			w.timer = vim.defer_fn(start, 2000)
+		end)
+	end
+	start()
+	return true
+end
+
+---Stop streaming a session.
+---@param session string
+function M.unwatch(session)
+	local w = watches[session]
+	if not w then
+		return
+	end
+	w.stopped = true
+	watches[session] = nil
+	if w.timer then
+		pcall(w.timer.close, w.timer)
+	end
+	if w.proc then
+		pcall(w.proc.kill, w.proc, "sigterm")
+	end
 end
 
 return M

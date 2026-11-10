@@ -167,6 +167,10 @@ require("ask_agent").setup({
   -- report finished/blocked agents through vim.notify (default true)
   state_notify = true,
 
+  -- keep tasks and unread marks across restarts (default true);
+  -- persist = { path = ".../journal.json", enabled = false } moves or disables it
+  persist = true,
+
   -- default backend id
   default = "pi",
 
@@ -353,6 +357,22 @@ Providing `busy` is entirely optional: without it every live target is shown as
 idle and delivery goes straight to the pane, which is what the agent's own input
 buffer is for.
 
+The marker may carry more than a boolean — anything that speaks OSC 7501 can report
+the same state the terminal would display, and `blocked`/`done` then behave exactly
+like rex-reported ones (unread marks, notifications, the `R` reply key):
+
+```json
+{"state": "blocked", "kind": "permission", "msg": "run the test suite?"}
+```
+
+```sh
+# from inside the agent's wrapper, for any agent that can emit an OSC sequence
+printf '\033]7501;state=blocked;kind=permission;msg=run%%20the%%20tests%%3F;app=codex\007'
+```
+
+Either form is picked up by `probe()` and overridden only by rex, which reports the
+same data with full metadata.
+
 ### Non-tmux discovery
 
 `generic.tmux_panes(match)` is the low-level version of the filter: it hands you
@@ -453,7 +473,10 @@ nvim --server <sock> --remote-expr \
   'v:lua.require("ask_agent.bridge").handle("<base64(json)>")'
 ```
 
-Requests: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`.
+Requests: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
+`agents` (`{state?}` filter), `ask` (`{text, backend?, target?}`) and `reply`
+(`{key, text}`) — the last three make the whole control plane reachable from a
+terminal agent, not just from your own Lua config.
 Every handler returns a JSON string; failures are `{"ok":false,"error":…}` and never
 throw. Register your own actions from your config:
 
@@ -483,6 +506,9 @@ ask.batch_route(ids, opts)    -- route queued entries to an agent ({ clear = tru
 ask.batch_list()              -- list queued questions (send/route/jump/edit/delete)
 ask.batch_clear() / ask.batch_count()
 ask.send(text, opts)          -- send without the ask window ({ correlation = { plugin, key }, anchor = a })
+ask.reply(key, text)          -- answer what that agent is blocked on, on the same instance
+ask.task(key)                 -- newest task handed to that agent
+ask.result(key, cb)           -- cb(task) with the newest turn's output, captured from the terminal once
 ask.agents(opts)              -- every instance, most urgent first ({ state, backend, correlation })
 ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
 ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(nil) on timeout)
@@ -523,6 +549,29 @@ States: `idle`, `working`, `blocked` (`kind` = `permission` / `question` /
 are reported once (30 s per instance), stay in the dashboard, and count in the
 statusline until `a` (acknowledge) or `d` (dismiss) — the CLI stays the place
 where work is accepted.
+
+Where an observation came from is kept as `rec.source` — `rex` (the agent reported
+itself), `probe` (the backend's own hook/pane probe), or `heuristic` (nobody said
+"done", the turn simply stopped looking busy; the sidebar labels those `inferred`).
+
+A blocked agent can be answered from Neovim with `ask.reply(key, text)` (sidebar:
+`R`). The reply goes to the same instance, through the same sender as every other
+send, and is logged as a task with `reply = true` — so the exchange stays in one
+place instead of you switching to the terminal to type `y`.
+
+`ask.result(key, cb)` gives you what an agent actually answered: it captures the
+instance's terminal once (`jump` adapter's `capture`), caches the text on the task
+as `output`, and calls back on the main loop. `C` in the sidebar does the same.
+
+Journal: the tasks and unread marks are written to
+`stdpath("cache")/ask-agent/journal.json` (1 s debounce, tasks older than a week
+dropped on load), so restarting Neovim does not lose who is waiting for you. Turn
+it off with `persist = false`.
+
+Events instead of polling: when a target lives in a rex block, the state layer
+streams `rex events -s SESSION --json` and reacts to
+`terminal.program_status_changed` / `_removed` within milliseconds; the 2 s poll
+stays as the fallback for everything else.
 
 ```lua
 local ask = require("ask_agent")
@@ -571,7 +620,8 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | --- | --- | --- |
 | `<CR>` | bring its window to the front | jump to the task's code anchor |
 | `s` / `S` | send / flush every queued question routed to it | |
-| `C` | show its recent output (when the adapter can read it) | |
+| `C` | show the output of its last turn | |
+| `R` | reply to what it is blocked on, on that agent | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `<Tab>` | fold the agent's tasks | |
 | `?` | key help (a float; `q` closes it) | |
@@ -639,6 +689,18 @@ operations).
 
 `:checkhealth ask_agent` reports the active backend, how many instances it sees, whether
 which layout adapters are usable, which `vim.ui.select` implementation was detected, and where aliases and the bridge registry live.
+
+## Development
+
+```sh
+sh tests/run.sh          # every headless test, one PASS/FAIL line each
+stylua --check .         # formatting
+```
+
+`tests/run.sh` is what CI runs (`.github/workflows/ci.yml`): each test is a
+standalone Lua file executed with `nvim --headless --clean -l`, so a failure names
+the file and the assertion. Tests never touch your cache: they stub backends and
+turn the journal off, except the one test that writes it to `/tmp`.
 
 ## License
 

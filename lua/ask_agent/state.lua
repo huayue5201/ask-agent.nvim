@@ -15,6 +15,12 @@
 --   state.on("done"|"blocked"|"error", fn)
 --   state.all()              -- every instance, most attention-worthy first
 --   state.dispatch(backend, id, text, { correlation, anchor })
+--   state.reply(key, text)   -- answer something blocked, through the same sender
+--   state.result(key, cb)    -- the last turn's output (captured on demand)
+--
+-- Each record carries `source`: "rex" (OSC 7501, authoritative), "probe" (the
+-- backend's own marker/probe) or "heuristic" (a turn that ended after our send).
+-- Tasks and unread marks survive a restart through a small journal file.
 --
 -- States: idle | working | blocked | done | error | unknown | gone.
 -- `blocked` carries `kind` (permission | question | auth) and, like `done`,
@@ -23,6 +29,7 @@
 local backends = require("ask_agent.backends")
 local aliases = require("ask_agent.aliases")
 local rex = require("ask_agent.status.rex")
+local jump = require("ask_agent.jump")
 
 local M = {}
 
@@ -38,6 +45,20 @@ local KIND = { permission = 0, question = 1, auth = 2 }
 local NOTIFY_GAP = 30000
 local PRUNE_MS = 600000
 local TASK_KEEP = 20
+local JOURNAL_KEEP = 50
+local JOURNAL_DEBOUNCE = 1000
+local JOURNAL_TTL = 7 * 24 * 3600 * 1000
+
+---Send a message to one resolved instance (set by init, which owns the picker-free sender).
+---@type fun(mod: table, target: table, text: string, opts: table|nil): boolean, string?
+M.sender = nil
+
+---Persist tasks/unread marks across restarts (`setup({ persist = ... })`).
+M.persist = true
+---Journal override (path string), mainly for tests.
+M.journal_path = nil
+
+local journal_timer
 
 ---What a task looks like: { text, ts, status = "running" | "done" | "error", correlation, anchor }.
 ---Every send that reaches an instance appends one (newest first), so the dashboard can
@@ -48,6 +69,18 @@ local TASK_KEEP = 20
 ---@return string
 local function key_of(backend, id)
 	return backend .. ":" .. tostring(id)
+end
+
+---Wall-clock milliseconds. rec timestamps must survive a restart (the journal), so
+---they cannot be monotonic ticks; every age/`since` in this module uses this clock.
+---@return integer
+function M.now()
+	local sec, usec = vim.uv.gettimeofday()
+	return sec * 1000 + math.floor(usec / 1000)
+end
+
+local function now_ms()
+	return M.now()
 end
 
 ---Lower number = more attention-worthy (permission > question > done > error > working > idle).
@@ -102,7 +135,7 @@ local function notify_change(rec)
 	if not M.notify or rec.gone then
 		return
 	end
-	local now = vim.uv.now()
+	local now = now_ms()
 	if rec.notified and now - rec.notified < NOTIFY_GAP then
 		return
 	end
@@ -127,22 +160,26 @@ local function notify_change(rec)
 	end
 end
 
+local schedule_save -- journal writer, defined below (apply() is above it)
+
 ---Apply a new observation to a record, emitting only what actually changed.
 ---@param rec table
 ---@param st { state: string, kind?: string, progress?: integer, msg?: string, gone?: boolean }
-local function apply(rec, st)
+---@param src string|nil where this observation came from: "rex" | "probe" | "heuristic"
+local function apply(rec, st, src)
 	local prev = rec.state
 	local state, kind = st.state, st.kind
 	-- Completion inference for sources that cannot say "done" (tmux hooks, pi busy flags):
 	-- a turn that ends after one of our sends means our message was answered.
 	if state == "idle" and prev == "working" and rec.dispatch and (rec.dispatch.ts or 0) > (rec.idle_at or 0) then
-		state, kind = "done", nil
+		state, kind, src = "done", nil, "heuristic"
 		rec.unread = true
 	end
 	-- a finished turn stays `done` until acknowledged, even though the source now says idle
 	if state == "idle" and prev == "done" and rec.unread then
 		state = "done"
 	end
+	rec.source = src or rec.source or "probe"
 	local changed = state ~= prev
 		or kind ~= rec.kind
 		or st.msg ~= rec.msg
@@ -161,15 +198,15 @@ local function apply(rec, st)
 		end
 	end
 	if changed and state ~= prev then
-		rec.since = vim.uv.now()
+		rec.since = now_ms()
 		if state == "idle" then
 			rec.idle_at = rec.since
 		end
-		if state ~= "done" then
-			rec.unread = false
-		end
+		-- done always starts unread, whatever told us; ack is what clears it
+		rec.unread = state == "done"
 	end
 	emit("update", rec)
+	schedule_save()
 	if state == prev then
 		return
 	end
@@ -186,6 +223,109 @@ local function apply(rec, st)
 	end)
 end
 
+----------------------------------------------------------------------
+-- Journal: tasks and unread marks outlive the nvim process
+----------------------------------------------------------------------
+
+local restored, restored_loaded
+
+---@return string
+local function journal_file()
+	return M.journal_path or (vim.fn.stdpath("cache") .. "/ask-agent/journal.json")
+end
+
+---@param task table
+---@return table
+local function slim_task(task)
+	return {
+		text = task.text,
+		ts = task.ts,
+		status = task.status,
+		reply = task.reply,
+		correlation = task.correlation,
+		anchor = task.anchor,
+	}
+end
+
+local function save_journal()
+	if journal_timer then
+		journal_timer:stop()
+		journal_timer:close()
+		journal_timer = nil
+	end
+	if not M.persist then
+		return
+	end
+	local out = { version = 1, agents = {} }
+	for _, key in ipairs(order) do
+		local rec = agents[key]
+		if rec.tasks and #rec.tasks > 0 then
+			local tasks = {}
+			for i = 1, math.min(#rec.tasks, JOURNAL_KEEP) do
+				tasks[i] = slim_task(rec.tasks[i])
+			end
+			out.agents[key] = { backend = rec.backend, id = rec.id, unread = rec.unread, tasks = tasks }
+		end
+	end
+	local ok, encoded = pcall(vim.json.encode, out)
+	if not ok then
+		return
+	end
+	local file = journal_file()
+	pcall(vim.fn.mkdir, vim.fn.fnamemodify(file, ":h"), "p")
+	pcall(vim.fn.writefile, { encoded }, file)
+end
+
+---Write the journal once things settle; every dispatch/state change goes through here.
+function schedule_save()
+	if not M.persist then
+		return
+	end
+	if journal_timer then
+		return
+	end
+	journal_timer = vim.uv.new_timer()
+	journal_timer:start(JOURNAL_DEBOUNCE, 0, vim.schedule_wrap(save_journal))
+end
+
+---@return table<string, table>
+local function load_journal()
+	if not M.persist then
+		return {}
+	end
+	local ok, lines = pcall(vim.fn.readfile, journal_file())
+	if not ok or type(lines) ~= "table" or #lines == 0 then
+		return {}
+	end
+	local decoded, data = pcall(vim.json.decode, table.concat(lines, "\n"))
+	if not decoded or type(data) ~= "table" or type(data.agents) ~= "table" then
+		return {}
+	end
+	-- tasks older than a week are noise: an instance that comes back with the same
+	-- key (a reused pid) must not inherit someone else's history
+	local cutoff = M.now() - JOURNAL_TTL
+	for _, entry in pairs(data.agents) do
+		local tasks = {}
+		for _, task in ipairs(entry.tasks or {}) do
+			if type(task.ts) == "number" and task.ts > cutoff then
+				tasks[#tasks + 1] = task
+			end
+		end
+		entry.tasks = tasks
+	end
+	return data.agents
+end
+
+---Write the journal now (also called from VimLeavePre); tests use it to read it back.
+function M.flush()
+	save_journal()
+end
+
+---Re-read the journal, so an entry that was dismissed can be restored (tests, rare manual use).
+function M.reload_journal()
+	restored, restored_loaded = load_journal(), true
+end
+
 ---@param mod table
 ---@param t table
 ---@return table record
@@ -193,12 +333,66 @@ local function ensure(mod, t)
 	local key = key_of(mod.id, t.id)
 	local rec = agents[key]
 	if not rec then
-		rec = { key = key, backend = mod.id, id = tostring(t.id), state = "unknown", since = vim.uv.now() }
+		rec = { key = key, backend = mod.id, id = tostring(t.id), state = "unknown", since = now_ms() }
+		if not restored_loaded then
+			restored, restored_loaded = load_journal(), true
+		end
+		local old = restored[key]
+		if old then
+			rec.tasks = old.tasks
+			rec.unread = old.unread
+			restored[key] = nil
+		end
 		agents[key] = rec
 		table.insert(order, key)
 	end
 	rec.target = t
 	return rec
+end
+
+----------------------------------------------------------------------
+-- rex event stream: react in milliseconds, poll only as a fallback
+----------------------------------------------------------------------
+
+local watches = {}
+local refresh_pending = false
+
+local function schedule_refresh()
+	if refresh_pending then
+		return
+	end
+	refresh_pending = true
+	vim.defer_fn(function()
+		refresh_pending = false
+		M.refresh()
+	end, 80)
+end
+
+---@param sessions table<string, boolean>
+local function watch_sessions(sessions)
+	for session in pairs(sessions) do
+		if not watches[session] and rex.watch then
+			local ok = rex.watch(session, function(ev)
+				-- the event itself does not name the block, so drop the whole cache:
+				-- the next refresh re-reads only the blocks that have agents in them
+				if ev.type == "terminal.program_status_changed" or ev.type == "terminal.program_status_removed" then
+					if rex.invalidate then
+						rex.invalidate()
+					end
+					schedule_refresh()
+				end
+			end)
+			watches[session] = ok or nil
+		end
+	end
+	for session in pairs(watches) do
+		if not sessions[session] then
+			if rex.unwatch then
+				rex.unwatch(session)
+			end
+			watches[session] = nil
+		end
+	end
 end
 
 ---One polling pass over every registered backend. Cheap for a 2s timer: targets()
@@ -209,7 +403,7 @@ function M.refresh()
 		return
 	end
 	refreshing = true
-	local seen = {}
+	local seen, sessions = {}, {}
 	for _, info in ipairs(backends.list()) do
 		local mod = backends.get(info.id)
 		if mod and info.available then
@@ -224,16 +418,20 @@ function M.refresh()
 					progress = st.progress,
 					msg = st.msg or st.detail,
 					gone = not st.running,
-				})
+				}, "probe")
 				-- rex reports the real state for agents that speak OSC 7501; apply it when it arrives
 				if t.rex and not rec.rex_pending then
 					rec.rex_pending = true
+					if t.rex.session then
+						sessions[t.rex.session] = true
+					end
 					rex.query(t.rex, function(value)
 						rec.rex_pending = nil
 						if value and agents[rec.key] == rec then
 							apply(
 								rec,
-								{ state = value.state, kind = value.kind, progress = value.progress, msg = value.msg }
+								{ state = value.state, kind = value.kind, progress = value.progress, msg = value.msg },
+								"rex"
 							)
 						end
 					end)
@@ -241,7 +439,7 @@ function M.refresh()
 			end
 		end
 	end
-	local now = vim.uv.now()
+	local now = now_ms()
 	for _, key in ipairs(order) do
 		local rec = agents[key]
 		if not seen[key] and not rec.gone then
@@ -251,6 +449,7 @@ function M.refresh()
 		end
 	end
 	refreshing = false
+	watch_sessions(sessions)
 end
 
 ---Start the polling timer.
@@ -266,6 +465,12 @@ function M.stop()
 		timer:stop()
 		timer:close()
 		timer = nil
+	end
+	for session in pairs(watches) do
+		if rex.unwatch then
+			rex.unwatch(session)
+		end
+		watches[session] = nil
 	end
 end
 
@@ -332,9 +537,9 @@ function M.counts()
 	for _, rec in ipairs(M.all()) do
 		if not rec.gone then
 			out.total = out.total + 1
-			if rec.state == "done" and not rec.unread then
-				-- acknowledged: not worth a counter
-			elseif out[rec.state] ~= nil then
+			-- an acknowledged done is history, not something that needs you
+			local settled = rec.state == "done" and not rec.unread
+			if not settled and out[rec.state] ~= nil then
 				out[rec.state] = out[rec.state] + 1
 			end
 		end
@@ -368,7 +573,7 @@ end
 ---@param backend string
 ---@param id string
 ---@param text string
----@param opts { correlation?: table, anchor?: table }|nil
+---@param opts { correlation?: table, anchor?: table, reply?: boolean }|nil
 function M.dispatch(backend, id, text, opts)
 	local key = key_of(backend, id)
 	local rec = agents[key]
@@ -387,21 +592,88 @@ function M.dispatch(backend, id, text, opts)
 			return
 		end
 	end
-	local ts = vim.uv.now()
-	rec.dispatch = { text = text, ts = ts, correlation = opts and opts.correlation, anchor = opts and opts.anchor }
+	local ts = now_ms()
+	rec.dispatch = { ts = ts, correlation = opts and opts.correlation }
 	rec.tasks = rec.tasks or {}
 	table.insert(rec.tasks, 1, {
 		text = (text:gsub("\n.*", "")),
 		ts = ts,
 		status = "running",
-		correlation = rec.dispatch.correlation,
-		anchor = rec.dispatch.anchor,
+		reply = opts and opts.reply,
+		correlation = opts and opts.correlation,
+		anchor = opts and opts.anchor,
 	})
 	if #rec.tasks > TASK_KEEP then
 		rec.tasks[TASK_KEEP + 1] = nil
 	end
 	rec.unread = false
 	emit("update", rec)
+	schedule_save()
+end
+
+---Newest task handed to an instance: { text, ts, status, reply?, correlation, anchor, output? }.
+---@param key string
+---@return table|nil
+function M.task(key)
+	local rec = agents[key]
+	return rec and rec.tasks and rec.tasks[1] or nil
+end
+
+---Answer what an agent is blocked on, on the same instance (no picker, no queue).
+---@param key string
+---@param text string
+---@return boolean ok, string|nil err
+function M.reply(key, text)
+	local rec = agents[key]
+	if not rec then
+		return false, ("unknown agent %s"):format(tostring(key))
+	end
+	local mod, target = M.resolve(rec)
+	if not mod or not target then
+		return false, ("%s is not running"):format(M.name(rec))
+	end
+	if not M.sender then
+		return false, "no sender configured"
+	end
+	return M.sender(mod, target, text, { reply = true })
+end
+
+---Output of the newest turn, captured from the terminal on demand and cached on the task.
+---`cb(task|nil, err?)`; the task then carries `output`.
+---@param key string
+---@param cb fun(task: table|nil, err: string|nil)
+function M.result(key, cb)
+	local rec = agents[key]
+	if not rec then
+		return vim.schedule(function()
+			cb(nil, ("unknown agent %s"):format(tostring(key)))
+		end)
+	end
+	local task = rec.tasks and rec.tasks[1]
+	if not task then
+		return vim.schedule(function()
+			cb(nil, "nothing has been sent to this agent yet")
+		end)
+	end
+	if task.output then
+		return vim.schedule(function()
+			cb(task)
+		end)
+	end
+	local _, target = M.resolve(rec)
+	if not target then
+		return vim.schedule(function()
+			cb(nil, ("%s is not running"):format(M.name(rec)))
+		end)
+	end
+	jump.capture(target, function(text)
+		if not text or text == "" then
+			return cb(nil, "this agent has no capture adapter")
+		end
+		task.output = text
+		schedule_save()
+		cb(task)
+	end)
 end
 
 ---Mark a finished instance as seen (keeps the row, drops the unread mark).
@@ -414,6 +686,7 @@ function M.ack(key)
 	rec.unread = false
 	rec.notified = nil
 	emit("update", rec)
+	schedule_save()
 end
 
 ---Forget an instance entirely (a later refresh re-adds it if it is still running).
@@ -431,6 +704,7 @@ function M.dismiss(key)
 		end
 	end
 	emit("update", rec)
+	schedule_save()
 end
 
 return M

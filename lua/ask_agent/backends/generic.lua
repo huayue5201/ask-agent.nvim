@@ -99,10 +99,22 @@ function M.tmux(opts)
 		if pattern and cmd and cmd ~= "" and not cmd:find(pattern) then
 			return { running = false, detail = ("pane runs %s"):format(cmd) }
 		end
-		-- Busy is opt-in and never fatal: a hook that has not written anything yet just means "unknown".
+		-- Busy/state is opt-in and never fatal: a hook that has not written anything
+		-- yet just means "unknown". The hook may return `true, detail` (busy) or a
+		-- table with the richer OSC 7501 shape: { state, kind, progress, msg }.
 		if type(opts.busy) == "function" then
-			local okb, is_busy, why = pcall(opts.busy, target)
-			if okb and is_busy == true then
+			local okb, hook, why = pcall(opts.busy, target)
+			if okb and type(hook) == "table" and type(hook.state) == "string" then
+				return {
+					running = true,
+					state = hook.state,
+					kind = hook.kind,
+					progress = hook.progress,
+					msg = hook.msg or hook.detail,
+					detail = hook.detail,
+				}
+			end
+			if okb and hook == true then
 				return { running = true, busy = true, detail = why or "busy" }
 			end
 		end
@@ -209,6 +221,17 @@ function M.state_file(dir, opts)
 		local okj, data = pcall(vim.json.decode, table.concat(text, "\n"))
 		if not okj or type(data) ~= "table" then
 			return nil
+		end
+		-- `{"state":"blocked","kind":"permission","msg":"run the tests?"}` is the rich
+		-- form; `{"busy":true}` the minimal one. Both are written by agent hooks.
+		if type(data.state) == "string" then
+			return {
+				state = data.state,
+				kind = data.kind,
+				progress = data.progress,
+				msg = data.msg,
+				detail = data.detail,
+			}
 		end
 		if data.busy == true then
 			return true, data.detail or "busy (hook)"

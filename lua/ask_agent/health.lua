@@ -115,6 +115,12 @@ function M.check()
 	end
 	info(("instance names: %d"):format(names))
 
+	if state.persist then
+		info("journal: " .. (state.journal_path or (vim.fn.stdpath("cache") .. "/ask-agent/journal.json")))
+	else
+		info("journal: disabled (persist = false)")
+	end
+
 	local bridge = require("ask_agent.bridge")
 	if type(bridge.dir) == "function" then
 		local dir = bridge.dir()

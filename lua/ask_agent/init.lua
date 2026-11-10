@@ -570,6 +570,22 @@ local function choose_target(mod, cb)
 	show_list()
 end
 
+---One send that always records the dispatch: every path (ask, batch, reply, API) goes through it.
+---@param mod table backend
+---@param target table instance
+---@param text string
+---@param opts { correlation?: table, anchor?: table, reply?: boolean }|nil
+---@return boolean ok, string|nil err
+local function deliver_text(mod, target, text, opts)
+	local ok, send_err = mod.send(target, text)
+	if not ok then
+		return false, send_err
+	end
+	state.dispatch(mod.id, target.id, text, opts)
+	return true, nil
+end
+state.sender = deliver_text
+
 --- Send text directly to the current backend (for reuse by other commands/plugins; skips the floating window)
 ---@param text string
 ---@param opts { backend?: string, target?: string, correlation?: table, anchor?: table }|nil
@@ -580,12 +596,33 @@ function M.send(text, opts)
 	if not mod then
 		return false, err
 	end
-	local ok, send_err = mod.send(target, text)
+	return deliver_text(mod, target, text, { correlation = opts.correlation, anchor = opts.anchor })
+end
+
+---Answer what an agent is blocked on, on that same instance. No picker, no queue.
+---@param key string agent key from ask.agents() (e.g. "claude:12345")
+---@param text string
+---@return boolean ok, string? err
+function M.reply(key, text)
+	local ok, err = state.reply(key, text)
 	if not ok then
-		return false, send_err
+		vim.notify("[ask_agent] " .. tostring(err), vim.log.levels.WARN)
 	end
-	state.dispatch(mod.id, target.id, text, { correlation = opts.correlation, anchor = opts.anchor })
-	return true, nil
+	return ok, err
+end
+
+---The newest task handed to an agent: { text, ts, status, reply?, correlation, anchor, output? }.
+---@param key string
+---@return table|nil
+function M.task(key)
+	return state.task(key)
+end
+
+---Output of an agent's newest turn, captured from its terminal on demand (cached afterwards).
+---@param key string
+---@param cb fun(task: table|nil, err: string|nil)
+function M.result(key, cb)
+	state.result(key, cb)
 end
 
 ---Every observed agent instance, most attention-worthy first (blocked > done > error > working > idle).
@@ -634,7 +671,13 @@ end
 ---queued task or dismisses a dead agent, `C` shows recent output, `q` closes.
 ---@param opts { pos?: "left"|"right", width?: integer }|nil
 function M.dashboard(opts)
-	require("ask_agent.dashboard").open({ send = M.send, batch_send = M.batch_send, goto_anchor = M.goto_anchor }, opts)
+	require("ask_agent.dashboard").open({
+		send = M.send,
+		batch_send = M.batch_send,
+		goto_anchor = M.goto_anchor,
+		reply = M.reply,
+		result = M.result,
+	}, opts)
 end
 
 ---Call `cb(rec)` once the instance reaches `want` (`cb(nil)` on timeout).
@@ -704,12 +747,11 @@ function M.ask(opts)
 			),
 			on_submit = function(prompt)
 				local text = message.render(anchor, prompt)
-				local ok, send_err = mod.send(target, text)
+				local ok, send_err = deliver_text(mod, target, text, { anchor = anchor })
 				if not ok then
 					vim.notify(("[%s] %s"):format(mod.label, send_err), vim.log.levels.WARN)
 					return
 				end
-				state.dispatch(mod.id, target.id, text, { anchor = anchor })
 				local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
 				vim.notify(
 					("[%s] Sent → #%d %s (%s)"):format(mod.label, target.index or 0, name_of(target), where),
@@ -805,10 +847,9 @@ local function deliver(mod, target, entries)
 	for _, entry in ipairs(entries) do
 		local index = entry.index
 		local text = message.render(queue.sync(entry), entry.prompt)
-		local ok, send_err = mod.send(target, text)
+		local ok, send_err = deliver_text(mod, target, text, { anchor = entry.anchor })
 		if ok then
 			sent = sent + 1
-			state.dispatch(mod.id, target.id, text, { anchor = entry.anchor })
 			queue.remove(entry.id)
 		else
 			failed[#failed + 1] = { index = index, err = send_err }
@@ -1203,7 +1244,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, persist?: boolean|{ path?: string, enabled?: boolean } }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1225,9 +1266,23 @@ function M.setup(opts)
 	current = opts.default or "pi"
 	-- One poller for every backend; views subscribe instead of polling on their own
 	state.notify = opts.state_notify ~= false
+	-- Journal (tasks/unread marks survive a restart): true | false | { path, persist }
+	local persist = opts.persist
+	if type(persist) == "table" then
+		state.journal_path = persist.path
+		state.persist = persist.enabled ~= false
+	else
+		state.persist = persist ~= false
+	end
 	state.start(opts.state_interval or 2000)
 	local grp = vim.api.nvim_create_augroup("AskAgentState", { clear = true })
-	vim.api.nvim_create_autocmd("VimLeavePre", { group = grp, callback = state.stop })
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = grp,
+		callback = function()
+			state.flush()
+			state.stop()
+		end,
+	})
 
 	-- Bridge to the external agent (RPC socket); a bridge failure must never break setup
 	if opts.bridge ~= false then

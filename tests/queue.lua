@@ -18,6 +18,7 @@ local targets = { instance("a"), instance("b") }
 
 ask.setup({
 	bridge = false,
+	persist = false, -- the journal belongs to the user, not to this test
 	default = "fake",
 	extra = {
 		{
