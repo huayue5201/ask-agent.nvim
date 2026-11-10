@@ -337,6 +337,25 @@ end
 ---Dismiss a dead agent — but never while questions are still routed to it,
 ---or they would silently disappear from this view.
 ---@param rec table
+local function rename(rec)
+	local current = (state.name(rec):gsub(" ·%d+$", ""))
+	vim.ui.input({
+		prompt = ("Rename %s: "):format(current),
+		default = current,
+	}, function(name)
+		if name == nil then
+			return
+		end
+		if not state.rename(rec, name) then
+			vim.notify("[ask_agent] Could not write the name to the cache file", vim.log.levels.WARN)
+			return
+		end
+		render()
+		vim.notify(("[ask_agent] Renamed to %s"):format(state.name(rec)), vim.log.levels.INFO)
+	end)
+end
+
+---@param rec table
 local function dismiss(rec)
 	local queued = queued_by_agent()[rec.key]
 	if queued and #queued > 0 then
@@ -357,6 +376,7 @@ local HELP = {
 	{ "S", "Send every queued question routed to it" },
 	{ "a", "Acknowledge a done/blocked agent" },
 	{ "d", "Delete the queued task · dismiss a dead agent" },
+	{ "n", "Rename an agent (empty restores the directory name)" },
 	{ "<Tab>", "Fold or unfold the agent's tasks" },
 	{ "r", "Poll every agent now" },
 	{ "q", "Close the sidebar" },
@@ -493,6 +513,14 @@ local function attach(bufnr)
 		with("agent", function(node)
 			collapsed[node.rec.key] = not collapsed[node.rec.key] or nil
 			render()
+		end),
+		opts_buf
+	)
+	vim.keymap.set(
+		"n",
+		"n",
+		with("agent", function(node)
+			rename(node.rec)
 		end),
 		opts_buf
 	)

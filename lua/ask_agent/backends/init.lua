@@ -115,6 +115,7 @@ function M.candidates(mod, cwd, opts)
 	cwd = norm(cwd or vim.fn.getcwd())
 	local out = {}
 	local function add(t, stale)
+		t.backend = t.backend or mod.id
 		local tcwd = norm(t.cwd)
 		local tier = 3 -- a different project
 		if tcwd == cwd then

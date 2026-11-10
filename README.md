@@ -31,7 +31,7 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   one-line human-readable summary that travels with the question.
 - **Multiple instances, disambiguated** — when several agents run in the same project
   you get a picker. Every instance gets a stable color, so the same agent is the same
-  color in the list and in the map. Give instances names with `:AskAgentAlias`.
+  color in the list and in the map. Give instances names with `:AskAgentRename` (or `n` in the dashboard).
 - **Two pickers** — a **map** of your terminal split layout (pick the agent by the pane
   it lives in) and a plain **list** (works across tabs/windows). `<Tab>` flips between
   them. Every row shows the agent's state: `●` idle, `◐` working (the question is queued
@@ -102,7 +102,7 @@ vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 | `:AskAgentBackend [id]` | Switch/choose the default backend |
 | `:AskAgentPicker [map\|list]` | Choose the multi-candidate picker |
 | `:AskAgentTarget [id]` | Pin the target instance (`!` clears) |
-| `:AskAgentAlias` | Name an instance (`!` clears the name) |
+| `:AskAgentRename` | Name an instance (`!` clears the name) |
 | `:AskAgentDashboard` | Sidebar tree: agents + their queued/sent tasks (jump / send / flush / ack) |
 | `:AskAgentBatch` | Queue a question at the cursor instead of sending it now |
 | `:AskAgentBatchVisual` | Queue a question anchored to the selection |
@@ -123,7 +123,7 @@ vim.keymap.set({ "n", "v" }, "<leader>ab", function()
   require("ask_agent").batch_ask({ visual = vim.fn.mode() ~= "n" })
 end, { desc = "Ask agent: queue" })
 vim.keymap.set("n", "<leader>aB", "<cmd>AskAgentBatchSend<cr>", { desc = "Ask agent: send queue" })
-vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentAlias<cr>", { desc = "Ask agent: alias" })
+vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentRename<cr>", { desc = "Ask agent: rename" })
 ```
 
 In the **ask window**: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` is a newline.
@@ -459,10 +459,16 @@ usually a 30-line file.
 
 ## Instance names
 
-`:AskAgentAlias` attaches a name to an instance; the name is used in the
-list, in the ask window title and in the "sent" notification. Names are stored in
-`<cache>/ask-agent/aliases.json`, keyed by instance id and stamped with its start time,
-so a recycled pid never inherits an old name. `:AskAgentAlias!` clears a name.
+`:AskAgentRename` (or `n` in the dashboard) names an instance; the name is used
+in lists, the ask window title and the "sent" notification. Without a name the
+directory basename is shown instead of `pid 123`, then the agent's title/label.
+
+Names are stored in `<cache>/ask-agent/aliases.json` as a slot per backend +
+real directory, so they survive a restart: one name in a directory is inherited
+by the next instance, and once there are several they are shown as `name ·2`,
+`name ·3`. Only a slot bound to the same pid + start time is reused
+automatically; a new instance in a crowded directory starts unnamed instead of
+guessing. `:AskAgentRename!` clears the name and its slot.
 
 ## RPC bridge (live context for the agent)
 
@@ -636,6 +642,7 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `<CR>` | bring its window to the front | jump to the task's code anchor |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
+| `n` | rename (empty restores the directory name) | |
 | `<Tab>` | fold the agent's tasks | |
 | `?` | key help (a float; `q` closes it) | |
 | `r` / `q` | poll now / close | |

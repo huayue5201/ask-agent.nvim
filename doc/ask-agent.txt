@@ -93,8 +93,8 @@ Only the keys you pass change; everything else keeps its default. A top-level
                                                   *:AskAgentTarget*
 :AskAgentTarget [id]    Pin the target instance (skip matching); `!` clears.
 
-                                                  *:AskAgentAlias*
-:AskAgentAlias          Name an instance; names show up in lists, prompts and
+                                                  *:AskAgentRename*
+:AskAgentRename         Name an instance; names show up in lists, prompts and
                         notifications. `!` clears a name.
 
                                                   *:AskAgentDashboard*
@@ -156,7 +156,7 @@ vim.keymap.set({ "n", "v" }, "<leader>ab", function()
   require("ask_agent").batch_ask({ visual = vim.fn.mode() ~= "n" })
 end, { desc = "Ask agent: queue" })
 vim.keymap.set("n", "<leader>aB", "<cmd>AskAgentBatchSend<cr>", { desc = "Ask agent: send queue" })
-vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentAlias<cr>", { desc = "Ask agent: alias" })
+vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentRename<cr>", { desc = "Ask agent: rename" })
 <
 
 In the ask window: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` inserts a newline.
@@ -306,9 +306,13 @@ an optional name; see |ask-agent-aliases|.
 ==============================================================================
 7. INSTANCE NAMES                                   *ask-agent-aliases*
 
-Names are stored in a JSON file (default under `stdpath("cache")`), keyed by
-instance id and stamped with its start time, so a recycled pid never inherits an
-old name. Set or clear them with |:AskAgentAlias|.
+Without a name the directory basename is shown instead of `pid 123`, then the
+agent's title or non-pid label. Names live in a JSON file (default under
+`stdpath("cache")`). Each backend + real directory keeps slots: one name is
+inherited by the next instance in that directory; with several names the slots
+are shown as `name ·2`, `name ·3` and only a slot bound to the same pid + start
+time is reused. A new instance in a crowded directory starts unnamed. Set or
+clear them with |:AskAgentRename|, or press `n` in the dashboard.
 
 ==============================================================================
 8. LAYOUT ADAPTERS                                   *ask-agent-layouts*

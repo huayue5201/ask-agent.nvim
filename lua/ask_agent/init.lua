@@ -90,7 +90,7 @@ end
 ---@param t table|nil
 ---@return string
 local function name_of(t)
-	return aliases.get(t) or (t and (t.label or t.id)) or "?"
+	return aliases.get(t, t and t.backend) or aliases.default_name(t)
 end
 
 --- Liveness of a candidate, probed once per picker (an instance can die between listing and
@@ -838,7 +838,13 @@ function M.targets(id)
 		return {}
 	end
 	local ok, list = pcall(mod.targets)
-	return ok and list or {}
+	if not ok or type(list) ~= "table" then
+		return {}
+	end
+	for _, t in ipairs(list) do
+		t.backend = t.backend or mod.id
+	end
+	return list
 end
 
 --- Manually set/clear the target (:AskAgentTarget / :AskAgentTarget!). Takes precedence over cwd matching
@@ -868,9 +874,13 @@ end
 ---@return boolean ok
 function M.alias(target, name)
 	if type(target) ~= "table" then
-		target = { id = target }
+		local mod, found = resolve(current, target)
+		target = found or { id = tostring(target) }
+		if mod then
+			target.backend = mod.id
+		end
 	end
-	return aliases.set(target, name or "")
+	return aliases.set(target, target.backend, name or "")
 end
 
 --- Read the alias
@@ -878,9 +888,13 @@ end
 ---@return string|nil
 function M.alias_of(target)
 	if type(target) ~= "table" then
-		target = { id = target }
+		local mod, found = resolve(current, target)
+		target = found or { id = tostring(target) }
+		if mod then
+			target.backend = mod.id
+		end
 	end
-	return aliases.get(target)
+	return aliases.get(target, target.backend)
 end
 
 --- Picker for multiple candidates, read/write: "map" (layout split map, default) or "list" (vim.ui.select)

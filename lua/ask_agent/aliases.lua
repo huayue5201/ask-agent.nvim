@@ -1,22 +1,34 @@
 -- lua/ask_agent/aliases.lua
----@brief Give agent instances a human alias: "this pi is the api refactor", so it
----is instantly recognisable in the picker next time.
+---@brief Give agent instances a human name: "this pi is the api refactor".
 --
--- With only pid + cwd, two pi instances in the same directory are impossible to
--- tell apart; the alias is the only reliable name. Aliases live in
--- `<cache>/ask-agent/aliases.json` (override with
--- `require("ask_agent.aliases").setup({ file = "/path/to/aliases.json" })`) and
--- are keyed by instance id (pid). The registration time `ts` is stored alongside:
--- pid values get reused, so when `ts` no longer matches it is a different
--- instance and the old alias is ignored.
+-- A pid is a poor identity: it changes on every restart and two pi instances in
+-- the same directory look the same. Names are therefore stored twice:
+--
+--   exact  pid + start time, so the current instance keeps its name immediately
+--   group  backend + real cwd + slot, so the name survives a restart
+--
+-- A group with a single name hands it to the next instance in that directory;
+-- once there are several names the slots are shown as `name ·2`, `name ·3` and
+-- an instance only inherits a name that was bound to its own pid. Renaming an
+-- unbound instance claims the first free slot. This never guesses which
+-- conversation came back — it only remembers which name belongs to which slot.
+--
+-- The file lives in `<cache>/ask-agent/aliases.json` (override with
+-- `require("ask_agent.aliases").setup({ file = "/path/to/aliases.json" })`).
 
 local M = {}
 
 local fn = vim.fn
+local uv = vim.uv
 
 local FILE = fn.stdpath("cache") .. "/ask-agent/aliases.json"
 
----@type table<string, { name: string, ts: string, cwd: string|nil }>|nil
+---@class AskAgentAliasStore
+---@field version integer
+---@field exact table<string, { name: string, ts: string, cwd: string|nil, backend: string|nil }>
+---@field groups table<string, table<integer, { name: string, id: string, ts: string }>>
+
+---@type AskAgentAliasStore|nil
 local cache
 
 ---Override the aliases file path.
@@ -35,22 +47,51 @@ function M.file()
 	return FILE
 end
 
-local function path()
-	return FILE
+---@return AskAgentAliasStore
+local function blank()
+	return { version = 2, exact = {}, groups = {} }
 end
 
+---@param rec table
+---@return boolean
+local function valid(rec)
+	return type(rec) == "table" and type(rec.name) == "string" and rec.name ~= ""
+end
+
+---Read both the current format and the old flat `pid -> alias` file.
+---@return AskAgentAliasStore
 local function load()
 	if cache then
 		return cache
 	end
-	cache = {}
-	local file = path()
+	cache = blank()
+	local file = M.file()
 	if fn.filereadable(file) == 1 then
 		local ok, data = pcall(vim.json.decode, table.concat(fn.readfile(file), "\n"))
 		if ok and type(data) == "table" then
-			for id, rec in pairs(data) do
-				if type(rec) == "table" and type(rec.name) == "string" then
-					cache[tostring(id)] = rec
+			if data.version == 2 and type(data.exact) == "table" and type(data.groups) == "table" then
+				for id, rec in pairs(data.exact) do
+					if valid(rec) then
+						cache.exact[tostring(id)] = rec
+					end
+				end
+				for group, slots in pairs(data.groups) do
+					if type(slots) == "table" then
+						local clean = {}
+						for slot, rec in pairs(slots) do
+							if tonumber(slot) and valid(rec) then
+								clean[tonumber(slot)] = rec
+							end
+						end
+						cache.groups[tostring(group)] = clean
+					end
+				end
+			else
+				-- v1 stored one flat map keyed by pid; keep those names exact.
+				for id, rec in pairs(data) do
+					if valid(rec) then
+						cache.exact[tostring(id)] = rec
+					end
 				end
 			end
 		end
@@ -58,14 +99,14 @@ local function load()
 	return cache
 end
 
+---@return boolean
 local function save()
 	local ok, encoded = pcall(vim.json.encode, load())
 	if not ok then
 		return false
 	end
-	local file = path()
-	local dir = fn.fnamemodify(file, ":h")
-	pcall(fn.mkdir, dir, "p")
+	local file = M.file()
+	pcall(fn.mkdir, fn.fnamemodify(file, ":h"), "p")
 	local fd = io.open(file, "w")
 	if not fd then
 		return false
@@ -75,77 +116,209 @@ local function save()
 	return true
 end
 
----Address of an instance (its pid); instances without an id cannot be aliased.
+---@param t table|nil
+---@param backend string|nil
+---@return string|nil
+local function backend_of(t, backend)
+	return backend or (type(t) == "table" and t.backend) or nil
+end
+
 ---@param t table|nil
 ---@return string|nil
-local function key_of(t)
+local function id_of(t)
 	if type(t) ~= "table" or t.id == nil then
 		return nil
 	end
 	return tostring(t.id)
 end
 
----Look up an alias. Returns nil when `ts` does not match (pid was reused).
----@param t table|nil target
+---@param t table|nil
+---@param backend string|nil
 ---@return string|nil
-function M.get(t)
-	local id = key_of(t)
+local function exact_key(t, backend)
+	local id = id_of(t)
 	if not id then
 		return nil
 	end
-	local rec = load()[id]
-	if not rec then
-		return nil
-	end
-	if rec.ts ~= nil and t.ts ~= nil and rec.ts ~= tostring(t.ts) then
-		return nil
-	end
-	return rec.name
+	local b = backend_of(t, backend)
+	return b and (b .. "|" .. id) or id
 end
 
----Set/rename an alias (an empty name clears it).
+---@param dir string|nil
+---@return string|nil
+local function norm_dir(dir)
+	if type(dir) ~= "string" or dir == "" then
+		return nil
+	end
+	return uv.fs_realpath(dir) or dir:gsub("/+$", "")
+end
+
+---@param t table|nil
+---@param backend string|nil
+---@return string|nil
+local function group_key(t, backend)
+	local dir = norm_dir(type(t) == "table" and t.cwd or nil)
+	if not dir then
+		return nil
+	end
+	local b = backend_of(t, backend)
+	return b and (b .. "|" .. dir) or dir
+end
+
+---@param t table|nil
+---@return string
+local function ts_of(t)
+	return type(t) == "table" and t.ts ~= nil and tostring(t.ts) or ""
+end
+
+---@param t table|nil
+---@return string|nil
+local function bound_slot(t, backend)
+	local group = group_key(t, backend)
+	local id = id_of(t)
+	if not group or not id then
+		return nil
+	end
+	for slot, rec in pairs(load().groups[group] or {}) do
+		if rec.id == id and rec.ts == ts_of(t) then
+			return slot
+		end
+	end
+	return nil
+end
+
+---@param slots table<integer, table>|nil
+---@return integer
+local function free_slot(slots)
+	local n = 1
+	while slots and slots[n] do
+		n = n + 1
+	end
+	return n
+end
+
+---Name for the list: a single stored slot is inherited by the next instance in
+---the same directory; with several slots only the slot this pid was bound to is
+---used. The slot number is shown only when it is needed to disambiguate.
+---@param t table|nil target
+---@param backend string|nil
+---@return string|nil
+function M.get(t, backend)
+	local slot = bound_slot(t, backend)
+	local group = group_key(t, backend)
+	local slots = group and load().groups[group] or {}
+	local count = vim.tbl_count(slots)
+	local key = exact_key(t, backend)
+	if key then
+		local rec = load().exact[key] or load().exact[id_of(t) or ""]
+		if rec and (rec.ts == "" or ts_of(t) == "" or rec.ts == ts_of(t)) then
+			return count > 1 and slot and slot > 1 and (rec.name .. " ·" .. slot) or rec.name
+		end
+	end
+	if not group then
+		return nil
+	end
+	if slot then
+		local rec = slots[slot]
+		return count > 1 and slot > 1 and (rec.name .. " ·" .. slot) or rec.name
+	end
+	if count == 1 then
+		for _, rec in pairs(slots) do
+			return rec.name
+		end
+	end
+	return nil
+end
+
+---Bind a name to this instance and to its directory slot (an empty name clears it).
 ---@param t table target
+---@param backend string|nil
 ---@param name string
 ---@return boolean ok
-function M.set(t, name)
-	local id = key_of(t)
+function M.set(t, backend, name)
+	local id = id_of(t)
 	if not id then
 		return false
 	end
 	name = vim.trim(tostring(name or ""))
 	if name == "" then
-		return M.clear(t)
+		return M.clear(t, backend)
 	end
-	load()[id] = { name = name, ts = t.ts ~= nil and tostring(t.ts) or "", cwd = t.cwd }
+	local store = load()
+	local key = exact_key(t, backend)
+	if key then
+		store.exact[key] = { name = name, ts = ts_of(t), cwd = t.cwd, backend = backend_of(t, backend) }
+	end
+	local group = group_key(t, backend)
+	if group then
+		local slots = store.groups[group] or {}
+		store.groups[group] = slots
+		local slot = bound_slot(t, backend) or free_slot(slots)
+		slots[slot] = { name = name, id = id, ts = ts_of(t) }
+	end
 	return save()
 end
 
----Remove an alias.
+---Remove this instance's name and the slot it occupies.
 ---@param t table target
+---@param backend string|nil
 ---@return boolean ok
-function M.clear(t)
-	local id = key_of(t)
-	if not id then
-		return false
+function M.clear(t, backend)
+	local store = load()
+	local key = exact_key(t, backend)
+	if key then
+		store.exact[key] = nil
 	end
-	load()[id] = nil
+	local id = id_of(t)
+	if id then
+		store.exact[id] = nil
+	end
+	local slot = bound_slot(t, backend)
+	local group = group_key(t, backend)
+	if slot and group then
+		store.groups[group][slot] = nil
+	end
 	return save()
 end
 
----@return table<string, table>
+---A readable name when nothing was stored: the directory, not the pid.
+---@param t table|nil
+---@return string
+function M.default_name(t)
+	t = type(t) == "table" and t or {}
+	if type(t.title) == "string" and t.title ~= "" then
+		return t.title
+	end
+	-- pi calls every target "pid 1234"; that is the number users cannot use.
+	if type(t.label) == "string" and t.label ~= "" and not t.label:match("^pid ") then
+		return t.label
+	end
+	local dir = norm_dir(t.cwd)
+	if dir then
+		local base = fn.fnamemodify(dir, ":t")
+		if base ~= "" and base ~= "/" then
+			return base
+		end
+	end
+	return t.label and tostring(t.label) or tostring(t.id or "?")
+end
+
+---@return table
 function M.all()
 	return vim.deepcopy(load())
 end
 
----Drop records left behind by instances that no longer exist.
----@param live table<string, true> ids of instances still alive
+---Drop exact names for instances that no longer exist. Group slots are kept:
+---they are the names that must survive a restart.
+---@param live table<string, true> instance ids still alive
 ---@return integer removed
 function M.prune(live)
-	local data = load()
+	local store = load()
 	local removed = 0
-	for id in pairs(data) do
+	for key, rec in pairs(store.exact) do
+		local id = tostring(key):match("|([^|]+)$") or tostring(key)
 		if not live[id] then
-			data[id] = nil
+			store.exact[key] = nil
 			removed = removed + 1
 		end
 	end

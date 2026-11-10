@@ -148,7 +148,7 @@ function M.install(deps)
 		end)
 	end, { nargs = "?", bang = true, desc = "Ask agent: pin or clear the target used for sending" })
 
-	vim.api.nvim_create_user_command("AskAgentAlias", function(args)
+	vim.api.nvim_create_user_command("AskAgentRename", function(args)
 		local items = api.targets()
 		if #items == 0 then
 			vim.notify("[ask_agent] Current backend has no available targets", vim.log.levels.WARN)
@@ -158,10 +158,10 @@ function M.install(deps)
 			it.index = i
 		end
 		vim.ui.select(items, {
-			prompt = args.bang and "Clear the alias of which instance"
-				or "Give which instance an alias (:AskAgentAlias! clears)",
+			prompt = args.bang and "Clear the name of which instance"
+				or "Rename which instance (:AskAgentRename! clears)",
 			format_item = function(item)
-				local alias = deps.aliases.get(item)
+				local alias = deps.aliases.get(item, deps.current())
 				return ("#%d %s%s%s  %s"):format(
 					item.index or 0,
 					deps.icon_prefix(deps.backends.get(deps.current())),
@@ -175,22 +175,22 @@ function M.install(deps)
 				return
 			end
 			if args.bang then
-				deps.aliases.clear(item)
+				deps.aliases.clear(item, deps.current())
 				vim.notify(("[ask_agent] Cleared alias for #%d"):format(item.index or 0), vim.log.levels.INFO)
 				return
 			end
 			vim.ui.input({
 				prompt = ("#%d name (empty = clear): "):format(item.index or 0),
-				default = deps.aliases.get(item) or "",
+				default = deps.aliases.get(item, deps.current()) or "",
 			}, function(name)
 				if name == nil then
 					return
 				end
-				if not deps.aliases.set(item, name) then
+				if not deps.aliases.set(item, deps.current(), name) then
 					vim.notify("[ask_agent] Could not write the alias to the cache file", vim.log.levels.WARN)
 					return
 				end
-				local now = deps.aliases.get(item)
+				local now = deps.aliases.get(item, deps.current())
 				vim.notify(
 					now and ("[ask_agent] #%d is now called %s"):format(item.index or 0, now)
 						or ("[ask_agent] Alias for #%d cleared"):format(item.index or 0),

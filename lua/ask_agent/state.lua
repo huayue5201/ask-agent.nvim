@@ -100,7 +100,18 @@ end
 ---@param rec table
 ---@return string
 function M.name(rec)
-	return aliases.get(rec.target) or (rec.target and (rec.target.label or rec.target.id)) or rec.id
+	return aliases.get(rec.target, rec.backend) or aliases.default_name(rec.target or { id = rec.id })
+end
+
+---Rename an instance; it also claims a directory slot so the name survives a restart.
+---@param rec table
+---@param name string|nil empty clears
+---@return boolean ok
+function M.rename(rec, name)
+	if not rec or not rec.target then
+		return false
+	end
+	return aliases.set(rec.target, rec.backend, name or "")
 end
 
 ---@param event string

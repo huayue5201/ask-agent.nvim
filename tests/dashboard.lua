@@ -7,6 +7,10 @@ local state = require("ask_agent.state")
 local queue = require("ask_agent.queue")
 local store = require("ask_agent.jump")
 local dashboard = require("ask_agent.dashboard")
+local aliases = require("ask_agent.aliases")
+
+aliases.setup({ file = "/tmp/ask-agent-dashboard-aliases.json" })
+vim.fn.delete("/tmp/ask-agent-dashboard-aliases.json")
 
 state.notify = false
 state.persist = false -- never read or write the user's journal
@@ -66,6 +70,19 @@ assert(lines[1]:match("working"), "agent state on the row: " .. lines[1])
 assert(lines[2]:match("sent question") and lines[2]:match("running"), "running task first: " .. lines[2])
 assert(lines[3]:match("queued question") and lines[3]:match("queued"), "queued task: " .. lines[3])
 assert(vim.wo[vim.api.nvim_get_current_win()].winfixwidth, "sidebar keeps its width")
+
+-- n renames the agent on the cursor row; the name is what lists show from now on
+local real_input = vim.ui.input
+vim.ui.input = function(_, cb)
+	cb("api-worker")
+end
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_feedkeys("n", "x", false)
+vim.wait(30)
+vim.ui.input = real_input
+assert(state.name(state.get("fake:a")) == "api-worker", "the sidebar renamed the agent")
+assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("api%-worker"), "the row redrew")
+vim.fn.delete("/tmp/ask-agent-dashboard-aliases.json")
 
 -- a narrow window truncates instead of overflowing
 vim.api.nvim_win_set_width(0, 24)
@@ -192,7 +209,7 @@ end, vim.api.nvim_tabpage_list_wins(0))
 assert(#floats == 1, "help float is open")
 local help_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(floats[1]), 0, -1, false)
 assert(help_lines[1]:match("Show these keys"), "help lists the keys: " .. help_lines[1])
-assert(#help_lines == 9, "every key has a row")
+assert(#help_lines == 10, "every key has a row")
 vim.api.nvim_feedkeys("q", "x", false)
 vim.wait(30)
 assert(#vim.tbl_filter(function(w)

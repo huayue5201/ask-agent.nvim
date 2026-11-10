@@ -38,7 +38,7 @@ local want = {
 	"AskAgentBackend",
 	"AskAgentPicker",
 	"AskAgentTarget",
-	"AskAgentAlias",
+	"AskAgentRename",
 }
 for _, name in ipairs(want) do
 	assert(vim.fn.exists(":" .. name) == 2, "missing command :" .. name)
