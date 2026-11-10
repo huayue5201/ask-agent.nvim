@@ -498,29 +498,12 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		return false
 	end
 
-	-- Agents may run in any Rex window of the session, not just the one nvim
-	-- lives in. Collect them all and stack their layouts into a single map;
-	-- drawing only nvim's window silently dropped every other window.
+	-- The map is a picture of the window nvim lives in: a letter's position only
+	-- means something inside that split layout. Agents in other Rex windows have
+	-- no position on this canvas, so they are left out of `items` (the list is
+	-- the picker for those, reachable through <Tab>).
 	local map = require("ask_agent.map")
-	local windows
-	if type(layout.windows) == "function" then
-		local ok, ws = pcall(layout.windows)
-		if ok and type(ws) == "table" and #ws > 0 then
-			windows = ws
-		end
-	end
-	if not windows then
-		windows = { { panes = layout.panes(window), current = true } }
-	end
-	-- Equal bands get unusably thin beyond four windows; keep the most relevant.
-	if #windows > 4 then
-		local keep = {}
-		for i = 1, 4 do
-			keep[i] = windows[i]
-		end
-		windows = keep
-	end
-	local panes = map.stack(windows)
+	local panes = layout.panes(window)
 	if #panes == 0 then
 		return false
 	end
@@ -530,15 +513,14 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		in_window[pane.id] = true
 	end
 
-	local items, located, animate = {}, 0, false
+	local items, animate = {}, false
 	for i, c in ipairs(cands) do
-		-- The map cannot grey a cell out, so exited instances are list-only
-		if not c.stale then
+		-- The map cannot grey a cell out, so exited instances are list-only.
+		-- Candidates outside this window's panes are list-only too: they have
+		-- nowhere to be drawn, and cross-window letters would only confuse.
+		local pane_id = (not c.stale) and layout.match(c.target) or nil
+		if not c.stale and pane_id and in_window[pane_id] then
 			local t = c.target
-			local pane_id = layout.match(t)
-			if pane_id and in_window[pane_id] then
-				located = located + 1
-			end
 			local st = candidate_status(mod, c)
 			local busy = st.running and (st.busy == true or st.state == "working")
 			if busy then
@@ -565,9 +547,9 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 			})
 		end
 	end
-	-- The map is the primary picker: one locatable pane is enough. Candidates
-	-- outside the layout stay reachable through <Tab> (the list has all of them).
-	if located < 1 then
+	-- Nothing in this window: there is no cell to draw, so open the list, which
+	-- is the only picker that reaches agents in other windows.
+	if #items == 0 then
 		return false
 	end
 

@@ -3,24 +3,14 @@ vim.opt.runtimepath:prepend(".")
 
 local map = require("ask_agent.map")
 
--- Several Rex windows are stacked into one canvas, each in its own band.
+-- The map only draws the current window's panes (agents in other Rex windows
+-- have no position here; they are chosen from the list).
 local W, H = map.size()
-local windows = {
-	{ panes = { { id = "a", rect = { 0, 0, 0.5, 1 }, kind = "tiled" } } },
-	{
-		panes = {
-			{ id = "b", rect = { 0, 0, 0.5, 1 }, kind = "tiled" },
-			{ id = "c", rect = { 0.5, 0, 0.5, 1 }, kind = "tiled" },
-		},
-	},
+local panes = {
+	{ id = "a", rect = { 0, 0, 0.5, 1 }, kind = "tiled" },
+	{ id = "b", rect = { 0.5, 0, 0.5, 0.5 }, kind = "tiled" },
+	{ id = "c", rect = { 0.5, 0.5, 0.5, 0.5 }, kind = "tiled" },
 }
-local panes = map.stack(windows)
-assert(#panes == 3, "all panes survive stacking")
-assert(
-	panes[1].rect[2] == 0 and panes[2].rect[2] > 0.2 and panes[2].rect[2] < 0.8,
-	"second window is in the lower band"
-)
-assert(panes[1].rect[4] <= 1 and panes[2].rect[4] <= 1, "bands stay inside the canvas")
 
 local items = {}
 for i, p in ipairs(panes) do
@@ -35,7 +25,7 @@ assert(#lines == H, "map fills its height")
 local text = table.concat(lines, "\n")
 assert(
 	text:find("a", 1, true) and text:find("b", 1, true) and text:find("c", 1, true),
-	"every window's candidate is drawn"
+	"every pane of the current window is drawn"
 )
 
 -- Palette: nvim_get_hl returns integers, so derive #rrggbb before blending.

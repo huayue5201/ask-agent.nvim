@@ -33,8 +33,9 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   you get a picker. Every instance gets a stable color, so the same agent is the same
   color in the list and in the map. Give instances names with `:AskAgentRename` (or `n` in the dashboard).
 - **Two pickers** — a **map** of your terminal split layout (pick the agent by the pane
-  it lives in) and a plain **list** (works across tabs/windows). `<Tab>` flips between
-  them. Every row shows the agent's state: `●` idle, `◐` working (the question is queued
+  it lives in; it only shows agents of the window nvim lives in) and a plain **list**
+  (works across tabs/windows — use it for agents outside the current window). `<Tab>`
+  flips between them. Every row shows the agent's state: `●` idle, `◐` working (the question is queued
   behind the running task, same as typing into pi while it works), `⚠` waiting for you,
   `✓` finished, `✗` failed, `○` not running (process gone, socket missing, pane fell
   back to the shell). `show_stale = false` hides the exited ones.
@@ -417,10 +418,11 @@ Bundled backends:
 ## The map picker
 
 When a layout adapter says which terminal pane an agent lives in, `ask-agent.nvim` draws
-your split layout as a small map and puts a letter in each pane that hosts an agent. Every
-window of the session is stacked into the map (top to bottom, your own window first), so an
-agent running in another Rex window is never dropped. Zoom does not collapse the map: it always uses the
-full split tree, so an agent in a zoomed-away pane still gets a cell. Panes covered by a floating window are shown but never get the letter — the
+your split layout as a small map and puts a letter in each pane that hosts an agent. The map
+covers the window nvim lives in and nothing else: its whole point is that a cell's position
+mirrors the real pane position, which stops meaning anything once other windows (tabs) are
+mixed in. Agents in other windows are chosen from the list (`<Tab>`). Zoom does not collapse
+the map: it always uses the full split tree, so an agent in a zoomed-away pane still gets a cell. Panes covered by a floating window are shown but never get the letter — the
 label moves to a visible cell of that pane instead, so the map never paints over
 whatever is floating on top.
 

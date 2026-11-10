@@ -531,41 +531,11 @@ end
 ----------------------------------------------------------------------
 
 --- Size of the map canvas, in cells.
---
--- Shared with callers that stack several layouts into one map: they need the
--- exact height to split it into bands before handing panes to `select`.
 ---@return integer W, integer H
 function M.size()
 	local W = math.min(math.max(math.floor(vim.o.columns * 0.25 + 0.5), 12), 32)
 	local H = math.min(math.max(math.floor(vim.o.lines * 0.20 + 0.5), 3), 9)
 	return W, H
-end
-
---- Stack several windows into one pane list.
---
--- Every window gets an equal horizontal band of the map (top to bottom) and its
--- normalised pane rectangles are rescaled into that band. Pane ids are unique
--- block ids, so labels, hit-testing and selection keep working unchanged.
----@param windows table[] { panes: table[] }[]
----@return table[]
-function M.stack(windows)
-	local _, H = M.size()
-	local n = #windows
-	local band = H / n
-	local panes = {}
-	for gi, w in ipairs(windows) do
-		local off = (gi - 1) * band
-		for _, p in ipairs(w.panes or {}) do
-			local r = p.rect
-			panes[#panes + 1] = {
-				id = p.id,
-				kind = p.kind,
-				block_id = p.block_id,
-				rect = { r[1], (off + r[2] * band) / H, r[3], (r[4] * band) / H },
-			}
-		end
-	end
-	return panes
 end
 
 --- Open the map picker
@@ -575,6 +545,8 @@ function M.select(opts)
 	local items = opts.items or {}
 	define_hl()
 
+	-- Letters are assigned only to candidates this canvas can show: the map is
+	-- current-window-only, and agents elsewhere are chosen from the list (<Tab>).
 	local by_pane = {}
 	for i, it in ipairs(items) do
 		it.letter = LETTERS[i]
@@ -586,7 +558,8 @@ function M.select(opts)
 		end
 	end
 
-	-- Only panes in this window are visible; other candidates can still be reached by letter
+	-- Every item here has a pane on this canvas (callers filter to the current
+	-- window), so a letter always points at a visible cell.
 	local located = {}
 	for _, it in ipairs(items) do
 		if it.pane_id and by_pane[it.pane_id] == it then

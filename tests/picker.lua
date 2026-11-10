@@ -56,9 +56,6 @@ map.select = function(opts)
 	-- choose the only cell, exactly like <CR> in the map
 	opts.on_choose(opts.items[1])
 end
-map.stack = function(windows)
-	return windows[1].panes
-end
 
 local entry = queue.add({ buf = vim.api.nvim_get_current_buf(), line = 1, col = 1, path = "x.lua" }, "hello")
 assert(ask.batch_send({ ids = tostring(entry.id) }))
