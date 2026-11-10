@@ -464,6 +464,44 @@ end
 -- Picker
 ----------------------------------------------------------------------
 
+--- Size of the map canvas, in cells.
+--
+-- Shared with callers that stack several layouts into one map: they need the
+-- exact height to split it into bands before handing panes to `select`.
+---@return integer W, integer H
+function M.size()
+	local W = math.min(math.max(math.floor(vim.o.columns * 0.25 + 0.5), 12), 32)
+	local H = math.min(math.max(math.floor(vim.o.lines * 0.20 + 0.5), 3), 9)
+	return W, H
+end
+
+--- Stack several windows into one pane list.
+--
+-- Every window gets an equal horizontal band of the map (top to bottom) and its
+-- normalised pane rectangles are rescaled into that band. Pane ids are unique
+-- block ids, so labels, hit-testing and selection keep working unchanged.
+---@param windows table[] { panes: table[] }[]
+---@return table[]
+function M.stack(windows)
+	local _, H = M.size()
+	local n = #windows
+	local band = H / n
+	local panes = {}
+	for gi, w in ipairs(windows) do
+		local off = (gi - 1) * band
+		for _, p in ipairs(w.panes or {}) do
+			local r = p.rect
+			panes[#panes + 1] = {
+				id = p.id,
+				kind = p.kind,
+				block_id = p.block_id,
+				rect = { r[1], (off + r[2] * band) / H, r[3], (r[4] * band) / H },
+			}
+		end
+	end
+	return panes
+end
+
 --- Open the map picker
 ---@param opts { panes: table[], items: table[], cursor_pane?: string, on_choose: fun(item: table|nil), on_switch?: fun() }
 function M.select(opts)
@@ -496,8 +534,7 @@ function M.select(opts)
 	end
 
 	-- Only one letter is needed, so make a small hint map: about a quarter screen; anything larger is empty
-	local W = math.min(math.max(math.floor(vim.o.columns * 0.25 + 0.5), 12), 32)
-	local H = math.min(math.max(math.floor(vim.o.lines * 0.20 + 0.5), 3), 9)
+	local W, H = M.size()
 
 	-- The message area (above cmdheight) has a higher zindex than floating windows, so leftover messages can cover the map,
 	-- showing up as a vertical line or garbled characters in the middle. Clear the message area before opening the window.

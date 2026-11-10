@@ -425,7 +425,30 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 	if not window then
 		return false
 	end
-	local panes = layout.panes(window)
+
+	-- Agents may run in any Rex window of the session, not just the one nvim
+	-- lives in. Collect them all and stack their layouts into a single map;
+	-- drawing only nvim's window silently dropped every other window.
+	local map = require("ask_agent.map")
+	local windows
+	if type(layout.windows) == "function" then
+		local ok, ws = pcall(layout.windows)
+		if ok and type(ws) == "table" and #ws > 0 then
+			windows = ws
+		end
+	end
+	if not windows then
+		windows = { { panes = layout.panes(window), current = true } }
+	end
+	-- Equal bands get unusably thin beyond four windows; keep the most relevant.
+	if #windows > 4 then
+		local keep = {}
+		for i = 1, 4 do
+			keep[i] = windows[i]
+		end
+		windows = keep
+	end
+	local panes = map.stack(windows)
 	if #panes == 0 then
 		return false
 	end
@@ -470,7 +493,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		return false
 	end
 
-	require("ask_agent.map").select({
+	map.select({
 		tick = animate and tick or nil,
 		panes = panes,
 		labels = type(layout.labels) == "function" and layout.labels(data) or {},

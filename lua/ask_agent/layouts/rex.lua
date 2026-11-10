@@ -137,6 +137,75 @@ function M.cursor()
 	return M.block()
 end
 
+---Panes that are actually visible in a window.
+--
+-- Rex zoom (`rex zoom`) only changes what is drawn: the window still reports its
+-- full split tree, so painting that tree would show panes the user cannot see and
+-- hide the single pane that covers the window. When a block is zoomed, return it
+-- as the whole window instead.
+---@param window table
+---@return table[]
+function M.visible_panes(window)
+	local panes = M.panes(window)
+	local zoomed = window and window.zoomed_block_id
+	if zoomed then
+		for _, p in ipairs(panes) do
+			if p.id == zoomed then
+				return { { id = p.id, block_id = p.block_id, rect = { 0, 0, 1, 1 }, kind = "tiled" } }
+			end
+		end
+	end
+	return panes
+end
+
+---Every window of a session, in map order: the window nvim lives in first, then
+---the active window, then the rest. `panes` already accounts for zoom.
+--
+-- The session can have several windows (each with its own split tree), and agents
+-- may live in any of them; drawing only nvim's window silently dropped the rest.
+---@param session string|nil
+---@return table[] windows, table|nil data, string|nil err
+function M.windows(session)
+	local data, err = M.inspect(session)
+	if not data then
+		return {}, nil, err
+	end
+	local want = M.block()
+	local cur, active
+	local rest = {}
+	for _, w in ipairs(data.windows or {}) do
+		local entry = { window = w, panes = M.visible_panes(w) }
+		local is_current = false
+		if want then
+			for _, p in ipairs(entry.panes) do
+				if p.block_id == want then
+					is_current = true
+					break
+				end
+			end
+		end
+		entry.current = is_current
+		if is_current and not cur then
+			cur = entry
+		elseif w.window_id == data.active_window_id and not active then
+			active = entry
+		else
+			rest[#rest + 1] = entry
+		end
+	end
+	local out = {}
+	if cur then
+		out[#out + 1] = cur
+	end
+	if active then
+		out[#out + 1] = active
+	end
+	for _, e in ipairs(rest) do
+		out[#out + 1] = e
+	end
+	return out, data
+end
+
 ---Which pane hosts a given agent instance: the rex locator is stamped onto the
 ---target by the backend (`target.rex = { session, block }`).
 ---@param t table
