@@ -43,8 +43,9 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   tasks below — the questions still queued for that agent (`◐`) and the turns already
   sent (`spinner` running, `✓` done, `✗` failed). `<CR>` on an agent brings its window to
   the front (rex, tmux, or any adapter you register) and on a task jumps to the code
-  anchor it was written at. A finished turn or a blocked prompt is reported once through
-  `vim.notify`; `ask_agent.statusline()` puts the counts (`⚠1 ✓2 ◐3`) where you want them.
+  anchor it was written at. Blocked prompts, finished turns, failures and an agent
+  exiting mid-turn are reported through `vim.notify`; `ask_agent.statusline()` puts
+  the counts (`⚠1 ✓2 ◐3`) where you want them.
 - **Status another plugin can act on** — `ask.agents()`, `ask.on("done"|"blocked")`,
   `ask.wait()` and a `correlation` tag that travels with a send and comes back with the
   event, so a task list can own the work and the agent only owns the conversation.
@@ -560,10 +561,12 @@ becomes `done` with `unread = true`; that survives later polls that only know
 `idle`, until you acknowledge it.
 
 States: `idle`, `working`, `blocked` (`kind` = `permission` / `question` /
-`auth`), `done`, `error`, `unknown`, `gone`. `done` and `blocked` are events: they
-are reported once (30 s per instance), stay in the dashboard, and count in the
-statusline until `a` (acknowledge) or `d` (dismiss) — the CLI stays the place
-where work is accepted.
+`auth`), `done`, `error`, `unknown`, `gone`. `blocked` is reported on every
+transition into it; `done` and `error` are throttled to one per 30 s per instance,
+and a finished turn is not reported while its local terminal is the current
+window. `done` and `blocked` stay in the dashboard and count in the statusline
+until `a` (acknowledge) or `d` (dismiss) — the CLI stays the place where work is
+accepted.
 
 Where an observation came from is kept as `rec.source` — `rex` (the agent reported
 itself), `probe` (the backend's own hook/pane probe), or `heuristic` (nobody said

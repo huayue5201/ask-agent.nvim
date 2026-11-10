@@ -371,7 +371,7 @@ working in the current directory (override with `$ASK_AGENT_SOCK`).
 `ask_agent.state` is the single truth about every instance: the picker, the
 dashboard, the statusline and other plugins all read from it, so they cannot
 disagree. It polls every `state_interval` ms (default 2000, `state_notify =
-false` silences the notifications).
+false` silences blocked/done/error/exit notifications).
 
 Sources, strongest first:
 
@@ -392,10 +392,12 @@ Sources, strongest first:
 (the last one only knows idle, so the sidebar labels the turn `inferred`).
 
 States: `idle`, `working`, `blocked` (kind: permission | question | auth),
-`done`, `error`, `unknown`, `gone`. `done` and `blocked` are reported once per
-instance (30 s), stay in the dashboard and count in the statusline until
-acknowledged. Nothing is accepted or rejected automatically: the agent CLI stays
-the place where work is approved.
+`done`, `error`, `unknown`, `gone`. Every transition into `blocked` is reported;
+`done` and `error` are throttled to one per 30 s per instance, and `done` is
+silent while its local terminal is the current window. They stay in the dashboard
+and count in the statusline until acknowledged. An agent that exits while working
+or blocked is reported too. Nothing is accepted or rejected automatically: the
+agent CLI stays the place where work is approved.
 
 >lua
 local ask = require("ask_agent")

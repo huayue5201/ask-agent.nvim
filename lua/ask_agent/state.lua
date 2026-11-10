@@ -128,34 +128,105 @@ local function emit(event, ...)
 	end
 end
 
+---Notification copy per blocked kind.
+local WAITING = {
+	permission = "needs your permission",
+	auth = "is waiting for credentials",
+	question = "is waiting for your answer",
+}
+
+---@param rec table
+---@return string
+local function notify_prefix(rec)
+	return ("[%s] %s"):format(rec.backend, M.name(rec))
+end
+
+---One throttle per instance and notification kind: short task bursts must not spam,
+---but a blocked transition is always new and is never dropped.
+---@param rec table
+---@param kind string
+---@return boolean suppressed
+local function throttled(rec, kind)
+	local now = now_ms()
+	if type(rec.notified) ~= "table" then
+		rec.notified = {}
+	end
+	if now - (rec.notified[kind] or 0) < NOTIFY_GAP then
+		return true
+	end
+	rec.notified[kind] = now
+	return false
+end
+
+---Is the agent's own terminal the one the user is looking at? Only local Neovim
+---terminals can be checked; an external multiplexer pane is outside this process.
+---@param rec table
+---@return boolean
+local function watching(rec)
+	local _, target = M.resolve(rec)
+	local pid = tonumber(target and target.id)
+	if not pid then
+		return false
+	end
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		local buf = vim.api.nvim_win_get_buf(win)
+		if vim.bo[buf].buftype == "terminal" then
+			local ok, job = pcall(vim.api.nvim_buf_get_var, buf, "terminal_job_pid")
+			if ok and tonumber(job) == pid then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 ---@param rec table
 local function notify_change(rec)
-	if not M.notify or rec.gone then
+	if not M.notify then
 		return
 	end
-	local now = now_ms()
-	if rec.notified and now - rec.notified < NOTIFY_GAP then
-		return
-	end
-	rec.notified = now
-	local name = M.name(rec)
 	if rec.state == "blocked" then
-		local what = rec.kind == "permission" and "needs your permission" or "is waiting for you"
 		vim.notify(
-			("[%s] %s %s%s"):format(rec.backend, name, what, rec.msg and (": " .. rec.msg) or ""),
+			("%s %s%s"):format(
+				notify_prefix(rec),
+				WAITING[rec.kind] or "is waiting for you",
+				rec.msg and (": " .. rec.msg) or ""
+			),
 			vim.log.levels.WARN
 		)
 	elseif rec.state == "done" then
+		if watching(rec) or throttled(rec, "done") then
+			return
+		end
 		vim.notify(
-			("[%s] %s finished%s"):format(rec.backend, name, rec.msg and (": " .. rec.msg) or ""),
+			("%s finished%s"):format(notify_prefix(rec), rec.msg and (": " .. rec.msg) or ""),
 			vim.log.levels.INFO
 		)
 	elseif rec.state == "error" then
+		if throttled(rec, "error") then
+			return
+		end
 		vim.notify(
-			("[%s] %s failed%s"):format(rec.backend, name, rec.msg and (": " .. rec.msg) or ""),
+			("%s failed%s"):format(notify_prefix(rec), rec.msg and (": " .. rec.msg) or ""),
 			vim.log.levels.ERROR
 		)
 	end
+end
+
+---An agent disappearing is only news while it still owed the user something.
+---@param rec table
+---@param prev string
+local function notify_gone(rec, prev)
+	if not M.notify or (prev ~= "working" and prev ~= "blocked") then
+		return
+	end
+	if throttled(rec, "gone") then
+		return
+	end
+	vim.notify(
+		("%s exited while %s"):format(notify_prefix(rec), prev == "blocked" and "waiting for you" or "working"),
+		vim.log.levels.WARN
+	)
 end
 
 local schedule_save -- journal writer, defined below (apply() is above it)
@@ -188,6 +259,9 @@ local function apply(rec, st, src)
 	end
 	rec.state, rec.kind, rec.progress, rec.msg = state, kind, st.progress, st.msg
 	rec.gone = st.gone or nil
+	if rec.gone then
+		notify_gone(rec, prev)
+	end
 	if state == "done" or state == "error" then
 		for _, task in ipairs(rec.tasks or {}) do
 			if task.status == "running" then

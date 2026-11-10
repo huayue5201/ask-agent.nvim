@@ -139,10 +139,50 @@ local back = state.get("fake:a")
 assert(back and back.tasks and back.tasks[1].text == "do it again", "journal restores the task")
 state.persist = false
 
--- a vanished instance turns gone and drops out of the counters
+-- notifications: blocked always reports, done/error throttle, exits report while working
 targets = { targets[1] }
 state.refresh()
+local notes = {}
+local save_notify = vim.notify
+vim.notify = function(msg, level)
+	notes[#notes + 1] = { msg = msg, level = level }
+end
+state.notify = true
+probe_a = { running = true, state = "working" }
+state.refresh()
+probe_a = { running = true, state = "blocked", kind = "permission", msg = "run the tests?" }
+state.refresh()
+assert(#notes == 1 and notes[1].msg:find("needs your permission", 1, true), "blocked permission notifies")
+assert(notes[1].level == vim.log.levels.WARN, "blocked is a warning")
+notes = {}
+probe_a = { running = true, state = "working" }
+state.refresh()
+probe_a = { running = true, state = "blocked", kind = "question", msg = "which one?" }
+state.refresh()
+assert(
+	#notes == 1 and notes[1].msg:find("waiting for your answer", 1, true),
+	"a new blocked transition is never throttled"
+)
+notes = {}
+probe_a = { running = true, state = "done", msg = "all good" }
+state.refresh()
+assert(#notes == 1 and notes[1].level == vim.log.levels.INFO, "done notifies")
+notes = {}
+state.refresh()
+assert(#notes == 0, "the same done is not repeated")
+probe_a = { running = true, state = "error", msg = "boom" }
+state.refresh()
+assert(#notes == 1 and notes[1].level == vim.log.levels.ERROR, "error notifies")
+notes = {}
+probe_a = { running = true, state = "working" }
+state.refresh()
+state.refresh()
+notes = {}
+targets = {}
+state.refresh()
+assert(#notes == 1 and notes[1].msg:find("exited while working", 1, true), "an exit while working notifies")
 assert(state.get("fake:b").gone, "unseen instance is gone")
 assert(not state.statusline():find("⚠"), "gone blocked is not counted")
+vim.notify = save_notify
 
 print("STATE OK")
