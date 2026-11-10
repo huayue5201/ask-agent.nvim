@@ -38,6 +38,17 @@ assert(
 	"every window's candidate is drawn"
 )
 
+-- Palette: nvim_get_hl returns integers, so derive #rrggbb before blending.
+-- Panes and agent cells must still differ even when Normal and NormalFloat share a bg.
+local function bg(name)
+	local h = vim.api.nvim_get_hl(0, { name = name, link = false })
+	return h.bg
+end
+assert(bg("AiMapBg") and bg("AiMapPane"), "map backgrounds are set")
+assert(bg("AiMapPane") ~= bg("AiMapBg"), "panes stand out from the canvas")
+assert(bg("AiMapAgent") ~= bg("AiMapPane"), "agent cells stand out from the pane")
+assert(bg("AiMapSel") ~= bg("AiMapAgent"), "the selected agent stands out")
+
 vim.api.nvim_buf_delete(buf, { force = true })
 
 -- Zoom only changes what rex draws: the map still needs the full split tree,

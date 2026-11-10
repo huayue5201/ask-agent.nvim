@@ -18,14 +18,21 @@ local NS = api.nvim_create_namespace("ai_map")
 local function palette()
 	local function hl(name, field)
 		local ok, got = pcall(api.nvim_get_hl, 0, { name = name, link = false })
-		return ok and type(got) == "table" and got[field] or nil
+		local v = ok and type(got) == "table" and got[field] or nil
+		-- nvim_get_hl returns integers; blend() works on #rrggbb strings
+		if type(v) == "number" then
+			return ("#%06x"):format(v)
+		end
+		return v
 	end
 	return {
-		fg = hl("NormalFloat", "fg"),
+		fg = hl("NormalFloat", "fg") or hl("Normal", "fg"),
 		green = hl("DiagnosticOk", "fg"),
 		dim = hl("Comment", "fg"),
-		bar_strip = hl("NormalFloat", "bg"),
-		chip_bg = hl("Normal", "bg"),
+		-- NormalFloat and Normal often share the same background; Pmenu gives a
+		-- second shade to fall back on so panes stay distinguishable.
+		bar_strip = hl("NormalFloat", "bg") or hl("Pmenu", "bg") or hl("Normal", "bg"),
+		chip_bg = hl("Pmenu", "bg") or hl("Normal", "bg"),
 		chip_fg = hl("Normal", "fg"),
 	}
 end
@@ -45,16 +52,25 @@ local function define_hl()
 		end
 		return ("#%02x%02x%02x"):format(mix(ar, br), mix(ag, bg), mix(ab, bb))
 	end
-	api.nvim_set_hl(0, "AiMapBg", { bg = p.bar_strip, fg = p.dim })
-	api.nvim_set_hl(0, "AiMapPane", { bg = p.chip_bg, fg = p.dim })
-	api.nvim_set_hl(0, "AiMapAgent", { bg = blend(p.chip_bg, p.green, 0.10), fg = p.green })
-	api.nvim_set_hl(0, "AiMapSel", { bg = blend(p.chip_bg, p.green, 0.34), fg = p.green, bold = true })
+	local bg = p.bar_strip or "#1e1e2e"
+	local fg = p.fg or p.chip_fg or "#cdd6f4"
+	local green = p.green or "#a6e3a1"
+	local dim = p.dim or fg
+	-- If the colorscheme uses one background for everything (common with
+	-- transparent themes), derive a distinct pane shade from the foreground.
+	if not p.chip_bg or p.chip_bg == bg then
+		p.chip_bg = blend(bg, fg, 0.10)
+	end
+	api.nvim_set_hl(0, "AiMapBg", { bg = bg, fg = dim })
+	api.nvim_set_hl(0, "AiMapPane", { bg = p.chip_bg, fg = dim })
+	api.nvim_set_hl(0, "AiMapAgent", { bg = blend(p.chip_bg, green, 0.18), fg = green })
+	api.nvim_set_hl(0, "AiMapSel", { bg = blend(p.chip_bg, green, 0.45), fg = green, bold = true })
 	-- Floating panes (panes floated out of the tiled layer) are slightly brighter so the overlap hierarchy is visible
-	api.nvim_set_hl(0, "AiMapFloat", { bg = blend(p.chip_bg, p.fg, 0.12), fg = p.dim })
+	api.nvim_set_hl(0, "AiMapFloat", { bg = blend(p.chip_bg, fg, 0.18), fg = dim })
 	api.nvim_set_hl(
 		0,
 		"AiMapFloatSel",
-		{ bg = blend(blend(p.chip_bg, p.fg, 0.12), p.green, 0.34), fg = p.green, bold = true }
+		{ bg = blend(blend(p.chip_bg, fg, 0.18), green, 0.45), fg = green, bold = true }
 	)
 end
 
