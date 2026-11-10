@@ -340,9 +340,10 @@ nvim --server <sock> --remote-expr \
 <
 
 Actions: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
-`agents` (optional `state` filter), `ask` (`{text, backend?, target?}`) and
-`reply` (`{key, text}`). The last three expose the agent control plane over the
-same socket, so a terminal agent can list what is blocked and answer it.
+`agents` (optional `state` filter), `ask` (`{text, backend?, target?}`),
+`reply` (`{key, text}`), `task` (`{key}`), `result` (`{key, wait_ms?}`) and
+`status`. The last six expose the agent control plane over the same socket, so
+a terminal agent can list what is blocked, answer it and read the outcome.
 Handlers return JSON and never throw. Register extra actions from your config:
 
 >lua
@@ -353,6 +354,11 @@ end)
 
 `project` has no built-in implementation: it depends on the host config's
 project tooling.
+
+MCP: `bin/ask-agent-mcp` speaks MCP over stdio and forwards the same actions, so
+clients that only understand MCP get `agents`/`ask`/`reply`/`task`/`result`/
+`status` as tools. Point the client at the script; it finds the nvim instance
+working in the current directory (override with `$ASK_AGENT_SOCK`).
 
 ==============================================================================
 10. AGENT STATUS                                            *ask-agent-status*

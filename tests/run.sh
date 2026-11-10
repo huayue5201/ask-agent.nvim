@@ -16,4 +16,16 @@ for test in tests/*.lua; do
 		fail=1
 	fi
 done
+
+# The MCP server is python3; skip it when python3 is not installed
+if command -v python3 >/dev/null 2>&1; then
+	out=$(python3 tests/mcp.py 2>&1)
+	if printf '%s\n' "$out" | grep -q "OK$"; then
+		echo "PASS mcp"
+	else
+		echo "FAIL mcp"
+		printf '%s\n' "$out" | tail -20
+		fail=1
+	fi
+fi
 exit $fail

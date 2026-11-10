@@ -474,9 +474,10 @@ nvim --server <sock> --remote-expr \
 ```
 
 Requests: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
-`agents` (`{state?}` filter), `ask` (`{text, backend?, target?}`) and `reply`
-(`{key, text}`) — the last three make the whole control plane reachable from a
-terminal agent, not just from your own Lua config.
+`agents` (`{state?}` filter), `ask` (`{text, backend?, target?}`), `reply`
+(`{key, text}`), `task` (`{key}`), `result` (`{key, wait_ms?}`) and `status` —
+the last six make the whole control plane reachable from a terminal agent, not
+just from your own Lua config.
 Every handler returns a JSON string; failures are `{"ok":false,"error":…}` and never
 throw. Register your own actions from your config:
 
@@ -492,6 +493,19 @@ host config.
 For `pi`, drop [`extensions/nvim-context.ts`](extensions/nvim-context.ts) into
 `~/.pi/agent/extensions/` and restart `pi`; it writes the registration JSON and exposes
 the `state`/`buffer`/`diagnostics`/`quickfix` tools to the agent.
+
+### MCP server
+
+`bin/ask-agent-mcp` exposes the same plane as an MCP server, so a client that only
+speaks MCP (Claude Desktop, another agent) gets tools without any Lua:
+
+```json
+{"mcpServers": {"ask-agent": {"command": "/Users/you/neovim-plugins/ask-agent.nvim/bin/ask-agent-mcp"}}}
+```
+
+Tools: `agents`, `ask`, `reply`, `task`, `result`, `status` — the same actions as the
+bridge, forwarded to the nvim instance working in the current directory (or
+`$ASK_AGENT_SOCK`). It is python3 + `nvim` only; nothing to install.
 
 ## API
 

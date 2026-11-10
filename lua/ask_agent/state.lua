@@ -236,6 +236,8 @@ end
 
 ---@param task table
 ---@return table
+local journal_output = 4000 -- keep the journal small: output can be a whole screen
+
 local function slim_task(task)
 	return {
 		text = task.text,
@@ -244,6 +246,8 @@ local function slim_task(task)
 		reply = task.reply,
 		correlation = task.correlation,
 		anchor = task.anchor,
+		-- the last turn's output survives a restart too, so `C` still works tomorrow
+		output = task.output and task.output:sub(1, journal_output) or nil,
 	}
 end
 

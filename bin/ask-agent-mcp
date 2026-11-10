@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""MCP server for ask-agent: lets an agent see and talk to the agents in nvim.
+
+It speaks MCP over stdio (newline-delimited JSON-RPC) and forwards every call to
+the running nvim instance through ask_agent.bridge, the same socket the pi
+extension uses. No dependencies beyond python3 and the `nvim` binary.
+
+Point the client at it:
+
+    {"mcpServers": {"ask-agent": {"command": "/path/to/bin/ask-agent-mcp"}}}
+
+Which nvim it talks to: $ASK_AGENT_SOCK if set, else the newest live instance
+whose cwd contains the current directory, else the newest live instance.
+"""
+
+import base64
+import glob
+import json
+import os
+import subprocess
+import sys
+
+VERSION = "1.0.0"
+PROTOCOL = "2024-11-05"
+
+TOOLS = [
+    {
+        "name": "agents",
+        "description": "Every agent instance the nvim instance can see, most attention-worthy first "
+        "(blocked > done > error > working > idle), with its tasks and state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["blocked", "done", "working", "idle", "error"],
+                    "description": "Only agents in this state",
+                }
+            },
+        },
+    },
+    {
+        "name": "ask",
+        "description": "Send a question to an agent. Use agents first to learn the ids; "
+        "backend and target pick a specific instance.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "backend": {"type": "string"},
+                "target": {"type": "string"},
+                "correlation": {"type": "object", "description": "Opaque tag echoed back in state events"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "reply",
+        "description": "Answer the agent that is blocked waiting for you (permission, question, auth).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}, "text": {"type": "string"}},
+            "required": ["key", "text"],
+        },
+    },
+    {
+        "name": "task",
+        "description": "The newest task handed to an agent: what was asked, when, and how it ended.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "result",
+        "description": "The agent's last turn as it appears in its terminal (captured on demand).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}, "wait_ms": {"type": "integer"}},
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "status",
+        "description": "Counts by state plus the statusline chunk nvim shows.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+]
+
+
+def registry_dir():
+    override = os.environ.get("ASK_AGENT_REGISTRY")
+    if override:
+        return override
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(cache, "nvim", "pi-ctx")
+
+
+def alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def pick_bridge(cwd=None):
+    """Newest live nvim bridge: the one working in this directory, else any."""
+    forced = os.environ.get("ASK_AGENT_SOCK")
+    if forced:
+        return forced
+    cwd = os.path.abspath(cwd or os.getcwd())
+    best, best_here, best_ts = None, None, -1.0
+    for path in glob.glob(os.path.join(registry_dir(), "*.json")):
+        try:
+            with open(path) as fh:
+                info = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not alive(info.get("pid")):
+            continue
+        sock, ts = info.get("sock"), float(info.get("ts") or 0)
+        if not sock:
+            continue
+        if ts > best_ts:
+            best, best_ts = sock, ts
+        root = os.path.abspath(info.get("cwd") or "/")
+        if cwd.startswith(root.rstrip("/") + "/") or cwd == root:
+            if best_here is None or ts > best_here[0]:
+                best_here = (ts, sock)
+    return best_here[1] if best_here else best
+
+
+def bridge_call(action, sock=None, **payload):
+    """One request through nvim's RPC socket; returns the decoded response."""
+    sock = sock or pick_bridge()
+    if not sock:
+        return {"ok": False, "error": "no running nvim with ask-agent (is the plugin loaded?)"}
+    body = base64.b64encode(json.dumps(dict(payload, action=action)).encode()).decode()
+    expr = 'v:lua.require("ask_agent.bridge").handle("%s")' % body
+    try:
+        done = subprocess.run(
+            ["nvim", "--server", sock, "--remote-expr", expr],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        return {"ok": False, "error": "nvim --server failed: %s" % err}
+    out = done.stdout.strip()
+    if not out:
+        return {"ok": False, "error": (done.stderr.strip() or "empty response from nvim")}
+    try:
+        return json.loads(out)
+    except ValueError:
+        return {"ok": False, "error": "unparseable response: %s" % out[:500]}
+
+
+def tool_call(name, args, call=None):
+    """Run one MCP tool. `call(action, **args)` is injectable for tests."""
+    call = call or bridge_call
+    args = args or {}
+    if name == "agents":
+        return call("agents", state=args.get("state"))
+    if name == "ask":
+        return call(
+            "ask",
+            text=args.get("text"),
+            backend=args.get("backend"),
+            target=args.get("target"),
+            correlation=args.get("correlation"),
+        )
+    if name == "reply":
+        return call("reply", key=args.get("key"), text=args.get("text"))
+    if name == "task":
+        return call("task", key=args.get("key"))
+    if name == "result":
+        return call("result", key=args.get("key"), wait_ms=args.get("wait_ms"))
+    if name == "status":
+        return call("status")
+    return {"ok": False, "error": "unknown tool: %s" % name}
+
+
+def respond(msg, call=None):
+    """Handle one JSON-RPC message. Returns the response dict, or None for notifications."""
+    method = msg.get("method")
+    mid = msg.get("id")
+    params = msg.get("params") or {}
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": mid,
+            "result": {
+                "protocolVersion": PROTOCOL,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "ask-agent", "version": VERSION},
+            },
+        }
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}}
+    if method == "tools/call":
+        name = params.get("name")
+        result = tool_call(name, params.get("arguments"), call)
+        text = json.dumps(result, ensure_ascii=False)
+        out = {"content": [{"type": "text", "text": text}]}
+        if not result.get("ok"):
+            out["isError"] = True
+        return {"jsonrpc": "2.0", "id": mid, "result": out}
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": mid, "result": {}}
+    if method in ("notifications/initialized", "notifications/cancelled"):
+        return None
+    if method is None:
+        return None
+    return {
+        "jsonrpc": "2.0",
+        "id": mid,
+        "error": {"code": -32601, "message": "method not found: %s" % method},
+    }
+
+
+def main(argv):
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    if "--version" in argv:
+        print("ask-agent-mcp " + VERSION)
+        return 0
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            sys.stdout.write(
+                json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}) + "\n"
+            )
+            sys.stdout.flush()
+            continue
+        reply = respond(msg)
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
