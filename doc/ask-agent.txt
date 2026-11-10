@@ -168,10 +168,12 @@ those; `<Tab>` returns to the map unless the implementation already maps `<Tab>`
 5. PICKERS                                                 *ask-agent-pickers*
 
 `map` draws the split layout of your terminal multiplexer and puts a bold letter
-in every pane that hosts an agent. A pane covered by a floating window still
-gets its letter — placed on a visible cell of that same pane, so nothing is
-painted over the floating window. Blocks are laid out compactly (no gaps) and
-the map is centered on screen.
+in every pane that hosts an agent. All windows of the session are stacked top to
+bottom (the window nvim lives in comes first), so an agent running in another
+window still gets a cell. A zoomed window is drawn as the single pane it shows.
+A pane covered by a floating window still gets its letter — placed on a visible
+cell of that same pane, so nothing is painted over the floating window. Blocks
+are laid out compactly (no gaps) and the map is centered on screen.
 
 `list` is a plain list of every instance, including ones in other tabs and
 windows, shown through `vim.ui.select` — so it is whatever your config provides
@@ -316,6 +318,9 @@ The map needs to know where each instance sits, which is multiplexer-specific:
   id            unique id, e.g. "zellij"
   available()   -> ok, reason?
   window()      -> win, data          "the window nvim itself lives in"
+  windows()     optional -> list      every window of the session, each
+                                      { window = win, panes = { ... }, current? };
+                                      use it to include agents in other windows
   panes(win)    -> { { id, rect = { x, y, w, h }, kind = "tiled"|"float" }, ... }
                   rect is normalised 0..1, y from the top, later entries paint on top
   match(target) -> pane id|nil        which pane hosts this instance
