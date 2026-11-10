@@ -137,25 +137,16 @@ function M.cursor()
 	return M.block()
 end
 
----Panes that are actually visible in a window.
+---Panes of a window, always from the full split tree.
 --
--- Rex zoom (`rex zoom`) only changes what is drawn: the window still reports its
--- full split tree, so painting that tree would show panes the user cannot see and
--- hide the single pane that covers the window. When a block is zoomed, return it
--- as the whole window instead.
+-- Rex zoom (`rex zoom`) only changes what is drawn; the window still reports its
+-- full split tree. The map needs that tree: agents often live in a pane that is
+-- hidden by zoom, and collapsing to the zoomed pane made them unplaceable (the
+-- picker then fell back to the list). Keep every pane so the map stays useful.
 ---@param window table
 ---@return table[]
 function M.visible_panes(window)
-	local panes = M.panes(window)
-	local zoomed = window and window.zoomed_block_id
-	if zoomed then
-		for _, p in ipairs(panes) do
-			if p.id == zoomed then
-				return { { id = p.id, block_id = p.block_id, rect = { 0, 0, 1, 1 }, kind = "tiled" } }
-			end
-		end
-	end
-	return panes
+	return M.panes(window)
 end
 
 ---Every window of a session, in map order: the window nvim lives in first, then

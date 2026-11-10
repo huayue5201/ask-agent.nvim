@@ -170,7 +170,8 @@ those; `<Tab>` returns to the map unless the implementation already maps `<Tab>`
 `map` draws the split layout of your terminal multiplexer and puts a bold letter
 in every pane that hosts an agent. All windows of the session are stacked top to
 bottom (the window nvim lives in comes first), so an agent running in another
-window still gets a cell. A zoomed window is drawn as the single pane it shows.
+window still gets a cell. Zoom does not collapse the map: the full split tree is used,
+so an agent in a zoomed-away pane still gets a cell.
 A pane covered by a floating window still gets its letter — placed on a visible
 cell of that same pane, so nothing is painted over the floating window. Blocks
 are laid out compactly (no gaps) and the map is centered on screen.

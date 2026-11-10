@@ -40,7 +40,8 @@ assert(
 
 vim.api.nvim_buf_delete(buf, { force = true })
 
--- Zoom only changes what rex draws: the map must show the zoomed block alone.
+-- Zoom only changes what rex draws: the map still needs the full split tree,
+-- otherwise an agent in a zoomed-away pane becomes unplaceable.
 local rex = require("ask_agent.layouts.rex")
 local win = {
 	zoomed_block_id = "z",
@@ -59,7 +60,8 @@ local win = {
 	},
 }
 local zp = rex.visible_panes(win)
-assert(#zp == 1 and zp[1].id == "z", "zoomed window shows only the zoomed pane")
-assert(zp[1].rect[1] == 0 and zp[1].rect[3] == 1 and zp[1].rect[4] == 1, "zoomed pane fills the window")
+assert(#zp == 2, "a zoomed window keeps its full split tree")
+assert(zp[1].id == "z" and zp[2].id == "other", "both panes remain placeable")
+assert(zp[1].rect[3] == 0.5 and zp[2].rect[1] == 0.5, "pane geometry is the real split, not the zoom")
 
 print("MAP OK")

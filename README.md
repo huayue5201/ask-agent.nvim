@@ -409,8 +409,8 @@ Bundled backends:
 When a layout adapter says which terminal pane an agent lives in, `ask-agent.nvim` draws
 your split layout as a small map and puts a letter in each pane that hosts an agent. Every
 window of the session is stacked into the map (top to bottom, your own window first), so an
-agent running in another Rex window is never dropped. A zoomed window is drawn as the single
-pane it actually shows. Panes covered by a floating window are shown but never get the letter — the
+agent running in another Rex window is never dropped. Zoom does not collapse the map: it always uses the
+full split tree, so an agent in a zoomed-away pane still gets a cell. Panes covered by a floating window are shown but never get the letter — the
 label moves to a visible cell of that pane instead, so the map never paints over
 whatever is floating on top.
 
