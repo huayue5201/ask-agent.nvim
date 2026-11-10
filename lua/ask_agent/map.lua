@@ -14,63 +14,81 @@ local M = {}
 -- Extmark namespace for the map buffer (backgrounds/highlights rely on it)
 local NS = api.nvim_create_namespace("ai_map")
 
---- Colors: plain float colors, so the plugin needs no host dependency.
+--- Colors: mirror the terminal panel palette (tab-terminal) so the map keeps
+--- the same canvas/pane hierarchy even when that plugin is not installed.
 local function palette()
-	local function hl(name, field)
+	local function pick(name, attr)
 		local ok, got = pcall(api.nvim_get_hl, 0, { name = name, link = false })
-		local v = ok and type(got) == "table" and got[field] or nil
-		-- nvim_get_hl returns integers; blend() works on #rrggbb strings
-		if type(v) == "number" then
-			return ("#%06x"):format(v)
-		end
-		return v
+		return ok and type(got) == "table" and got[attr] or nil
 	end
+	local bg = pick("Normal", "bg")
+	local fg = pick("Normal", "fg")
+	local accent = pick("Function", "fg") or pick("Title", "fg") or pick("Special", "fg") or fg
+	local green = pick("DiagnosticOk", "fg") or pick("Added", "fg") or pick("DiffAdd", "fg") or accent
+	local dim = pick("Comment", "fg") or pick("NonText", "fg") or fg
 	return {
-		fg = hl("NormalFloat", "fg") or hl("Normal", "fg"),
-		green = hl("DiagnosticOk", "fg"),
-		dim = hl("Comment", "fg"),
-		-- NormalFloat and Normal often share the same background; Pmenu gives a
-		-- second shade to fall back on so panes stay distinguishable.
-		bar_strip = hl("NormalFloat", "bg") or hl("Pmenu", "bg") or hl("Normal", "bg"),
-		chip_bg = hl("Pmenu", "bg") or hl("Normal", "bg"),
-		chip_fg = hl("Normal", "fg"),
+		fg = fg,
+		green = green,
+		dim = dim,
+		bg = bg,
+		panel_bg = pick("Pmenu", "bg"),
+		chip_fg = fg,
 	}
 end
 
 local function define_hl()
 	local p = palette()
-	-- mix two #rrggbb colors ourselves (ratio = weight of b)
+	---@param a integer|string|nil
+	---@param b integer|string|nil
+	---@param ratio number weight of b
 	local function blend(a, b, ratio)
-		if type(a) ~= "string" or type(b) ~= "string" or #a ~= 7 or #b ~= 7 then
-			return a
+		local function rgb(c)
+			if type(c) == "string" and #c == 7 and c:sub(1, 1) == "#" then
+				return tonumber(c:sub(2, 3), 16), tonumber(c:sub(4, 5), 16), tonumber(c:sub(6, 7), 16), "hex"
+			end
+			if type(c) ~= "number" then
+				return nil
+			end
+			return math.floor(c / 0x10000) % 0x100, math.floor(c / 0x100) % 0x100, c % 0x100, "int"
 		end
-		local ar, ag, ab = tonumber(a:sub(2, 3), 16), tonumber(a:sub(4, 5), 16), tonumber(a:sub(6, 7), 16)
-		local br, bg, bb = tonumber(b:sub(2, 3), 16), tonumber(b:sub(4, 5), 16), tonumber(b:sub(6, 7), 16)
+		local ar, ag, ab, a_kind = rgb(a)
+		local br, bgc, bb = rgb(b)
+		if not ar or not br then
+			return a or b
+		end
 		ratio = ratio or 0.5
 		local function mix(x, y)
-			return math.floor(x * (1 - ratio) + y * ratio + 0.5)
+			return math.floor(x + (y - x) * ratio + 0.5)
 		end
-		return ("#%02x%02x%02x"):format(mix(ar, br), mix(ag, bg), mix(ab, bb))
+		local r, g, bl = mix(ar, br), mix(ag, bgc), mix(ab, bb)
+		if a_kind == "hex" then
+			return ("#%02x%02x%02x"):format(r, g, bl)
+		end
+		return r * 0x10000 + g * 0x100 + bl
 	end
-	local bg = p.bar_strip or "#1e1e2e"
-	local fg = p.fg or p.chip_fg or "#cdd6f4"
-	local green = p.green or "#a6e3a1"
+	local bg = p.bg or 0x1e1e2e
+	local fg = p.fg or p.chip_fg or 0xcdd6f4
+	local green = p.green or 0xa6e3a1
 	local dim = p.dim or fg
-	-- If the colorscheme uses one background for everything (common with
-	-- transparent themes), derive a distinct pane shade from the foreground.
-	if not p.chip_bg or p.chip_bg == bg then
-		p.chip_bg = blend(bg, fg, 0.10)
+	-- Same derivation as tab-terminal: panel is darker than the editor, the
+	-- canvas strip darker still, and chips sit one step above the strip.
+	local panel = p.panel_bg or blend(bg, 0x000000, 0.35) or bg
+	if panel == bg then
+		panel = blend(bg, fg, 0.06) or bg
 	end
-	api.nvim_set_hl(0, "AiMapBg", { bg = bg, fg = dim })
-	api.nvim_set_hl(0, "AiMapPane", { bg = p.chip_bg, fg = dim })
-	api.nvim_set_hl(0, "AiMapAgent", { bg = blend(p.chip_bg, green, 0.18), fg = green })
-	api.nvim_set_hl(0, "AiMapSel", { bg = blend(p.chip_bg, green, 0.45), fg = green, bold = true })
+	local bar_strip = blend(panel, 0x000000, 0.40) or panel
+	local chip_bg = blend(bar_strip, fg, 0.13) or panel
+	local chip_fg = blend(bar_strip, fg, 0.55) or fg
+	api.nvim_set_hl(0, "AiMapBg", { bg = bar_strip, fg = dim })
+	api.nvim_set_hl(0, "AiMapPane", { bg = chip_bg, fg = dim })
+	api.nvim_set_hl(0, "AiMapAgent", { bg = blend(chip_bg, green, 0.10), fg = green })
+	api.nvim_set_hl(0, "AiMapSel", { bg = blend(chip_bg, green, 0.34), fg = green, bold = true })
 	-- Floating panes (panes floated out of the tiled layer) are slightly brighter so the overlap hierarchy is visible
-	api.nvim_set_hl(0, "AiMapFloat", { bg = blend(p.chip_bg, fg, 0.18), fg = dim })
+	api.nvim_set_hl(0, "AiMapFloat", { bg = blend(chip_bg, chip_fg, 0.12), fg = dim })
 	api.nvim_set_hl(
 		0,
 		"AiMapFloatSel",
-		{ bg = blend(blend(p.chip_bg, fg, 0.18), green, 0.45), fg = green, bold = true }
+		{ bg = blend(blend(chip_bg, chip_fg, 0.12), green, 0.34), fg = green, bold = true }
 	)
 end
 
