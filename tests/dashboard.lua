@@ -40,12 +40,8 @@ state.dispatch("fake", "a", "sent question", { anchor = { buf = vim.api.nvim_get
 state.refresh()
 
 local sent = {}
-local replied, results = {}, {}
+local results = {}
 dashboard.open({
-	reply = function(key, text)
-		replied[#replied + 1] = { key = key, text = text }
-		return true
-	end,
 	result = function(_, cb)
 		results[#results + 1] = true
 		cb({ output = "all green\\n12 files changed" })
@@ -164,24 +160,8 @@ store.register({
 })
 assert(store.find({ pane = "%1" }).id == "tmux", "re-registering replaces by id")
 
--- R replies to the instance under the cursor (the float itself is ui.input's job)
-local sb = vim.api.nvim_get_current_win()
-local ui = require("ask_agent.ui")
-local real_input = ui.input
-local asked = nil
-ui.input = function(o)
-	asked = o
-	o.on_submit("yes, go ahead")
-end
-vim.api.nvim_win_set_cursor(sb, { 1, 0 })
-vim.api.nvim_feedkeys("R", "x", false)
-vim.wait(30)
-ui.input = real_input
-assert(asked and asked.title:match("Reply to alpha"), "R asks for a reply: " .. tostring(asked and asked.title))
-assert(replied[1] and replied[1].text == "yes, go ahead", "reply reached the agent")
-assert(replied[1].key == state.get("fake:a").key, "reply went to the instance under the cursor")
-
 -- C shows the last turn's output (from ask.result, not a raw capture)
+local sb = vim.api.nvim_get_current_win()
 vim.api.nvim_set_current_win(sb)
 vim.api.nvim_win_set_cursor(sb, { 1, 0 })
 vim.api.nvim_feedkeys("C", "x", false)
@@ -228,7 +208,7 @@ end, vim.api.nvim_tabpage_list_wins(0))
 assert(#floats == 1, "help float is open")
 local help_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(floats[1]), 0, -1, false)
 assert(help_lines[1]:match("Show these keys"), "help lists the keys: " .. help_lines[1])
-assert(#help_lines == 11, "every key has a row")
+assert(#help_lines == 10, "every key has a row")
 vim.api.nvim_feedkeys("q", "x", false)
 vim.wait(30)
 assert(#vim.tbl_filter(function(w)

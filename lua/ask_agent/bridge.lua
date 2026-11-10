@@ -18,7 +18,7 @@
 -- Requests: {"action":"state"} | {"action":"buffer","path":...,"from":..,"to":..}
 --      | {"action":"diagnostics"} | {"action":"quickfix"} | {"action":"list"}
 --      | {"action":"agents","state":..} | {"action":"ask","text":..,"backend":..,"target":..}
---      | {"action":"reply","key":..,"text":..} | {"action":"task","key":..}
+--      | {"action":"task","key":..}
 --      | {"action":"result","key":..,"wait_ms":..} | {"action":"status"}
 --      | {"action":"project","root":..,"full":..,"wait_ms":..}
 -- The `project` action is not built in: register a handler with
@@ -343,7 +343,7 @@ local function agents(req)
 			unread = rec.unread and true or nil,
 			gone = rec.gone and true or nil,
 			since = rec.since,
-			task = task and { text = task.text, status = task.status, reply = task.reply, ts = task.ts } or nil,
+			task = task and { text = task.text, status = task.status, ts = task.ts } or nil,
 		}
 	end
 	return { ok = true, action = "agents", agents = out }
@@ -365,20 +365,6 @@ local function ask(req)
 		return { ok = false, error = tostring(err) }
 	end
 	return { ok = true, action = "ask" }
-end
-
----Answer a blocked agent (action: "reply"): {key, text}.
----@param req table
----@return table
-local function reply(req)
-	if type(req.key) ~= "string" or type(req.text) ~= "string" or req.text == "" then
-		return { ok = false, error = "reply requires key and text" }
-	end
-	local ok, err = require("ask_agent").reply(req.key, req.text)
-	if not ok then
-		return { ok = false, error = tostring(err) }
-	end
-	return { ok = true, action = "reply" }
 end
 
 ---The newest task handed to an agent (action: "task"): {key}.
@@ -404,7 +390,6 @@ local function task(req)
 			text = t.text,
 			ts = t.ts,
 			status = t.status,
-			reply = t.reply,
 			correlation = t.correlation,
 			anchor = t.anchor,
 			output = t.output,
@@ -462,7 +447,6 @@ local handlers = {
 	end,
 	agents = agents,
 	ask = ask,
-	reply = reply,
 	buffer = buffer,
 	diagnostics = diagnostics,
 	quickfix = function()

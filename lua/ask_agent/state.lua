@@ -15,7 +15,6 @@
 --   state.on("done"|"blocked"|"error", fn)
 --   state.all()              -- every instance, most attention-worthy first
 --   state.dispatch(backend, id, text, { correlation, anchor })
---   state.reply(key, text)   -- answer something blocked, through the same sender
 --   state.result(key, cb)    -- the last turn's output (captured on demand)
 --
 -- Each record carries `source`: "rex" (OSC 7501, authoritative), "probe" (the
@@ -243,7 +242,6 @@ local function slim_task(task)
 		text = task.text,
 		ts = task.ts,
 		status = task.status,
-		reply = task.reply,
 		correlation = task.correlation,
 		anchor = task.anchor,
 		-- the last turn's output survives a restart too, so `C` still works tomorrow
@@ -577,7 +575,7 @@ end
 ---@param backend string
 ---@param id string
 ---@param text string
----@param opts { correlation?: table, anchor?: table, reply?: boolean }|nil
+---@param opts { correlation?: table, anchor?: table }|nil
 function M.dispatch(backend, id, text, opts)
 	local key = key_of(backend, id)
 	local rec = agents[key]
@@ -603,7 +601,6 @@ function M.dispatch(backend, id, text, opts)
 		text = (text:gsub("\n.*", "")),
 		ts = ts,
 		status = "running",
-		reply = opts and opts.reply,
 		correlation = opts and opts.correlation,
 		anchor = opts and opts.anchor,
 	})
@@ -615,31 +612,12 @@ function M.dispatch(backend, id, text, opts)
 	schedule_save()
 end
 
----Newest task handed to an instance: { text, ts, status, reply?, correlation, anchor, output? }.
+---Newest task handed to an instance: { text, ts, status, correlation, anchor, output? }.
 ---@param key string
 ---@return table|nil
 function M.task(key)
 	local rec = agents[key]
 	return rec and rec.tasks and rec.tasks[1] or nil
-end
-
----Answer what an agent is blocked on, on the same instance (no picker, no queue).
----@param key string
----@param text string
----@return boolean ok, string|nil err
-function M.reply(key, text)
-	local rec = agents[key]
-	if not rec then
-		return false, ("unknown agent %s"):format(tostring(key))
-	end
-	local mod, target = M.resolve(rec)
-	if not mod or not target then
-		return false, ("%s is not running"):format(M.name(rec))
-	end
-	if not M.sender then
-		return false, "no sender configured"
-	end
-	return M.sender(mod, target, text, { reply = true })
 end
 
 ---Output of the newest turn, captured from the terminal on demand and cached on the task.

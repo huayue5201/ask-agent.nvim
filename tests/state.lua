@@ -113,19 +113,8 @@ assert(state.get("fake:a").source == "probe", "probe source: " .. tostring(state
 assert(state.get("fake:b").source == "rex", "rex source: " .. tostring(state.get("fake:b").source))
 assert(watched["s"], "rex events are streamed for the session the agents live in")
 
--- reply goes to the same instance, through the injected sender, and is logged as a reply
-local sent = {}
-state.sender = function(mod_, target, text, opts)
-	sent[#sent + 1] = { backend = mod_.id, id = target.id, text = text, reply = opts and opts.reply }
-	state.dispatch(mod_.id, target.id, text, opts)
-	return true
-end
-local ok, err = state.reply("fake:b", "yes, go ahead")
-assert(ok, "reply ok: " .. tostring(err))
-assert(sent[1].id == "b" and sent[1].reply, "reply reached the blocked instance")
-assert(state.get("fake:b").tasks[1].reply, "the reply is marked on the task")
-
 -- result captures the last turn's output once and caches it
+state.dispatch("fake", "b", "review this")
 local jump = require("ask_agent.jump")
 local captures = 0
 jump.capture = function(_, cb)

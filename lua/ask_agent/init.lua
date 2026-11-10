@@ -593,11 +593,11 @@ local function choose_target(mod, cb)
 	show_list()
 end
 
----One send that always records the dispatch: every path (ask, batch, reply, API) goes through it.
+---One send that always records the dispatch: every path (ask, batch, API) goes through it.
 ---@param mod table backend
 ---@param target table instance
 ---@param text string
----@param opts { correlation?: table, anchor?: table, reply?: boolean }|nil
+---@param opts { correlation?: table, anchor?: table }|nil
 ---@return boolean ok, string|nil err
 local function deliver_text(mod, target, text, opts)
 	local ok, send_err = mod.send(target, text)
@@ -635,19 +635,7 @@ function M.send(text, opts)
 	return deliver_text(mod, target, text, { correlation = opts.correlation, anchor = opts.anchor })
 end
 
----Answer what an agent is blocked on, on that same instance. No picker, no queue.
----@param key string agent key from ask.agents() (e.g. "claude:12345")
----@param text string
----@return boolean ok, string? err
-function M.reply(key, text)
-	local ok, err = state.reply(key, text)
-	if not ok then
-		vim.notify("[ask_agent] " .. tostring(err), vim.log.levels.WARN)
-	end
-	return ok, err
-end
-
----The newest task handed to an agent: { text, ts, status, reply?, correlation, anchor, output? }.
+---The newest task handed to an agent: { text, ts, status, correlation, anchor, output? }.
 ---@param key string
 ---@return table|nil
 function M.task(key)
@@ -711,7 +699,6 @@ function M.dashboard(opts)
 		send = M.send,
 		batch_send = M.batch_send,
 		goto_anchor = M.goto_anchor,
-		reply = M.reply,
 		result = M.result,
 	}, opts)
 end

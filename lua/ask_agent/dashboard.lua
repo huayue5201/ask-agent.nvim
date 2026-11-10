@@ -380,7 +380,6 @@ local HELP = {
 	{ "s", "Send a question to that agent" },
 	{ "S", "Send every queued question routed to it" },
 	{ "C", "Show the output of its last turn (captured from the terminal)" },
-	{ "R", "Reply to what it is blocked on, on that same agent" },
 	{ "a", "Acknowledge a done/blocked agent" },
 	{ "d", "Delete the queued task · dismiss a dead agent" },
 	{ "<Tab>", "Fold or unfold the agent's tasks" },
@@ -519,28 +518,6 @@ local function attach(bufnr)
 		"C",
 		with("agent", function(node)
 			capture(node.rec)
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"R",
-		with("agent", function(node)
-			local rec = node.rec
-			ui.input({
-				title = ("Reply to %s%s"):format(
-					state.name(rec),
-					rec.state == "blocked" and (" · " .. (rec.msg or rec.kind or "waiting")) or ""
-				),
-				on_submit = function(text)
-					if text == "" then
-						return
-					end
-					if api and api.reply then
-						api.reply(rec.key, text)
-					end
-				end,
-			})
 		end),
 		opts_buf
 	)

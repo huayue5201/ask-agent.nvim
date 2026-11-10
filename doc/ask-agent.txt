@@ -346,9 +346,9 @@ nvim --server <sock> --remote-expr \
 
 Actions: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
 `agents` (optional `state` filter), `ask` (`{text, backend?, target?}`),
-`reply` (`{key, text}`), `task` (`{key}`), `result` (`{key, wait_ms?}`) and
-`status`. The last six expose the agent control plane over the same socket, so
-a terminal agent can list what is blocked, answer it and read the outcome.
+`task` (`{key}`), `result` (`{key, wait_ms?}`) and `status`. The last five expose
+the agent control plane over the same socket, so a terminal agent can list what
+is blocked and read the outcome.
 Handlers return JSON and never throw. Register extra actions from your config:
 
 >lua
@@ -361,8 +361,8 @@ end)
 project tooling.
 
 MCP: `bin/ask-agent-mcp` speaks MCP over stdio and forwards the same actions, so
-clients that only understand MCP get `agents`/`ask`/`reply`/`task`/`result`/
-`status` as tools. Point the client at the script; it finds the nvim instance
+clients that only understand MCP get `agents`/`ask`/`task`/`result`/`status` as
+tools. Point the client at the script; it finds the nvim instance
 working in the current directory (override with `$ASK_AGENT_SOCK`).
 
 ==============================================================================
@@ -408,10 +408,10 @@ ask.wait("pi:91841", "done", 600000, function(rec) ... end)
 ask.statusline()                             -- "⚠1 ✓2 ◐3", empty when idle
 <
 
-Answering and reading: `ask.reply(key, text)` sends a reply to a blocked instance
-on the same sender as everything else (sidebar `R`), and `ask.result(key, cb)`
-captures that instance's terminal once and hands back the newest task with its
-`output`. Tasks and unread marks are journaled to
+A blocked instance is only reported: the sidebar and statusline show it, and
+`<CR>` jumps to its terminal. It is answered in that terminal, not from Neovim.
+`ask.result(key, cb)` captures the instance's terminal once and hands back the
+newest task with its `output`. Tasks and unread marks are journaled to
 `<cache>/ask-agent/journal.json` (1 s debounce, week-old tasks dropped, disable
 with `persist = false`), so a restart keeps pending work visible.
 
@@ -432,8 +432,7 @@ idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `�
 
 `<CR>` on an agent brings its window to the front; on a task it jumps to the code
 anchor the task was written at. `s` sends, `S` flushes every queued question
-routed to that agent, `C` shows the output of its last turn, `R` replies to a
-blocked agent, `a` acknowledges, `d` deletes a
+routed to that agent, `C` shows the output of its last turn, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `<Tab>` folds its tasks, `?` opens the key
 help float, `r` polls now, `q` closes. The view is event-driven (state + queue notifications) and keeps the
 cursor where it was; the spinner is the only timer and only runs while a turn is

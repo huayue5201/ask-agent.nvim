@@ -359,7 +359,7 @@ buffer is for.
 
 The marker may carry more than a boolean — anything that speaks OSC 7501 can report
 the same state the terminal would display, and `blocked`/`done` then behave exactly
-like rex-reported ones (unread marks, notifications, the `R` reply key):
+like rex-reported ones (unread marks and notifications):
 
 ```json
 {"state": "blocked", "kind": "permission", "msg": "run the test suite?"}
@@ -477,10 +477,10 @@ nvim --server <sock> --remote-expr \
 ```
 
 Requests: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
-`agents` (`{state?}` filter), `ask` (`{text, backend?, target?}`), `reply`
-(`{key, text}`), `task` (`{key}`), `result` (`{key, wait_ms?}`) and `status` —
-the last six make the whole control plane reachable from a terminal agent, not
-just from your own Lua config.
+`agents` (`{state?}` filter), `ask` (`{text, backend?, target?}`), `task`
+(`{key}`), `result` (`{key, wait_ms?}`) and `status` — the last five make the
+whole control plane reachable from a terminal agent, not just from your own Lua
+config.
 Every handler returns a JSON string; failures are `{"ok":false,"error":…}` and never
 throw. Register your own actions from your config:
 
@@ -506,7 +506,7 @@ speaks MCP (Claude Desktop, another agent) gets tools without any Lua:
 {"mcpServers": {"ask-agent": {"command": "/Users/you/neovim-plugins/ask-agent.nvim/bin/ask-agent-mcp"}}}
 ```
 
-Tools: `agents`, `ask`, `reply`, `task`, `result`, `status` — the same actions as the
+Tools: `agents`, `ask`, `task`, `result`, `status` — the same actions as the
 bridge, forwarded to the nvim instance working in the current directory (or
 `$ASK_AGENT_SOCK`). It is python3 + `nvim` only; nothing to install.
 
@@ -523,7 +523,6 @@ ask.batch_route(ids, opts)    -- route queued entries to an agent ({ clear = tru
 ask.batch_list()              -- list queued questions (send/route/jump/edit/delete)
 ask.batch_clear() / ask.batch_count()
 ask.send(text, opts)          -- send without the ask window ({ correlation = { plugin, key }, anchor = a })
-ask.reply(key, text)          -- answer what that agent is blocked on, on the same instance
 ask.task(key)                 -- newest task handed to that agent
 ask.result(key, cb)           -- cb(task) with the newest turn's output, captured from the terminal once
 ask.agents(opts)              -- every instance, most urgent first ({ state, backend, correlation })
@@ -571,10 +570,11 @@ Where an observation came from is kept as `rec.source` — `rex` (the agent repo
 itself), `probe` (the backend's own hook/pane probe), or `heuristic` (nobody said
 "done", the turn simply stopped looking busy; the sidebar labels those `inferred`).
 
-A blocked agent can be answered from Neovim with `ask.reply(key, text)` (sidebar:
-`R`). The reply goes to the same instance, through the same sender as every other
-send, and is logged as a task with `reply = true` — so the exchange stays in one
-place instead of you switching to the terminal to type `y`.
+A blocked agent is reported, never answered from Neovim: the sidebar and statusline
+show `blocked` (with the agent's own message) and `<CR>` brings its terminal window
+to the front. Permission prompts, choices and passwords are answered in that
+terminal — the protocol carries no structured options, so injecting text would be
+a guess.
 
 `ask.result(key, cb)` gives you what an agent actually answered: it captures the
 instance's terminal once (`jump` adapter's `capture`), caches the text on the task
@@ -638,7 +638,6 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `<CR>` | bring its window to the front | jump to the task's code anchor |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `C` | show the output of its last turn | |
-| `R` | reply to what it is blocked on, on that agent | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `<Tab>` | fold the agent's tasks | |
 | `?` | key help (a float; `q` closes it) | |

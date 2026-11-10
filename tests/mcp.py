@@ -29,7 +29,7 @@ assert init["result"]["capabilities"] == {"tools": {}}, "capabilities"
 
 tools = mcp.respond({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]
 names = [t["name"] for t in tools]
-assert names == ["agents", "ask", "reply", "task", "result", "status"], names
+assert names == ["agents", "ask", "task", "result", "status"], names
 for t in tools:
     assert t["description"] and t["inputSchema"]["type"] == "object", t["name"]
 
@@ -44,19 +44,13 @@ assert payload["ok"] and seen[-1] == ("ask", {"text": "hi", "backend": None, "ta
 assert "isError" not in res["result"]
 
 res = mcp.respond(
-    {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "reply", "arguments": {"key": "a:1", "text": "yes"}}},
-    call=fake_call,
-)
-assert seen[-1] == ("reply", {"key": "a:1", "text": "yes"}), seen
-
-res = mcp.respond(
-    {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "status", "arguments": {}}},
+    {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "status", "arguments": {}}},
     call=fake_call,
 )
 assert json.loads(res["result"]["content"][0]["text"])["ok"]
 
 res = mcp.respond(
-    {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "nope", "arguments": {}}},
+    {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "nope", "arguments": {}}},
     call=fake_call,
 )
 assert res["result"]["isError"] and "unknown tool" in res["result"]["content"][0]["text"]

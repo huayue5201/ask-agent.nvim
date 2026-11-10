@@ -55,15 +55,6 @@ TOOLS = [
         },
     },
     {
-        "name": "reply",
-        "description": "Answer the agent that is blocked waiting for you (permission, question, auth).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"key": {"type": "string"}, "text": {"type": "string"}},
-            "required": ["key", "text"],
-        },
-    },
-    {
         "name": "task",
         "description": "The newest task handed to an agent: what was asked, when, and how it ended.",
         "inputSchema": {
@@ -171,8 +162,6 @@ def tool_call(name, args, call=None):
             target=args.get("target"),
             correlation=args.get("correlation"),
         )
-    if name == "reply":
-        return call("reply", key=args.get("key"), text=args.get("text"))
     if name == "task":
         return call("task", key=args.get("key"))
     if name == "result":
