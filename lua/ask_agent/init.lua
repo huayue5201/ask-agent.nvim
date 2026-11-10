@@ -266,7 +266,40 @@ local function center_win(win)
 	pcall(vim.api.nvim_win_set_config, win, cfg)
 end
 
---- Paint each list item's icon with that instance's fixed color.
+local STATE_HL = {
+	idle = "AskAgentListIdle",
+	working = "AskAgentListWorking",
+	blocked = "AskAgentListBlocked",
+	done = "AskAgentListDone",
+	error = "AskAgentListError",
+	gone = "AskAgentListGone",
+	unknown = "AskAgentListIdle",
+}
+
+local function ensure_state_hl()
+	for state, group in pairs(STATE_HL) do
+		local link = ({
+			working = "DiagnosticInfo",
+			blocked = "DiagnosticWarn",
+			done = "DiagnosticOk",
+			error = "DiagnosticError",
+			gone = "Comment",
+			idle = "Comment",
+			unknown = "Comment",
+		})[state]
+		pcall(vim.api.nvim_set_hl, 0, group, { link = link, default = true })
+	end
+end
+
+local function state_group(st)
+	if not st or not st.running then
+		return STATE_HL.gone
+	end
+	return STATE_HL[st.state] or STATE_HL.idle
+end
+
+--- Paint each list item's icon with that instance's fixed color, and its leading
+--- state glyph with the state color (the list has no per-item highlight API).
 --- Menu name fields only allow a single highlight per line, so we set extmarks on the buffer ourselves.
 ---@param win integer
 ---@param mod table
@@ -280,6 +313,7 @@ local function paint_list(win, mod, cands)
 	if #lines < #cands then
 		return -- not a plain item list (has a header/summary), so do not guess positions
 	end
+	ensure_state_hl()
 	local icons = require("ask_agent.icons")
 	vim.api.nvim_buf_clear_namespace(buf, NS_LIST, 0, -1)
 	for i, c in ipairs(cands) do
@@ -294,6 +328,18 @@ local function paint_list(win, mod, cands)
 				hl_group = hl,
 				strict = false,
 			})
+		end
+		-- format_item starts with "#N  " then the state glyph; color just that glyph.
+		local _, prefix_end = line:find("^#%d+%s+")
+		if prefix_end then
+			local ch = vim.fn.strcharpart(line:sub(prefix_end + 1), 0, 1)
+			if ch ~= "" then
+				pcall(vim.api.nvim_buf_set_extmark, buf, NS_LIST, i - 1, prefix_end, {
+					end_col = prefix_end + #ch,
+					hl_group = state_group(candidate_status(mod, c)),
+					strict = false,
+				})
+			end
 		end
 	end
 end

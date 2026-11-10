@@ -132,7 +132,7 @@ vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentRename<cr>", { desc = "Ask agent
 In the **ask window**: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` is a newline.
 In the **map**: letter picks that pane, `<Tab>` switches to the list, `<Esc>` cancels.
 In the **list**: number (or `<M-a>` for items past 9) picks, `<Tab>` goes back to the map.
-Each entry carries its live status: `●` idle, a spinner while busy (your question is
+Each entry carries its live status, colored by state: `●` idle, a spinner while busy (your question is
 delivered immediately but pi processes it after the current turn — you get a notice
 saying so), `⚠` blocked (a send would sit unread), `✓` done, `✗` error, `○` not
 running. In the map the status is a colored badge after the pane letter, so the

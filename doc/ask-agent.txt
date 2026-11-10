@@ -188,7 +188,8 @@ Every entry starts with the agent's state, re-probed when the picker opens:
   ●  idle — the agent is free, the question is handled right away
 
 The map draws the agent glyph, the pane letter, then the same status as a colored
-badge; a working agent's badge is the rotating spinner.
+badge; a working agent's badge is the rotating spinner. The list colors its leading
+status glyph the same way (working/blocked/done/error/gone/idle).
   ◐  working (rotating spinner when the picker animates) — a turn is running; the
      question is still delivered now
      (pi queues it as a follow-up and runs it after the current one), and a
