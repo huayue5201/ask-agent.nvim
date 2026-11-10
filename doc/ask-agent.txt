@@ -72,9 +72,11 @@ require("ask_agent").setup({
                         notifications. `!` clears a name.
 
                                                   *:AskAgentDashboard*
-:AskAgentDashboard      Open the dashboard: every agent most urgent first. `<CR>`
-                        jump, `s` send, `S` flush its queued questions, `C`
-                        capture its output (rex), `a` acknowledge, `d` dismiss,
+:AskAgentDashboard      Open the sidebar: agents as a tree, each agent's queued
+                        and sent tasks below it. `<CR>` jumps (agent window /
+                        task anchor), `s` send, `S` flush its queued questions,
+                        `C` capture its output, `a` acknowledge, `d` delete a
+                        queued task or dismiss a dead agent, `<Tab>` fold,
                         `r` poll now, `q` close.
 
                                                   *:AskAgentBatch*
@@ -360,12 +362,51 @@ ask.wait("pi:91841", "done", 600000, function(rec) ... end)
 ask.statusline()                             -- "⚠1 ✓2 ◐3", empty when idle
 <
 
-`rec.dispatch = { text, ts, correlation }` records what was sent and the opaque
-correlation table given to `ask.send(text, { correlation = { plugin, key } })`;
-it comes back with every event for that instance.
+`rec.dispatch = { text, ts, correlation, anchor }` records what was sent and the
+opaque correlation table given to `ask.send(text, { correlation = { plugin, key } })`;
+it comes back with every event for that instance. Every send is also appended to
+`rec.tasks` (newest first, the last 20): `{ text, ts, status, correlation, anchor }`
+with `status` = `running` / `done` / `error`.
 
 ==============================================================================
-11. BATCH QUESTIONS                                         *ask-agent-batch*
+11. DASHBOARD                                        *ask-agent-dashboard*
+
+|:AskAgentDashboard| opens a sidebar tree. Top level: agent instances, most urgent
+first. Children: that agent's tasks — questions still queued for it (`◐`) and
+turns already sent (spinner running, `✓` done, `✗` failed). Agent glyphs: `●`
+idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `○` exited.
+
+`<CR>` on an agent brings its window to the front; on a task it jumps to the code
+anchor the task was written at. `s` sends, `S` flushes every queued question
+routed to that agent, `C` shows its recent output, `a` acknowledges, `d` deletes a
+queued task or dismisses a dead agent, `<Tab>` folds its tasks, `r` polls now,
+`q` closes. The view is event-driven (state + queue notifications) and keeps the
+cursor where it was; the spinner is the only timer and only runs while a turn is
+in progress.
+
+Which terminal or multiplexer shows an agent is user-specific, so jumping goes
+through an adapter:
+
+>lua
+ask.register_jump({
+  id = "herdr",
+  priority = 10,                  -- higher wins when several adapters match
+  can = function(target) return target.pane ~= nil end,
+  focus = function(target) vim.system({ "herdr", "focus", target.pane }) end,
+  capture = function(target, cb)  -- optional: powers `C`
+    vim.system({ "herdr", "capture", target.pane }, { text = true }, function(res)
+      vim.schedule(function() cb(res.code == 0 and res.stdout or nil) end)
+    end)
+  end,
+})
+<
+
+rex (`target.rex`) and tmux (`target.pane`) ship built in. The first matching
+adapter (highest `priority`) handles the jump.
+
+
+==============================================================================
+12. BATCH QUESTIONS                                         *ask-agent-batch*
 
 Queue questions while browsing instead of sending them immediately. Each queued
 entry keeps the anchor captured at the time (cwd, file, line, selection), is
@@ -388,7 +429,7 @@ only).
 
 
 ==============================================================================
-12. API                                                    *ask-agent-api*
+13. API                                                    *ask-agent-api*
 
 >lua
 local ask = require("ask_agent")
@@ -397,11 +438,12 @@ ask.ask({ visual = true })
 ask.batch_ask({ visual = true })
 ask.batch_send({ ids = "3,5-7" }) / ask.batch_route(ids, opts)
 ask.batch_list() / ask.batch_clear() / ask.batch_count()
-ask.send(text, opts)                    -- { backend, target, correlation }
+ask.send(text, opts)                    -- { backend, target, correlation, anchor }
 ask.agents({ state = "blocked" })       -- instances, most urgent first
 ask.on(event, fn)                       -- state | update | done | blocked | error
 ask.wait(key, want, ms, cb)             -- one-shot wait; cb(nil) on timeout
-ask.statusline() / ask.dashboard()
+ask.statusline() / ask.dashboard(opts)  -- sidebar; { pos, width }
+ask.goto_anchor(a)                      -- jump to a captured anchor
 ask.use("pi") / ask.current()
 ask.list() / ask.targets("pi")
 ask.pin(id) / ask.pinned()
@@ -409,6 +451,7 @@ ask.alias(target, name) / ask.alias_of(target)
 ask.picker("map"|"list")
 ask.register(backend)
 ask.register_layout(adapter) / ask.layout(id)
+ask.register_jump(adapter)              -- bring an agent's window to the front
 ask.generic  -- tmux backend factory; also tmux_panes(match),
              -- tmux_panes_by_cmd(pat), state_file(dir, opts), slug(s)
 <

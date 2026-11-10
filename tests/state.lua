@@ -52,7 +52,7 @@ vim.wait(10)
 probe_a = { running = true, state = "working" }
 state.refresh()
 assert(state.get("fake:a").state == "working", "busy marker becomes working")
-state.dispatch("fake", "a", "review this", { plugin = "todo2", key = "t1" })
+state.dispatch("fake", "a", "review this", { correlation = { plugin = "todo2", key = "t1" } })
 vim.wait(10)
 probe_a = { running = true, state = "idle" }
 state.refresh()
@@ -60,6 +60,8 @@ local a = state.get("fake:a")
 assert(a.state == "done", "turn that ended after our send is done")
 assert(a.unread, "done is unread")
 assert(state.statusline() == "✓1", "statusline counts the finished turn: " .. state.statusline())
+assert(#a.tasks == 1 and a.tasks[1].status == "done", "the sent turn is logged and marked done")
+assert(a.tasks[1].text == "review this", "task text is the first line sent")
 
 -- sticky: a source that only knows idle must not erase an unacknowledged done
 state.refresh()

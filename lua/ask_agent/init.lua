@@ -16,8 +16,8 @@
 --
 -- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register/
 --             layout/register_layout/batch_ask/batch_send/batch_route/batch_list/batch_delete
---             /batch_undo/batch_clear/batch_count/agents/on/statusline/wait/dashboard.
--- UI: :AskAgentDashboard (all agents, most urgent first), ask_agent.statusline().
+--             /batch_undo/batch_clear/batch_count/agents/on/statusline/wait/dashboard/goto_anchor/register_jump.
+-- UI: :AskAgentDashboard (sidebar tree: agents + their tasks), ask_agent.statusline().
 
 local backends = require("ask_agent.backends")
 local generic = require("ask_agent.backends.generic")
@@ -27,6 +27,7 @@ local ui = require("ask_agent.ui")
 local aliases = require("ask_agent.aliases")
 local queue = require("ask_agent.queue")
 local state = require("ask_agent.state")
+local jump = require("ask_agent.jump")
 
 local NS_LIST = vim.api.nvim_create_namespace("ask_agent.list")
 
@@ -570,7 +571,7 @@ end
 
 --- Send text directly to the current backend (for reuse by other commands/plugins; skips the floating window)
 ---@param text string
----@param opts { backend?: string, target?: string, correlation?: table }|nil
+---@param opts { backend?: string, target?: string, correlation?: table, anchor?: table }|nil
 ---@return boolean ok, string? err
 function M.send(text, opts)
 	opts = opts or {}
@@ -582,13 +583,13 @@ function M.send(text, opts)
 	if not ok then
 		return false, send_err
 	end
-	state.dispatch(mod.id, target.id, text, opts.correlation)
+	state.dispatch(mod.id, target.id, text, { correlation = opts.correlation, anchor = opts.anchor })
 	return true, nil
 end
 
 ---Every observed agent instance, most attention-worthy first (blocked > done > error > working > idle).
 ---Fields: key, backend, id, state, kind, progress, msg, since, unread, gone, target,
----dispatch = { text, ts, correlation }.
+---dispatch = { text, ts, correlation, anchor }, tasks = newest first, each { text, ts, status, correlation, anchor }.
 ---@param opts { state?: string, backend?: string, correlation?: table }|nil
 ---@return table[]
 function M.agents(opts)
@@ -610,9 +611,29 @@ function M.statusline()
 	return state.statusline()
 end
 
----Open the dashboard: every agent, most urgent first; keys act on the cursor line.
-function M.dashboard()
-	require("ask_agent.dashboard").open({ send = M.send, batch_send = M.batch_send })
+---Jump to a code anchor (a table from ask_agent.context.capture, or an entry/anchor
+---you kept around). Returns false + reason if the buffer is gone.
+---@param anchor table
+---@return boolean ok, string|nil err
+function M.goto_anchor(anchor)
+	return context.jump_to(anchor)
+end
+
+---Register a jump adapter: the thing that brings an agent's window to the front.
+---`{ id, can(target), focus(target), capture?(target, cb), priority? }` — rex and tmux
+---are built in; see ask_agent/jump.lua for the contract.
+---@param mod table
+function M.register_jump(mod)
+	jump.register(mod)
+end
+
+---Open the sidebar: agents as the top level of a tree, their tasks below.
+---<CR> jumps (agent window through a jump adapter, task through its anchor),
+---`s` sends, `S` flushes the queue routed to that agent, `a` acks, `d` deletes a
+---queued task or dismisses a dead agent, `C` shows recent output, `q` closes.
+---@param opts { pos?: "left"|"right", width?: integer }|nil
+function M.dashboard(opts)
+	require("ask_agent.dashboard").open({ send = M.send, batch_send = M.batch_send, goto_anchor = M.goto_anchor }, opts)
 end
 
 ---Call `cb(rec)` once the instance reaches `want` (`cb(nil)` on timeout).
@@ -687,7 +708,7 @@ function M.ask(opts)
 					vim.notify(("[%s] %s"):format(mod.label, send_err), vim.log.levels.WARN)
 					return
 				end
-				state.dispatch(mod.id, target.id, text)
+				state.dispatch(mod.id, target.id, text, { anchor = anchor })
 				local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
 				vim.notify(
 					("[%s] Sent → #%d %s (%s)"):format(mod.label, target.index or 0, name_of(target), where),
@@ -786,7 +807,7 @@ local function deliver(mod, target, entries)
 		local ok, send_err = mod.send(target, text)
 		if ok then
 			sent = sent + 1
-			state.dispatch(mod.id, target.id, text)
+			state.dispatch(mod.id, target.id, text, { anchor = entry.anchor })
 			queue.remove(entry.id)
 		else
 			failed[#failed + 1] = { index = index, err = send_err }
@@ -922,24 +943,15 @@ end
 --- Jump to the code an entry is attached to.
 ---@param entry table
 local function goto_entry(entry)
-	local buf = entry.buf
-	if not vim.api.nvim_buf_is_valid(buf) then
-		vim.notify("[ask_agent] The buffer of this anchor no longer exists", vim.log.levels.WARN)
-		return
+	local ok, err = context.jump_to({
+		buf = entry.buf,
+		bufname = entry.bufname,
+		line = entry.line,
+		col = (entry.col or 0) + 1,
+	})
+	if not ok then
+		vim.notify("[ask_agent] " .. err, vim.log.levels.WARN)
 	end
-	if entry.bufname ~= "" and vim.api.nvim_buf_get_name(buf) ~= entry.bufname then
-		vim.notify("[ask_agent] The buffer number was reused by another file", vim.log.levels.WARN)
-		return
-	end
-	local win = vim.fn.bufwinid(buf)
-	if win ~= -1 then
-		vim.api.nvim_set_current_win(win)
-	else
-		vim.api.nvim_set_current_buf(buf)
-	end
-	local line = math.max(1, math.min(entry.line or 1, vim.api.nvim_buf_line_count(buf)))
-	vim.api.nvim_win_set_cursor(0, { line, entry.col or 0 })
-	vim.cmd("normal! zz")
 end
 
 --- List queued questions: jump / edit / delete.
@@ -1272,7 +1284,7 @@ function M.setup(opts)
 	end, { desc = "Ask agent: drop every queued question (undoable)" })
 	vim.api.nvim_create_user_command("AskAgentDashboard", function()
 		M.dashboard()
-	end, { desc = "Ask agent: dashboard of all agents (blocked/done/working), most urgent first" })
+	end, { desc = "Ask agent: sidebar - agents with their queued and sent tasks" })
 	-- Legacy name
 	vim.api.nvim_create_user_command("AskAgentPi", function()
 		M.ask()

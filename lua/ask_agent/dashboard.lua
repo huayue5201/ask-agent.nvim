@@ -1,26 +1,48 @@
 -- lua/ask_agent/dashboard.lua
----@brief All agents at a glance, sorted by "who needs me most".
+---@brief The sidebar: one tree, agents on top, what you handed each of them below.
 --
--- One scratch buffer, no polling: `ask_agent.state` pushes updates and the rows
--- are redrawn only when something changed. Keys act on the agent on the cursor
--- line; everything else (send, queue flush, ack) is delegated back to init.lua
--- through the small `api` table handed to open(), so this module owns layout and
--- nothing else.
+--   ▾ ⚠ reviewer            claude   needs permission  2m
+--       ◐ fix the parser       queued   3m
+--       ⠹ run the test suite   sent     41s
+--       ✓ update the docs      done     8m
+--   ▾ ◐ worker-2            pi       busy              12s
+--       ⠹ port the parser      sent     12s
+--
+-- A row is either an agent (top level) or one of its tasks, and <CR> does the
+-- obvious thing for that row: an agent's window comes to the front (through a
+-- jump adapter — rex, tmux, or whatever you registered with
+-- ask.register_jump), a task jumps to the code anchor it was written at.
+--
+-- Two task sources: the queue (questions not sent yet — `queued`) and the state
+-- layer's dispatch log (sent work — `sent`, `done`, `error`).
+--
+-- The view is push-driven: state and queue notify, the sidebar redraws. The only
+-- timer is the spinner, and it only runs while a turn is actually in progress.
 
 local state = require("ask_agent.state")
 local queue = require("ask_agent.queue")
+local jump = require("ask_agent.jump")
 local ui = require("ask_agent.ui")
 local icons = require("ask_agent.icons")
 
 local M = {}
 
 local NS = vim.api.nvim_create_namespace("ask_agent.dashboard")
-local GLYPH = { blocked = "⚠", done = "✓", error = "✗", working = "◐", idle = "●", unknown = "◌" }
-local DESC = { blocked = "needs you", done = "finished", error = "failed", working = "working", idle = "idle" }
-local HL = { blocked = "DiagnosticWarn", done = "DiagnosticOk", error = "DiagnosticError" }
+local FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local GLYPH =
+	{ blocked = "⚠", done = "✓", error = "✗", working = "◐", idle = "●", unknown = "◌", gone = "○" }
+local HL = { blocked = "DiagnosticWarn", done = "DiagnosticOk", error = "DiagnosticError", working = "DiagnosticInfo" }
+local TASK_GLYPH = { queued = "◐", done = "✓", error = "✗" }
+local TASK_HL = { queued = "DiagnosticInfo", done = "DiagnosticOk", error = "DiagnosticError" }
+local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 
-local buf, win, api
-local rows = {} -- line number -> record
+local ICON_AI = "󰚩"
+
+local buf, win, api, opts
+local rows = {} -- line number -> node
+local collapsed = {} -- agent key -> true
+local frame = 0
+local timer
 
 ---@param ms integer
 ---@return string
@@ -34,78 +56,179 @@ local function age(ms)
 	return math.floor(s / 3600) .. "h"
 end
 
----Queued questions routed to this instance.
----@param rec table
+---@param text string
+---@param width integer
+---@return string
+local function fit(text, width)
+	if width <= 0 or vim.fn.strdisplaywidth(text) <= width then
+		return text
+	end
+	local out, w = {}, 0
+	for _, ch in ipairs(vim.fn.split(text, "\\zs")) do
+		local cw = vim.fn.strdisplaywidth(ch)
+		if w + cw > width - 1 then
+			break
+		end
+		w = w + cw
+		out[#out + 1] = ch
+	end
+	return table.concat(out) .. "…"
+end
+
 ---@return integer
-local function queued(rec)
-	local n = 0
+local function inner_width()
+	return win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_width(win) - 1 or 40
+end
+
+---Tasks of one agent: queue entries routed to it plus its dispatch log.
+---@param rec table
+---@return table[]
+local function tasks_of(rec)
+	local out = {}
 	for _, entry in ipairs(queue.list()) do
 		local r = entry.route
 		if r and r.backend == rec.backend and tostring(r.id) == rec.id then
-			n = n + 1
+			out[#out + 1] = { kind = "queued", entry = entry, ts = 0 }
 		end
 	end
-	return n
+	for _, task in ipairs(rec.tasks or {}) do
+		out[#out + 1] = { kind = task.status, task = task, ts = task.ts }
+	end
+	table.sort(out, function(a, b)
+		local oa, ob = TASK_ORDER[a.kind] or 9, TASK_ORDER[b.kind] or 9
+		if oa ~= ob then
+			return oa < ob
+		end
+		return (a.ts or 0) > (b.ts or 0)
+	end)
+	return out
 end
 
 ---@param rec table
----@param now number
+---@param now integer
 ---@return string
-local function line_for(rec, now)
-	local name = state.name(rec)
-	local msg = rec.msg or (rec.gone and "exited" or DESC[rec.state] or rec.state)
-	if rec.state == "blocked" and rec.kind then
+local function agent_line(rec, now)
+	local fold = collapsed[rec.key] and "▸" or "▾"
+	local glyph = rec.state == "working" and FRAMES[frame % #FRAMES + 1] or GLYPH[rec.state] or "?"
+	local msg = rec.msg or (rec.gone and "exited" or rec.state)
+	if rec.kind then
 		msg = msg .. " (" .. rec.kind .. ")"
 	end
-	local n = queued(rec)
-	return ("%s %-18s %-8s %s%s"):format(
-		GLYPH[rec.state] or "?",
-		name:sub(1, 18),
-		rec.backend,
-		msg,
-		("  %s%s"):format(age(now - (rec.since or now)), n > 0 and ("  +" .. n .. " q") or "")
-	)
+	local name = state.name(rec)
+	local n = #tasks_of(rec)
+	local head = ("%s %s %s"):format(fold, glyph, name)
+	if n > 0 then
+		head = head .. (" (%d)"):format(n)
+	end
+	local tail = ("%s  %s"):format(msg, age(now - (rec.since or now)))
+	return fit(head .. "  " .. tail, inner_width())
 end
+
+---@param node table
+---@return string
+local function task_line(node)
+	local glyph
+	local text
+	local when
+	if node.kind == "queued" then
+		glyph = TASK_GLYPH.queued
+		text = node.entry.prompt
+		when = "queued"
+	else
+		glyph = node.kind == "running" and FRAMES[frame % #FRAMES + 1] or (TASK_GLYPH[node.kind] or "·")
+		text = node.task.text
+		when = node.kind
+	end
+	local first = vim.split(text or "", "\n")[1] or ""
+	return fit(("  %s %s  %s"):format(glyph, first, when), inner_width())
+end
+
+local ensure_timer
 
 local function render()
 	if not (buf and vim.api.nvim_buf_is_valid(buf)) then
 		return
 	end
-	local list = state.all()
 	local now = vim.uv.now()
+	local list = state.all()
 	local lines, map = {}, {}
-	for i, rec in ipairs(list) do
-		lines[i] = line_for(rec, now)
-		map[i] = rec
+	local working = false
+	for _, rec in ipairs(list) do
+		working = working or rec.state == "working"
+		lines[#lines + 1] = agent_line(rec, now)
+		map[#map + 1] = { kind = "agent", rec = rec }
+		if not collapsed[rec.key] then
+			for _, node in ipairs(tasks_of(rec)) do
+				node.rec = rec
+				lines[#lines + 1] = task_line(node)
+				map[#map + 1] = node
+				working = working or node.kind == "running"
+			end
+		end
 	end
 	if #lines == 0 then
-		lines = { "No agents running." }
+		lines = { "  no agents running" }
 	end
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR> jump  s send  S flush queue  a ack  d dismiss  C capture  r refresh  q close"
 	vim.bo[buf].modifiable = true
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 	vim.api.nvim_buf_clear_namespace(buf, NS, 0, -1)
-	for i, rec in ipairs(map) do
-		local hl = HL[rec.state]
-		if hl then
-			pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 0, { end_col = 1, hl_group = hl })
-		end
-		local accent = icons.accent_hl(icons.key(rec.target))
-		if accent then
-			pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 2, { end_col = 20, hl_group = accent })
+	for i, node in ipairs(map) do
+		if node.kind == "agent" then
+			local rec = node.rec
+			local hl = HL[rec.state]
+			if hl then
+				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 2, { end_col = 3, hl_group = hl })
+			end
+			local accent = icons.accent_hl(icons.key(rec.target))
+			if accent then
+				pcall(
+					vim.api.nvim_buf_set_extmark,
+					buf,
+					NS,
+					i - 1,
+					4,
+					{ end_line = i - 1, end_col = 30, hl_group = accent }
+				)
+			end
+		else
+			local hl = TASK_HL[node.kind]
+			if hl then
+				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 2, { end_col = 3, hl_group = hl })
+			elseif node.kind == "running" then
+				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 2, { end_col = 3, hl_group = "DiagnosticInfo" })
+			else
+				pcall(vim.api.nvim_buf_set_extmark, buf, NS, i - 1, 0, { end_col = 3, hl_group = "Comment" })
+			end
 		end
 	end
 	vim.bo[buf].modifiable = false
 	rows = map
 	if win and vim.api.nvim_win_is_valid(win) then
 		local cur = vim.api.nvim_win_get_cursor(win)
-		local max = math.max(1, #map)
-		vim.api.nvim_win_set_cursor(win, { math.min(cur[1], max), cur[2] })
-		if #map > 0 then
-			vim.wo[win].winbar = (" ask-agent — %d agent(s)"):format(#map)
-		end
+		vim.api.nvim_win_set_cursor(win, { math.min(cur[1], math.max(1, #map)), cur[2] })
+		vim.wo[win].winbar = (" %s %d agent(s)  ⏎ jump · s send · a ack · q close"):format(ICON_AI, #list)
 	end
+	if working then
+		ensure_timer()
+	elseif timer then
+		timer:stop()
+	end
+end
+
+function ensure_timer()
+	if timer then
+		timer:start(
+			100,
+			100,
+			vim.schedule_wrap(function()
+				frame = frame + 1
+				render()
+			end)
+		)
+		return
+	end
+	timer = vim.uv.new_timer()
+	ensure_timer()
 end
 
 ---@return table|nil
@@ -113,21 +236,19 @@ local function current()
 	return rows[vim.api.nvim_win_get_cursor(0)[1]]
 end
 
----@param rec table
-local function jump(rec)
-	local t = rec.target or {}
-	local loc = t.rex
-	if type(loc) == "table" and loc.block then
-		local cmd = { "rex", "block", "focus", "-b" }
-		cmd[#cmd + 1] = loc.block
-		if loc.session then
-			cmd[#cmd + 1], cmd[#cmd + 2] = "-s", loc.session
+---@param node table
+local function open_node(node)
+	if node.kind == "agent" then
+		local ok, err = jump.focus(node.rec.target)
+		if not ok then
+			vim.notify("[ask_agent] " .. err, vim.log.levels.INFO)
 		end
-		pcall(vim.system, cmd)
-	elseif t.pane then
-		pcall(vim.system, { "tmux", "select-pane", "-t", t.pane })
+	elseif node.kind == "queued" then
+		api.goto_anchor(node.entry.anchor)
+	elseif node.task and node.task.anchor then
+		api.goto_anchor(node.task.anchor)
 	else
-		vim.notify(("[ask_agent] %s has no window to jump to"):format(state.name(rec)), vim.log.levels.INFO)
+		vim.notify("[ask_agent] This task was sent without an anchor", vim.log.levels.INFO)
 	end
 end
 
@@ -156,27 +277,6 @@ local function show_text(title, text)
 end
 
 ---@param rec table
-local function capture(rec)
-	local loc = type(rec.target) == "table" and rec.target.rex or nil
-	if type(loc) ~= "table" or not loc.block then
-		vim.notify("[ask_agent] Capture needs a rex block (run the agent inside rex)", vim.log.levels.INFO)
-		return
-	end
-	local cmd = { "rex", "block", "capture", "-b", loc.block, "--trim" }
-	if loc.session then
-		vim.list_extend(cmd, { "-s", loc.session })
-	end
-	pcall(vim.system, cmd, { text = true }, function(res)
-		vim.schedule(function()
-			if res.code ~= 0 then
-				vim.notify("[ask_agent] rex capture failed: " .. (res.stderr or ""), vim.log.levels.WARN)
-				return
-			end
-			show_text(state.name(rec) .. " · recent output", res.stdout or "")
-		end)
-	end)
-end
-
 local function send_to(rec)
 	if not state.resolve(rec) then
 		vim.notify("[ask_agent] " .. rec.id .. " is not running", vim.log.levels.WARN)
@@ -193,12 +293,12 @@ local function send_to(rec)
 	})
 end
 
+---@param rec table
 local function flush_queue(rec)
 	local ids = {}
-	for _, entry in ipairs(queue.list()) do
-		local r = entry.route
-		if r and r.backend == rec.backend and tostring(r.id) == rec.id then
-			ids[#ids + 1] = entry.index
+	for _, node in ipairs(tasks_of(rec)) do
+		if node.kind == "queued" then
+			ids[#ids + 1] = node.entry.index
 		end
 	end
 	if #ids == 0 then
@@ -208,55 +308,100 @@ local function flush_queue(rec)
 	api.batch_send({ ids = table.concat(ids, ",") })
 end
 
+---@param rec table
+local function capture(rec)
+	jump.capture(rec.target, function(text)
+		if not text then
+			vim.notify("[ask_agent] No capture source for " .. state.name(rec), vim.log.levels.INFO)
+			return
+		end
+		show_text(state.name(rec) .. " · recent output", text)
+	end)
+end
+
 local function attach(bufnr)
-	local function act(fn)
+	local opts_buf = { buffer = bufnr, nowait = true, silent = true }
+	local function with(kind, fn)
 		return function()
-			local rec = current()
-			if rec then
-				fn(rec)
+			local node = current()
+			if node and (kind == nil or node.kind == kind) then
+				fn(node)
 			end
 		end
 	end
-	local opts = { buffer = bufnr, nowait = true, silent = true }
-	vim.keymap.set("n", "<CR>", act(jump), opts)
-	vim.keymap.set("n", "s", act(send_to), opts)
-	vim.keymap.set("n", "S", act(flush_queue), opts)
-	vim.keymap.set("n", "C", act(capture), opts)
+	vim.keymap.set("n", "<CR>", with(nil, open_node), opts_buf)
+	vim.keymap.set(
+		"n",
+		"s",
+		with("agent", function(node)
+			send_to(node.rec)
+		end),
+		opts_buf
+	)
+	vim.keymap.set(
+		"n",
+		"S",
+		with("agent", function(node)
+			flush_queue(node.rec)
+		end),
+		opts_buf
+	)
+	vim.keymap.set(
+		"n",
+		"C",
+		with("agent", function(node)
+			capture(node.rec)
+		end),
+		opts_buf
+	)
 	vim.keymap.set(
 		"n",
 		"a",
-		act(function(rec)
-			state.ack(rec.key)
+		with("agent", function(node)
+			state.ack(node.rec.key)
 		end),
-		opts
+		opts_buf
 	)
 	vim.keymap.set(
 		"n",
 		"d",
-		act(function(rec)
-			state.dismiss(rec.key)
+		with(nil, function(node)
+			if node.kind == "queued" then
+				queue.remove(node.entry.id)
+			elseif node.kind == "agent" then
+				state.dismiss(node.rec.key)
+			end
 		end),
-		opts
+		opts_buf
+	)
+	vim.keymap.set(
+		"n",
+		"<Tab>",
+		with("agent", function(node)
+			collapsed[node.rec.key] = not collapsed[node.rec.key] or nil
+			render()
+		end),
+		opts_buf
 	)
 	vim.keymap.set("n", "r", function()
 		state.refresh()
-	end, opts)
-	vim.keymap.set("n", "q", function()
+		render()
+	end, opts_buf)
+	local function close()
 		if win and vim.api.nvim_win_is_valid(win) then
 			pcall(vim.api.nvim_win_close, win, true)
 		end
-	end, opts)
-	vim.keymap.set("n", "<Esc>", function()
-		if win and vim.api.nvim_win_is_valid(win) then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end, opts)
+	end
+	vim.keymap.set("n", "q", close, opts_buf)
+	vim.keymap.set("n", "<Esc>", close, opts_buf)
 end
 
----Open (or focus) the dashboard.
----@param callbacks { send: function, batch_send: function }|nil
-function M.open(callbacks)
+---Open (or focus) the sidebar.
+---@param callbacks { send: function, batch_send: function, goto_anchor: function }|nil
+---@param o { pos?: "left"|"right", width?: integer }|nil
+function M.open(callbacks, o)
 	api = callbacks or api
+	opts = vim.tbl_extend("force", { pos = "left", width = 40 }, o or {})
 	if win and vim.api.nvim_win_is_valid(win) then
 		vim.api.nvim_set_current_win(win)
 		render()
@@ -268,26 +413,30 @@ function M.open(callbacks)
 	vim.bo[buf].filetype = "ask-agent-dashboard"
 	vim.bo[buf].modifiable = false
 	vim.api.nvim_buf_set_name(buf, "ask-agent://dashboard")
-	vim.cmd("botright split")
+	vim.cmd((opts.pos == "right" and "botright " or "topleft ") .. "vsplit")
 	win = vim.api.nvim_get_current_win()
 	vim.api.nvim_win_set_buf(win, buf)
+	vim.api.nvim_win_set_width(win, opts.width)
+	vim.wo[win].winfixwidth = true
 	vim.wo[win].number, vim.wo[win].relativenumber = false, false
 	vim.wo[win].signcolumn, vim.wo[win].foldcolumn = "no", "0"
 	vim.wo[win].spell, vim.wo[win].wrap = false, false
+	vim.wo[win].cursorline = true
 	attach(buf)
 	vim.api.nvim_buf_attach(buf, false, {
 		on_detach = function()
 			buf, win = nil, nil
+			if timer then
+				timer:stop()
+				timer:close()
+				timer = nil
+			end
 		end,
 	})
 	render()
-	vim.api.nvim_win_set_height(win, math.max(4, math.min(#state.all() + 3, 14)))
 end
 
-state.on("update", function()
-	if buf and vim.api.nvim_buf_is_valid(buf) then
-		render()
-	end
-end)
+state.on("update", render)
+queue.on_change(render)
 
 return M

@@ -98,6 +98,30 @@ local function bufs()
 	return out
 end
 
+local listeners = {}
+
+---Called after every change to the queue (add / remove / route / update / undo / clear).
+---Views (the dashboard) use it instead of polling. Returns an unsubscribe function.
+---@param fn function
+---@return fun() unsubscribe
+function M.on_change(fn)
+	table.insert(listeners, fn)
+	return function()
+		for i, f in ipairs(listeners) do
+			if f == fn then
+				table.remove(listeners, i)
+				return
+			end
+		end
+	end
+end
+
+local function notify()
+	for _, fn in ipairs(listeners) do
+		pcall(fn)
+	end
+end
+
 ---Renumber and repaint every buffer that holds an entry.
 function M.redraw()
 	ensure_hl()
@@ -107,6 +131,7 @@ function M.redraw()
 	for _, b in ipairs(bufs()) do
 		draw(b)
 	end
+	notify()
 end
 
 ---Queue one question.

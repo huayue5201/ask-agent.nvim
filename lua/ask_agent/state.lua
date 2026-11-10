@@ -14,7 +14,7 @@
 --   state.on("update", fn)   -- anything changed, including msg/progress (fn(rec))
 --   state.on("done"|"blocked"|"error", fn)
 --   state.all()              -- every instance, most attention-worthy first
---   state.dispatch(backend, id, text, correlation)
+--   state.dispatch(backend, id, text, { correlation, anchor })
 --
 -- States: idle | working | blocked | done | error | unknown | gone.
 -- `blocked` carries `kind` (permission | question | auth) and, like `done`,
@@ -37,6 +37,11 @@ local ORDER = { blocked = 1, done = 2, error = 3, working = 4, unknown = 5, idle
 local KIND = { permission = 0, question = 1, auth = 2 }
 local NOTIFY_GAP = 30000
 local PRUNE_MS = 600000
+local TASK_KEEP = 20
+
+---What a task looks like: { text, ts, status = "running" | "done" | "error", correlation, anchor }.
+---Every send that reaches an instance appends one (newest first), so the dashboard can
+---show "what did I hand this agent, and how did it end". The queue lives in queue.lua.
 
 ---@param backend string
 ---@param id string
@@ -148,6 +153,13 @@ local function apply(rec, st)
 	end
 	rec.state, rec.kind, rec.progress, rec.msg = state, kind, st.progress, st.msg
 	rec.gone = st.gone or nil
+	if state == "done" or state == "error" then
+		for _, task in ipairs(rec.tasks or {}) do
+			if task.status == "running" then
+				task.status = state == "done" and "done" or "error"
+			end
+		end
+	end
 	if changed and state ~= prev then
 		rec.since = vim.uv.now()
 		if state == "idle" then
@@ -351,12 +363,13 @@ function M.statusline()
 end
 
 ---Record that we just sent something, so a following `idle` can be attributed.
----Creates the record for instances the timer has not seen yet.
+---Creates the record for instances the timer has not seen yet. The send also
+---becomes the newest entry of `rec.tasks` (shown by the dashboard).
 ---@param backend string
 ---@param id string
 ---@param text string
----@param correlation table|nil opaque, handed back with every event of that record
-function M.dispatch(backend, id, text, correlation)
+---@param opts { correlation?: table, anchor?: table }|nil
+function M.dispatch(backend, id, text, opts)
 	local key = key_of(backend, id)
 	local rec = agents[key]
 	if not rec then
@@ -374,7 +387,19 @@ function M.dispatch(backend, id, text, correlation)
 			return
 		end
 	end
-	rec.dispatch = { text = text, ts = vim.uv.now(), correlation = correlation }
+	local ts = vim.uv.now()
+	rec.dispatch = { text = text, ts = ts, correlation = opts and opts.correlation, anchor = opts and opts.anchor }
+	rec.tasks = rec.tasks or {}
+	table.insert(rec.tasks, 1, {
+		text = (text:gsub("\n.*", "")),
+		ts = ts,
+		status = "running",
+		correlation = rec.dispatch.correlation,
+		anchor = rec.dispatch.anchor,
+	})
+	if #rec.tasks > TASK_KEEP then
+		rec.tasks[TASK_KEEP + 1] = nil
+	end
 	rec.unread = false
 	emit("update", rec)
 end

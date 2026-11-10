@@ -38,12 +38,13 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   behind the running task, same as typing into pi while it works), `⚠` waiting for you,
   `✓` finished, `✗` failed, `○` not running (process gone, socket missing, pane fell
   back to the shell). `show_stale = false` hides the exited ones.
-- **One status board for every agent** — `:AskAgentDashboard` lists all instances most
-  urgent first (permission > question > finished > error > working > idle) with what each
-  one is doing and how long it has been doing it. Jump to it, send to it, flush the
-  questions routed to it, read its output (rex), or acknowledge it. A finished turn or a
-  blocked prompt is reported once through `vim.notify`; `ask_agent.statusline()` puts
-  the counts (`⚠1 ✓2 ◐3`) where you want them.
+- **A sidebar for every agent** — `:AskAgentDashboard` opens a tree: agents on top
+  (most urgent first: permission > question > finished > error > working > idle), their
+  tasks below — the questions still queued for that agent (`◐`) and the turns already
+  sent (`spinner` running, `✓` done, `✗` failed). `<CR>` on an agent brings its window to
+  the front (rex, tmux, or any adapter you register) and on a task jumps to the code
+  anchor it was written at. A finished turn or a blocked prompt is reported once through
+  `vim.notify`; `ask_agent.statusline()` puts the counts (`⚠1 ✓2 ◐3`) where you want them.
 - **Status another plugin can act on** — `ask.agents()`, `ask.on("done"|"blocked")`,
   `ask.wait()` and a `correlation` tag that travels with a send and comes back with the
   event, so a task list can own the work and the agent only owns the conversation.
@@ -101,7 +102,7 @@ vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 | `:AskAgentPicker [map\|list]` | Choose the multi-candidate picker |
 | `:AskAgentTarget [id]` | Pin the target instance (`!` clears) |
 | `:AskAgentAlias` | Name an instance (`!` clears the name) |
-| `:AskAgentDashboard` | All agents, most urgent first (jump / send / flush / capture / ack) |
+| `:AskAgentDashboard` | Sidebar tree: agents + their queued/sent tasks (jump / send / flush / ack) |
 | `:AskAgentBatch` | Queue a question at the cursor instead of sending it now |
 | `:AskAgentBatchVisual` | Queue a question anchored to the selection |
 | `:AskAgentBatchSend [ids]` | Send queued questions (all, or e.g. `3,5-7`) to their agents |
@@ -430,12 +431,13 @@ ask.batch_send(opts)          -- send queued ({ ids = "3,5-7" }; nil = all), rou
 ask.batch_route(ids, opts)    -- route queued entries to an agent ({ clear = true } clears)
 ask.batch_list()              -- list queued questions (send/route/jump/edit/delete)
 ask.batch_clear() / ask.batch_count()
-ask.send(text, opts)          -- send without the ask window ({ correlation = { plugin, key } })
+ask.send(text, opts)          -- send without the ask window ({ correlation = { plugin, key }, anchor = a })
 ask.agents(opts)              -- every instance, most urgent first ({ state, backend, correlation })
 ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
 ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(nil) on timeout)
 ask.statusline()              -- "⚠1 ✓2 ◐3", empty when nothing needs attention
-ask.dashboard()               -- open the dashboard buffer
+ask.dashboard(opts)           -- open the sidebar ({ pos = "left"|"right", width = 40 })
+ask.goto_anchor(a)            -- jump to a captured anchor (false + reason if gone)
 ask.use(id) / ask.current()   -- default backend
 ask.list() / ask.targets(id)  -- backends / instances
 ask.pin(id) / ask.pinned()    -- pin a target
@@ -447,6 +449,7 @@ ask.generic                   -- tmux backend factory; also
                               -- generic.state_file(dir, opts), generic.slug(s)
 ask.register(mod)             -- register a backend at runtime
 ask.register_layout(mod)      -- register a layout adapter at runtime
+ask.register_jump(mod)        -- register a "bring that agent's window to the front" adapter
 ```
 
 ## Agent status
@@ -486,23 +489,67 @@ require("lua-line").add(ask.statusline)
 
 Correlation is opaque: `ask.send(text, { correlation = { plugin, key } })`
 stores it on the instance's record, `:AskAgent` and batch sends do not set one, and
-`rec.dispatch = { text, ts, correlation }` is handed back with every event.
+`rec.dispatch = { text, ts, correlation, anchor }` is handed back with every event.
+
+Every send is also appended to `rec.tasks` (newest first, last 20): `{ text, ts,
+status = "running" | "done" | "error", correlation, anchor }` — that is what the
+sidebar shows under each agent. Tasks finish when the instance reports `done` /
+`error`, or when a turn ends after we sent something.
 
 ## Dashboard
 
-`:AskAgentDashboard` opens a scratch buffer (a 14-line split, `q` closes) listing
-every agent most urgent first:
+`:AskAgentDashboard` opens a sidebar: a tree whose top level is the agents (most
+urgent first) and whose children are that agent's tasks — the questions still queued
+for it and the turns already sent to it:
 
 ```
-⚠ reviewer        claude   needs permission: run the test suite? (permission)  2m
-✓ worker-1        pi       finished: 12 files changed                           5m   +2 q
-◐ worker-2        pi       busy                                                 41s
-● scratch         codex    idle                                                 8s
+▾ ⚠ reviewer (2)  claude  needs permission: run the test suite?  2m
+  ◐ add the retry path  queued  3m
+  ⠹ run the test suite  running  41s
+▾ ✓ worker-1 (1)  pi      done: 12 files changed  5m
+  ✓ update the docs  done  8m
+▾ ◐ worker-2  pi      busy  12s
+  ⠹ port the parser  running  12s
 ```
 
-`<CR>` jumps to it, `s` sends to it, `S` sends every queued question routed to it,
-`C` captures its pane output (rex), `a` acknowledges, `d` dismisses, `r` polls now.
-The buffer updates itself on state events and keeps your cursor where it was.
+Agent glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌`
+unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `✗` failed.
+
+| Key | On an agent | On a task |
+| --- | --- | --- |
+| `<CR>` | bring its window to the front | jump to the task's code anchor |
+| `s` / `S` | send / flush every queued question routed to it | |
+| `C` | show its recent output (when the adapter can read it) | |
+| `a` / `d` | acknowledge / dismiss | delete the queued question |
+| `<Tab>` | fold the agent's tasks | |
+| `r` / `q` | poll now / close | |
+
+The buffer updates itself from state and queue events (no polling of its own; the
+spinner is the only timer, and it only runs while a turn is actually in progress)
+and keeps your cursor where it was.
+
+### Jumping to an agent's window
+
+Which terminal or multiplexer shows an agent is user-specific, so the sidebar only
+knows an adapter contract — rex and tmux ship built in, and anything else plugs in:
+
+```lua
+require("ask_agent").register_jump({
+  id = "herdr",
+  priority = 10,                     -- higher wins when several adapters match
+  can = function(target) return target.pane ~= nil end,
+  focus = function(target) vim.system({ "herdr", "focus", target.pane }) end,
+  capture = function(target, cb)     -- optional: powers `C`
+    vim.system({ "herdr", "capture", target.pane }, { text = true }, function(res)
+      vim.schedule(function() cb(res.code == 0 and res.stdout or nil) end)
+    end)
+  end,
+})
+```
+
+A target matches the first adapter (by `priority`) whose `can(target)` returns
+true; `target.rex = { session, block }` is what the built-in rex adapter looks for,
+`target.pane` what tmux uses.
 
 ## Batch questions
 

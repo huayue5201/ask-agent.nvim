@@ -24,6 +24,7 @@ function M.capture(visual)
 		cwd = vim.fn.getcwd(),
 		tab = vim.fn.tabpagenr(),
 		buf = buf,
+		bufname = name,
 		path = path and vim.fn.fnamemodify(path, ":~:.") or nil,
 		line = cursor[1],
 		col = cursor[2] + 1,
@@ -57,6 +58,30 @@ function M.describe(a)
 		table.insert(bits, "unsaved")
 	end
 	return table.concat(bits, " · ")
+end
+
+---Jump to the buffer/line an anchor points at. Returns false + reason when the
+---buffer is gone or its number was reused by a different file.
+---@param a table anchor (needs `buf`, optional `bufname`, `line`, `col`)
+---@return boolean ok, string|nil err
+function M.jump_to(a)
+	local buf = a and a.buf
+	if not buf or not vim.api.nvim_buf_is_valid(buf) then
+		return false, "the buffer of this anchor no longer exists"
+	end
+	if a.bufname and a.bufname ~= "" and vim.api.nvim_buf_get_name(buf) ~= a.bufname then
+		return false, "the buffer number was reused by another file"
+	end
+	local win = vim.fn.bufwinid(buf)
+	if win ~= -1 then
+		vim.api.nvim_set_current_win(win)
+	else
+		vim.api.nvim_set_current_buf(buf)
+	end
+	local line = math.max(1, math.min(a.line or 1, vim.api.nvim_buf_line_count(buf)))
+	vim.api.nvim_win_set_cursor(0, { line, (a.col or 1) - 1 })
+	vim.cmd("normal! zz")
+	return true, nil
 end
 
 return M
