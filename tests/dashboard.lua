@@ -100,30 +100,50 @@ vim.wait(50)
 assert(queue.count() == 1, "jumping does not consume the queued question")
 
 -- the rex adapter must use the CLI shape we verified (`focus` takes a positional
--- block); a -b on focus exits 2 and silently does nothing
+-- block); a -b on focus exits 2 and silently does nothing. Jumping off the
+-- current tab/session needs three server/app actions in order: focus the block's
+-- window (rex's term for a tab), focus the block, then make the session visible
+-- in the app (a client action).
 local systems = {}
 local real_system = vim.system
 vim.system = function(cmd, _, cb)
 	systems[#systems + 1] = cmd
-	if cb then
-		cb({ code = 0, stdout = "screen" })
+	local function out()
+		if cmd[2] == "block" and cmd[3] == "inspect" then
+			return { code = 0, stdout = '{"block":{"window_id":"w"}}' }
+		elseif cmd[2] == "client" then
+			return {
+				code = 0,
+				stdout = '{"clients":[{"client_id":"c","connection_state":"connected","info":{"kind":"app"},"session_ids":["s"]}]}',
+			}
+		end
+		return { code = 0, stdout = "screen" }
 	end
-	return { pid = 1 }
+	if cb then
+		cb(out())
+		return { pid = 1 }
+	end
+	return { pid = 1, wait = out }
 end
 store.focus({ rex = { session = "s", block = "b" } })
 vim.wait(50)
 vim.system = real_system
 vim.wait(20)
--- switching the app to the block's session is a client action (`rex do
--- session.select`), not part of `block focus`: without it a block in another
--- session stays invisible even though the server-side focus moved
 assert(
-	vim.deep_equal(systems[1], { "rex", "do", "session.select", "session_id=s" }),
-	"session.select argv: " .. vim.inspect(systems[1])
+	vim.deep_equal(systems[1], { "rex", "block", "inspect", "b", "-s", "s" }),
+	"block inspect argv: " .. vim.inspect(systems[1])
 )
 assert(
-	vim.deep_equal(systems[2], { "rex", "block", "focus", "b", "-s", "s" }),
-	"focus argv: " .. vim.inspect(systems[2])
+	vim.deep_equal(systems[3], { "rex", "window", "focus", "w", "-s", "s" }),
+	"window focus argv: " .. vim.inspect(systems[3])
+)
+assert(
+	vim.deep_equal(systems[4], { "rex", "block", "focus", "b", "-s", "s" }),
+	"focus argv: " .. vim.inspect(systems[4])
+)
+assert(
+	vim.deep_equal(systems[5], { "rex", "-C", "c", "do", "session.select", "session_id=s" }),
+	"session.select argv: " .. vim.inspect(systems[5])
 )
 
 -- an anchor captured in another tab switches to that tab instead of opening a
@@ -150,6 +170,26 @@ assert(vim.api.nvim_buf_get_name(0) == vim.api.nvim_buf_get_name(tab_buf))
 vim.cmd("tabclose")
 vim.cmd("bwipeout! " .. tab_buf)
 assert(vim.api.nvim_get_current_tabpage() == first_tab, "back on the original tab")
+
+-- jumping from a panel (buftype ~= "", e.g. this sidebar) must open the file in
+-- an editing window instead of replacing the panel's own content
+local panel_win = vim.api.nvim_get_current_win()
+local panel_buf = vim.api.nvim_get_current_buf()
+local file = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(file, "/tmp/ask-agent-goto.lua")
+vim.api.nvim_buf_set_lines(file, 0, -1, false, { "a", "b" })
+local jumped_from_panel = require("ask_agent.context").jump_to({
+	buf = file,
+	bufname = vim.api.nvim_buf_get_name(file),
+	line = 2,
+	col = 1,
+})
+assert(jumped_from_panel, "jump from a panel")
+assert(vim.api.nvim_get_current_buf() == file, "the file opened in an editing window")
+assert(vim.api.nvim_get_current_win() ~= panel_win, "the current window is not the panel")
+assert(vim.api.nvim_win_get_buf(panel_win) == panel_buf, "the panel kept its own buffer")
+vim.api.nvim_set_current_win(panel_win)
+vim.cmd("bwipeout! " .. file)
 
 -- adapters: rex and tmux both claim their targets, custom ones can win
 assert(store.find({ rex = { session = "s", block = "b" } }).id == "rex", "rex adapter")

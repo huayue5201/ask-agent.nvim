@@ -468,11 +468,13 @@ ask.register_jump({
 <
 
 rex (`target.rex`) and tmux (`target.pane`) ship built in. The first matching
-adapter (highest `priority`) handles the jump. The rex adapter runs two steps,
-because a Rex app keeps showing whichever session it had selected: `rex do
-session.select session_id=...` (the app-side action, `REX_CLIENT` picks the app
-when several are connected) and then `rex block focus <block> -s <session>`,
-which also activates the block's window. Failures become warnings.
+adapter (highest `priority`) handles the jump. The rex adapter runs three steps,
+because a Rex app shows one session and one window (tab) at a time: `rex block
+inspect` finds the block's `window_id`, `rex window focus <window> -s <session>`
+switches tabs, `rex block focus <block> -s <session>` puts the cursor in the
+pane, and finally `rex do session.select session_id=...` (the app-side action;
+`REX_CLIENT` picks the app when set, otherwise the connected Rex app is used)
+makes the session visible. Failures become warnings.
 
 
 ==============================================================================

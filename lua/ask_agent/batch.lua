@@ -144,7 +144,10 @@ function M.send(opts)
 			for _, entry in ipairs(group.entries) do
 				indices[#indices + 1] = "#" .. entry.index
 			end
-			notify.notify(("[ask_agent] Kept %s queued: %s"):format(table.concat(indices, ", "), why), vim.log.levels.WARN)
+			notify.notify(
+				("[ask_agent] Kept %s queued: %s"):format(table.concat(indices, ", "), why),
+				vim.log.levels.WARN
+			)
 		end
 	end
 	if #rest > 0 then

@@ -104,6 +104,70 @@ local function run(cmds, on_error)
 	step(1)
 end
 
+-- The rex app shows one session at a time and one window (tab) per session, so
+-- `block focus` alone only reaches panes of the window that is already visible.
+-- Find the owning window first, focus it, and finally ask the app to show the
+-- session — three server/app actions, in that order.
+
+---The connected rex app to address with `-C`; REX_CLIENT wins when set. Without
+---one, `session.select` has no visible effect (it is a client action).
+---@param session string|nil
+---@return string|nil client
+local function app_client(session)
+	local env = vim.env.REX_CLIENT
+	if type(env) == "string" and env ~= "" then
+		return env
+	end
+	local ok, res = pcall(function()
+		return vim.system({ "rex", "client", "ls", "--json" }, { text = true }):wait(1000)
+	end)
+	if not ok or not res or res.code ~= 0 then
+		return nil
+	end
+	local decoded, data = pcall(vim.json.decode, res.stdout)
+	if not decoded or type(data) ~= "table" then
+		return nil
+	end
+	local fallback
+	for _, c in ipairs(data.clients or {}) do
+		local info = c.info or {}
+		if info.kind == "app" and c.connection_state == "connected" then
+			local id = c.client_id or info.label
+			if id then
+				-- prefer the app that already has the session open
+				for _, sid in ipairs(c.session_ids or {}) do
+					if sid == session then
+						return id
+					end
+				end
+				fallback = fallback or id
+			end
+		end
+	end
+	return fallback
+end
+
+---@param block string
+---@param session string|nil
+---@return string|nil window_id
+local function block_window(block, session)
+	local cmd = { "rex", "block", "inspect", block }
+	if session then
+		vim.list_extend(cmd, { "-s", session })
+	end
+	local ok, res = pcall(function()
+		return vim.system(cmd, { text = true }):wait(1000)
+	end)
+	if not ok or not res or res.code ~= 0 then
+		return nil
+	end
+	local decoded, data = pcall(vim.json.decode, res.stdout)
+	if not decoded or type(data) ~= "table" then
+		return nil
+	end
+	return data.block and data.block.window_id or nil
+end
+
 M.register({
 	id = "rex",
 	priority = 20,
@@ -111,26 +175,30 @@ M.register({
 		return type(target.rex) == "table" and target.rex.block ~= nil
 	end,
 	focus = function(target)
-		-- Two steps, because neither alone is enough off the current tab/session:
-		-- `session.select` is the app-side action that makes a session *visible*
-		-- (focusing a block only touches server state, the app keeps showing
-		-- whatever session it had selected), and `block focus` then puts the
-		-- cursor in the pane, switching windows within that session.
+		local session, block = target.rex.session, target.rex.block
+		local window = block_window(block, session)
 		local cmds = {}
-		if target.rex.session then
-			local select = { "rex" }
-			if vim.env.REX_CLIENT and vim.env.REX_CLIENT ~= "" then
-				vim.list_extend(select, { "-C", vim.env.REX_CLIENT })
+		if window then
+			local focus_window = { "rex", "window", "focus", window }
+			if session then
+				vim.list_extend(focus_window, { "-s", session })
 			end
-			vim.list_extend(select, { "do", "session.select", "session_id=" .. target.rex.session })
+			cmds[#cmds + 1] = focus_window
+		end
+		local focus_block = { "rex", "block", "focus", block }
+		if session then
+			vim.list_extend(focus_block, { "-s", session })
+		end
+		cmds[#cmds + 1] = focus_block
+		if session then
+			local select = { "rex" }
+			local client = app_client(session)
+			if client then
+				vim.list_extend(select, { "-C", client })
+			end
+			vim.list_extend(select, { "do", "session.select", "session_id=" .. session })
 			cmds[#cmds + 1] = select
 		end
-		-- focus takes the block as a positional argument
-		local focus = { "rex", "block", "focus", target.rex.block }
-		if target.rex.session then
-			vim.list_extend(focus, { "-s", target.rex.session })
-		end
-		cmds[#cmds + 1] = focus
 		run(cmds, function(cmd, res)
 			notify.notify(
 				("[ask_agent] %s failed: %s"):format(cmd[1] .. " " .. cmd[2], (res.stderr or ""):gsub("%s+$", "")),

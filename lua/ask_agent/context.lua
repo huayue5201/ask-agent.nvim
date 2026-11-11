@@ -79,7 +79,28 @@ function M.jump_to(a)
 		vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(wins[1]))
 		vim.api.nvim_set_current_win(wins[1])
 	else
-		vim.api.nvim_set_current_buf(buf)
+		-- Load into a normal editing window, never into the sidebar/panel the jump was
+		-- started from: a special buffer (dashboard, quickfix, terminal, float) must keep
+		-- its own content. With no editor window left, open a tab instead of splitting
+		-- the sidebar.
+		local win = vim.api.nvim_get_current_win()
+		local cur = vim.api.nvim_win_get_buf(win)
+		if vim.bo[cur].buftype ~= "" or vim.api.nvim_win_get_config(win).relative ~= "" then
+			win = nil
+			for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+				local b = vim.api.nvim_win_get_buf(w)
+				if vim.bo[b].buftype == "" and vim.api.nvim_win_get_config(w).relative == "" then
+					win = w
+					break
+				end
+			end
+			if not win then
+				vim.cmd("tabnew")
+				win = vim.api.nvim_get_current_win()
+			end
+		end
+		vim.api.nvim_win_set_buf(win, buf)
+		vim.api.nvim_set_current_win(win)
 	end
 	local line = math.max(1, math.min(a.line or 1, vim.api.nvim_buf_line_count(buf)))
 	vim.api.nvim_win_set_cursor(0, { line, (a.col or 1) - 1 })
