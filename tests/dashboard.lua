@@ -69,6 +69,32 @@ assert(lines[4]:match("quiet%-instance"), "the name column fits the longest name
 assert(lines[1]:match("working"), "agent state on the row: " .. lines[1])
 assert(lines[2]:match("sent question") and lines[2]:match("running"), "running task first: " .. lines[2])
 assert(lines[3]:match("queued question") and lines[3]:match("queued"), "queued task: " .. lines[3])
+-- tree lines: first child branches, the last one corners
+local branch, corner = "\u{251c}\u{2500} ", "\u{2514}\u{2500} "
+assert(lines[2]:sub(1, #branch) == branch, "first task branches off the agent: " .. lines[2])
+assert(lines[3]:sub(1, #corner) == corner, "last task corners: " .. lines[3])
+-- the path from the working agent to its running task is green
+local green = false
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, { 1, 0 }, { 1, -1 }, { details = true })) do
+	local hl = m[4].hl_group
+	if hl and hl:match("^AskAgentRun") then
+		green = true
+	end
+end
+assert(green, "the running task's connector is highlighted")
+
+-- the appearance knobs only change the connector, not the rows themselves
+dashboard.open(nil, { running_line = "off" })
+vim.wait(20)
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, { 0, 0 }, { -1, -1 }, { details = true })) do
+	assert(not (m[4].hl_group or ""):match("^AskAgentRun"), "running_line=off paints no green")
+end
+assert(vim.api.nvim_buf_get_lines(buf, 1, 2, false)[1]:sub(1, #branch) == branch, "tree lines stay")
+dashboard.open(nil, { tree_lines = false })
+vim.wait(20)
+assert(vim.api.nvim_buf_get_lines(buf, 1, 2, false)[1]:sub(1, 2) == "  ", "tree_lines=false indents only")
+dashboard.open(nil, { tree_lines = true, running_line = "pulse" })
+vim.wait(20)
 assert(vim.wo[vim.api.nvim_get_current_win()].winfixwidth, "sidebar keeps its width")
 
 -- n renames the agent on the cursor row; the name is what lists show from now on
@@ -91,6 +117,14 @@ vim.wait(20)
 for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
 	assert(vim.fn.strdisplaywidth(l) <= 24, "row wider than the window: " .. l)
 end
+-- below TREE_MIN_WIDTH the connectors give way to plain indentation
+vim.api.nvim_win_set_width(0, 16)
+dashboard.open(nil)
+vim.wait(20)
+for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	assert(vim.fn.strdisplaywidth(l) <= 16, "row wider than the window: " .. l)
+end
+assert(vim.api.nvim_buf_get_lines(0, 1, 2, false)[1]:sub(1, 2) == "  ", "narrow sidebar drops tree lines")
 vim.api.nvim_win_set_width(0, 50)
 
 -- <CR> on a task jumps to its anchor instead of the agent window

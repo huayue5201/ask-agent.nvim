@@ -39,8 +39,17 @@ local DEFAULTS = {
 	},
 	-- one mark per task in the dashboard tree
 	task = { queued = "◐", done = "✓", error = "✗" },
-	-- tree decorations: fold, and the leaf used for "no tasks"/plain rows
-	tree = { collapsed = "▸", expanded = "▾", leaf = "·" },
+	-- tree decorations: fold, the leaf used for "no tasks"/plain rows, and the
+	-- connectors drawn between an agent and its tasks
+	tree = {
+		collapsed = "▸",
+		expanded = "▾",
+		leaf = "·",
+		vertical = "│",
+		branch = "├",
+		corner = "└",
+		horizontal = "─",
+	},
 	-- busy spinner; the first frame is used wherever animation is not possible
 	spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
 }

@@ -33,6 +33,21 @@ local HL = { blocked = "DiagnosticWarn", done = "DiagnosticOk", error = "Diagnos
 local TASK_HL = { queued = "DiagnosticInfo", done = "DiagnosticOk", error = "DiagnosticError" }
 local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 
+-- Tree lines and the running-task connector. Both are cosmetic: `tree_lines`
+-- (default true) draws │ ├ └ between an agent and its tasks, and `running_line`
+-- ("pulse" | "static" | "off", default "pulse") lights the path from the agent
+-- down to the task that is running right now. Narrow sidebars fall back to plain
+-- indentation so the text keeps its room.
+local TREE_MIN_WIDTH = 20
+local cfg = { tree_lines = true, running_line = "pulse" }
+local RUN_HL = { "AskAgentRunDim", "AskAgentRunMid", "AskAgentRunBright" }
+local RUN_FG = { "#2b6b3e", "#3fb950", "#7ee787" }
+local run_hl_tc -- termguicolors value the groups were built for
+local tree_hl_ready = false
+
+local ensure_tree_hl
+local ensure_run_hl
+
 local buf, win, api, opts
 local rows = {} -- line number -> node
 local collapsed = {} -- agent key -> true
@@ -146,7 +161,7 @@ end
 ---@param show_backend boolean
 ---@param now integer
 ---@param n integer tasks below this agent
----@return string line, table[] marks
+---@return string line, table[] marks, integer fold_bytes
 local function agent_line(rec, name_w, show_backend, now, n)
 	local fold = n == 0 and icons.ui("tree", "leaf")
 		or (collapsed[rec.key] and icons.ui("tree", "collapsed") or icons.ui("tree", "expanded"))
@@ -177,13 +192,35 @@ local function agent_line(rec, name_w, show_backend, now, n)
 	if accent then
 		marks[#marks + 1] = { name_start, name_start + #name, accent }
 	end
-	return columns(left, right, inner_width()), marks
+	return columns(left, right, inner_width()), marks, #fold
+end
+
+---@param key string
+---@param fallback string
+---@return string
+local function tree_glyph(key, fallback)
+	return icons.ui("tree", key) or fallback
+end
+
+---Prefix of a task row: branch + horizontal (or plain spaces when lines are off).
+---@param i integer 1-based sibling index
+---@param n integer number of siblings
+---@param use_lines boolean
+---@return string prefix, integer branch_bytes, integer horiz_bytes
+local function task_prefix(i, n, use_lines)
+	if not use_lines then
+		return "  ", 0, 0
+	end
+	local branch = (i == n) and tree_glyph("corner", "└") or tree_glyph("branch", "├")
+	local horiz = tree_glyph("horizontal", "─")
+	return branch .. horiz .. " ", #branch, #horiz
 end
 
 ---@param node table
 ---@param now integer
+---@param prefix string tree prefix (spaces when tree lines are off)
 ---@return string line, table[] marks
-local function task_line(node, now)
+local function task_line(node, now, prefix)
 	local glyph, text, right, hl
 	if node.kind == "queued" then
 		glyph, text, right, hl = icons.ui("task", "queued"), node.entry.prompt, "queued", TASK_HL.queued
@@ -197,12 +234,64 @@ local function task_line(node, now)
 		end
 	end
 	local first = vim.split(text or "", "\n")[1] or ""
-	local line = columns(("  %s %s"):format(glyph, first), right, inner_width())
-	local marks = { { 2, 2 + #glyph, hl } }
+	local start = #prefix
+	local line = columns(prefix .. ("%s %s"):format(glyph, first), right, inner_width())
+	local marks = { { start, start + #glyph, hl } }
 	if node.kind == "done" or node.kind == "error" then
 		marks[#marks + 1] = { 0, #line, "Comment" }
 	end
 	return line, marks
+end
+
+function ensure_tree_hl()
+	if tree_hl_ready then
+		return
+	end
+	tree_hl_ready = true
+	vim.api.nvim_set_hl(0, "AskAgentTree", { link = "Comment", default = true })
+end
+
+---Build the green shades for the running connector. Returns whether truecolor is
+---available: without it the path is drawn in one flat green (no animation, since
+---the shades would collapse into each other).
+---@return boolean
+function ensure_run_hl()
+	local tc = vim.o.termguicolors
+	if run_hl_tc == tc then
+		return tc
+	end
+	run_hl_tc = tc
+	if tc then
+		for i, name in ipairs(RUN_HL) do
+			vim.api.nvim_set_hl(0, name, { fg = RUN_FG[i], bold = true, default = true })
+		end
+	else
+		vim.api.nvim_set_hl(0, "AskAgentRun", { link = "DiagnosticOk", default = true })
+	end
+	return tc
+end
+
+---Highlight for one cell of the agent -> running-task path.
+---@param i integer 0-based cell index (0 = the agent's fold glyph)
+---@param n integer total cells on the path
+---@return string hl
+local function run_shade(i, n)
+	if not ensure_run_hl() then
+		return "AskAgentRun"
+	end
+	if cfg.running_line == "static" then
+		local s = math.floor(i * 3 / math.max(1, n)) + 1
+		return RUN_HL[math.min(3, math.max(1, s))]
+	end
+	-- pulse: a bright cell travels down the path, mid shade right behind it
+	local head = frame % n
+	local d = (head - i) % n
+	if d == 0 then
+		return RUN_HL[3]
+	elseif d == 1 then
+		return RUN_HL[2]
+	end
+	return RUN_HL[1]
 end
 
 local ensure_timer
@@ -235,17 +324,56 @@ local function render()
 	end
 	name_w = math.min(name_w, math.max(8, math.floor(width / 2) - 6))
 
+	local use_lines = cfg.tree_lines and width >= TREE_MIN_WIDTH
+	if use_lines then
+		ensure_tree_hl()
+	end
+
 	local lines, map, marks = {}, {}, {}
 	local working = false
 	for _, rec in ipairs(list) do
 		working = working or rec.state == "working"
 		local children = tasks_of(rec, queued)
-		local line, m = agent_line(rec, name_w, seen > 1, now, counts[rec.key])
+		local show_children = not collapsed[rec.key]
+		local line, m, fold_bytes = agent_line(rec, name_w, seen > 1, now, counts[rec.key])
+		-- The running task sorts first, so the path is usually just the agent's
+		-- fold cell plus that one row's branch; it still reads as a link because
+		-- the pulse travels between them.
+		local running
+		if use_lines and cfg.running_line ~= "off" and show_children then
+			for i, node in ipairs(children) do
+				if node.kind == "running" then
+					running = i
+					break
+				end
+			end
+		end
+		local run_total = running and (running + 2) or 0 -- fold + per-row branch + horizontal
+		if running then
+			m[#m + 1] = { 0, fold_bytes, run_shade(0, run_total) }
+		end
 		lines[#lines + 1], map[#map + 1], marks[#marks + 1] = line, { kind = "agent", rec = rec }, m
-		if not collapsed[rec.key] then
-			for _, node in ipairs(children) do
+		if show_children then
+			local n = #children
+			for i, node in ipairs(children) do
 				node.rec = rec
-				local tline, tm = task_line(node, now)
+				local prefix, branch_bytes, horiz_bytes = task_prefix(i, n, use_lines)
+				local tline, tm = task_line(node, now, prefix)
+				if use_lines then
+					if running and i <= running then
+						local cell = i
+						tm[#tm + 1] = { 0, branch_bytes, run_shade(cell, run_total) }
+						if i == running and horiz_bytes > 0 then
+							tm[#tm + 1] = {
+								branch_bytes,
+								branch_bytes + horiz_bytes,
+								run_shade(cell + 1, run_total),
+							}
+						end
+					else
+						tm[#tm + 1] = { 0, branch_bytes + horiz_bytes, "AskAgentTree" }
+					end
+				end
 				lines[#lines + 1], map[#map + 1], marks[#marks + 1] = tline, node, tm
 				working = working or node.kind == "running"
 			end
@@ -539,12 +667,27 @@ local function attach(bufnr)
 	vim.keymap.set("n", "<Esc>", close, opts_buf)
 end
 
+---Dashboard appearance knobs (setup-level; per-call :AskAgentDashboard opts win).
+---@param o { tree_lines?: boolean, running_line?: "pulse"|"static"|"off" }|nil
+function M.configure(o)
+	if type(o) ~= "table" then
+		return
+	end
+	if o.tree_lines ~= nil then
+		cfg.tree_lines = o.tree_lines ~= false
+	end
+	if o.running_line ~= nil then
+		cfg.running_line = (o.running_line == "static" or o.running_line == "off") and o.running_line or "pulse"
+	end
+end
+
 ---Open (or focus) the sidebar.
 ---@param callbacks { send: function, batch_send: function, goto_anchor: function }|nil
 ---@param o { pos?: "left"|"right", width?: integer }|nil
 function M.open(callbacks, o)
 	api = callbacks or api
 	opts = vim.tbl_extend("force", { pos = "right", width = 40 }, o or {})
+	M.configure(opts)
 	if win and vim.api.nvim_win_is_valid(win) then
 		if vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_get_current_tabpage() then
 			vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(win))

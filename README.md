@@ -187,6 +187,15 @@ require("ask_agent").setup({
   -- :set belloff=all still mutes it
   notify_sound = false,
 
+  -- draw │ ├ └ between an agent and its tasks (default true); sidebars
+  -- narrower than 20 columns fall back to plain indentation
+  tree_lines = true,
+
+  -- light the path from an agent to the task running right now: "pulse"
+  -- (default; a bright cell travels down it), "static" (dim→bright), or
+  -- "off". Without truecolor it degrades to a single flat green.
+  running_line = "pulse",
+
   -- keep tasks and unread marks across restarts (default true);
   -- persist = { path = ".../journal.json", enabled = false } moves or disables it
   persist = true,
@@ -647,13 +656,19 @@ agent's tasks — the questions still queued for it and the turns already sent t
 
 ```
 ▾ ⚠ reviewer (2)  claude  needs permission: run the test suite?  2m
-  ◐ add the retry path  queued  3m
-  ⠹ run the test suite  running  41s
+├─ ◐ add the retry path  queued  3m
+└─ ⠹ run the test suite  running  41s
 ▾ ✓ worker-1 (1)  pi      done: 12 files changed  5m
-  ✓ update the docs  done  8m
+└─ ✓ update the docs  done  8m
 ▾ ◐ worker-2  pi      busy  12s
-  ⠹ port the parser  running  12s
+└─ ⠹ port the parser  running  12s
 ```
+
+Tasks hang off their agent with `│ ├ └` connectors (`tree_lines`). The path from
+an agent down to the task it is running right now is green and animated: a bright
+cell travels along it with the spinner (`running_line = "pulse"`; `"static"` keeps
+a dim→bright gradient, `"off"` draws plain tree lines). Sidebars narrower than 20
+columns drop the connectors and keep the old indentation.
 
 Agent glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌`
 unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `✗` failed.
@@ -670,7 +685,9 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 
 Row layout: fold marker, state glyph, name (padded to the longest name) with the task
 count, then the message; the age is flushed right, and the backend appears on the
-right too when more than one backend is running. Rows are truncated to the window
+right too when more than one backend is running. Tree connectors are colored by
+`AskAgentTree` (links to `Comment`); the running path uses the `AskAgentRun*`
+groups so both can be restyled from a colorscheme. Rows are truncated to the window
 width, narrow windows included, and re-flow when the sidebar is resized. The buffer
 updates itself from state and queue events (no polling of its own; the spinner is the
 only timer, and it only runs while a turn is actually in progress) and keeps your

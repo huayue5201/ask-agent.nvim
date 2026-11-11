@@ -66,6 +66,9 @@ local tick = 90
 --- Layout adapter id (nil = first available). See ask_agent.layouts
 local layout_id = nil
 
+--- Dashboard appearance (setup-level; per-call dashboard opts still win)
+local dashboard_opts = {}
+
 --- Icon: the instance's own icon wins, then the icons table by instance id / backend id, finally the generic robot glyph.
 --- Pickers use a consistent "icon name" layout so the agent is obvious at a glance
 ---@param mod table|nil
@@ -755,6 +758,7 @@ end
 ---queued task or dismisses a dead agent, `q` closes.
 ---@param opts { pos?: "left"|"right", width?: integer }|nil
 function M.dashboard(opts)
+	opts = vim.tbl_extend("force", dashboard_opts, opts or {})
 	require("ask_agent.dashboard").open({
 		send = M.send,
 		batch_send = M.batch_send,
@@ -1056,6 +1060,11 @@ function M.setup(opts)
 	state.notify = opts.state_notify ~= false
 	-- Notification house style: bold + level colour, optional terminal bell
 	require("ask_agent.notify").setup({ style = opts.notify_style, sound = opts.notify_sound })
+	-- Sidebar tree: connectors between agents and tasks, and the green path to the running task
+	dashboard_opts = {
+		tree_lines = opts.tree_lines,
+		running_line = opts.running_line,
+	}
 	-- Journal (tasks/unread marks survive a restart): true | false | { path, persist }
 	local persist = opts.persist
 	if type(persist) == "table" then
