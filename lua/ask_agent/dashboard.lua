@@ -20,6 +20,7 @@
 -- timer is the spinner, and it only runs while a turn is actually in progress.
 
 local state = require("ask_agent.state")
+local notify = require("ask_agent.notify")
 local queue = require("ask_agent.queue")
 local jump = require("ask_agent.jump")
 local ui = require("ask_agent.ui")
@@ -311,7 +312,7 @@ end
 local function focus_agent(rec)
 	local ok, err = jump.focus(rec.target)
 	if not ok then
-		vim.notify("[ask_agent] " .. err, vim.log.levels.INFO)
+		notify.notify("[ask_agent] " .. err, vim.log.levels.INFO)
 	end
 end
 
@@ -324,13 +325,13 @@ local function open_node(node)
 	local anchor = node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor)
 	if not anchor then
 		-- a task sent from this very sidebar has no anchor: the agent's window is the best we can do
-		vim.notify("[ask_agent] No anchor for this task — focusing the agent instead", vim.log.levels.INFO)
+		notify.notify("[ask_agent] No anchor for this task — focusing the agent instead", vim.log.levels.INFO)
 		focus_agent(node.rec)
 		return
 	end
 	local ok, err = api.goto_anchor(anchor)
 	if not ok then
-		vim.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+		notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
 	end
 end
 
@@ -347,11 +348,11 @@ local function rename(rec)
 			return
 		end
 		if not state.rename(rec, name) then
-			vim.notify("[ask_agent] Could not write the name to the cache file", vim.log.levels.WARN)
+			notify.notify("[ask_agent] Could not write the name to the cache file", vim.log.levels.WARN)
 			return
 		end
 		render()
-		vim.notify(("[ask_agent] Renamed to %s"):format(state.name(rec)), vim.log.levels.INFO)
+		notify.notify(("[ask_agent] Renamed to %s"):format(state.name(rec)), vim.log.levels.INFO)
 	end)
 end
 
@@ -359,7 +360,7 @@ end
 local function dismiss(rec)
 	local queued = queued_by_agent()[rec.key]
 	if queued and #queued > 0 then
-		vim.notify(
+		notify.notify(
 			("[ask_agent] %d question(s) are still routed to %s"):format(#queued, state.name(rec)),
 			vim.log.levels.WARN
 		)
@@ -431,7 +432,7 @@ end
 ---@param rec table
 local function send_to(rec)
 	if not state.resolve(rec) then
-		vim.notify("[ask_agent] " .. rec.id .. " is not running", vim.log.levels.WARN)
+		notify.notify("[ask_agent] " .. rec.id .. " is not running", vim.log.levels.WARN)
 		return
 	end
 	ui.input({
@@ -439,7 +440,7 @@ local function send_to(rec)
 		on_submit = function(text)
 			local ok, err = api.send(text, { backend = rec.backend, target = rec.id })
 			if not ok then
-				vim.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+				notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
 			end
 		end,
 	})
@@ -454,7 +455,7 @@ local function flush_queue(rec)
 		end
 	end
 	if #ids == 0 then
-		vim.notify(("[ask_agent] No queued question is routed to %s"):format(state.name(rec)), vim.log.levels.INFO)
+		notify.notify(("[ask_agent] No queued question is routed to %s"):format(state.name(rec)), vim.log.levels.INFO)
 		return
 	end
 	api.batch_send({ ids = table.concat(ids, ",") })

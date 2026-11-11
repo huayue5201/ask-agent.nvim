@@ -2,6 +2,7 @@
 ---@brief The user commands. Keymaps stay out on purpose: commands are the API.
 
 local M = {}
+local notify = require("ask_agent.notify")
 
 ---@type table the ask_agent module itself (commands are its public interface)
 local api
@@ -62,9 +63,9 @@ function M.install(deps)
 		if args.args ~= "" then
 			local ok, err = api.use(args.args)
 			if not ok then
-				vim.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+				notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
 			else
-				vim.notify("[ask_agent] Current backend → " .. args.args, vim.log.levels.INFO)
+				notify.notify("[ask_agent] Current backend → " .. args.args, vim.log.levels.INFO)
 			end
 			return
 		end
@@ -95,11 +96,11 @@ function M.install(deps)
 		local cur = api.picker()
 		local want = args.args ~= "" and args.args or (cur == "map" and "list" or "map")
 		if want ~= "map" and want ~= "list" then
-			vim.notify(("[ask_agent] Picker must be map or list (currently %s)"):format(cur), vim.log.levels.WARN)
+			notify.notify(("[ask_agent] Picker must be map or list (currently %s)"):format(cur), vim.log.levels.WARN)
 			return
 		end
 		api.picker(want)
-		vim.notify(("[ask_agent] Picker for multiple candidates → %s"):format(want), vim.log.levels.INFO)
+		notify.notify(("[ask_agent] Picker for multiple candidates → %s"):format(want), vim.log.levels.INFO)
 	end, {
 		nargs = "?",
 		complete = function()
@@ -111,21 +112,21 @@ function M.install(deps)
 	vim.api.nvim_create_user_command("AskAgentTarget", function(args)
 		if args.bang then
 			api.pin(nil)
-			vim.notify("[ask_agent] Cleared the manually pinned target", vim.log.levels.INFO)
+			notify.notify("[ask_agent] Cleared the manually pinned target", vim.log.levels.INFO)
 			return
 		end
 		local items = api.targets()
 		if args.args ~= "" then
 			local ok, err = api.pin(args.args)
 			if not ok then
-				vim.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+				notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
 			else
-				vim.notify("[ask_agent] Target pinned to " .. args.args, vim.log.levels.INFO)
+				notify.notify("[ask_agent] Target pinned to " .. args.args, vim.log.levels.INFO)
 			end
 			return
 		end
 		if #items == 0 then
-			vim.notify("[ask_agent] Current backend has no available targets", vim.log.levels.WARN)
+			notify.notify("[ask_agent] Current backend has no available targets", vim.log.levels.WARN)
 			return
 		end
 		for i, it in ipairs(items) do
@@ -151,7 +152,7 @@ function M.install(deps)
 	vim.api.nvim_create_user_command("AskAgentRename", function(args)
 		local items = api.targets()
 		if #items == 0 then
-			vim.notify("[ask_agent] Current backend has no available targets", vim.log.levels.WARN)
+			notify.notify("[ask_agent] Current backend has no available targets", vim.log.levels.WARN)
 			return
 		end
 		for i, it in ipairs(items) do
@@ -176,7 +177,7 @@ function M.install(deps)
 			end
 			if args.bang then
 				deps.aliases.clear(item, deps.current())
-				vim.notify(("[ask_agent] Cleared alias for #%d"):format(item.index or 0), vim.log.levels.INFO)
+				notify.notify(("[ask_agent] Cleared alias for #%d"):format(item.index or 0), vim.log.levels.INFO)
 				return
 			end
 			vim.ui.input({
@@ -187,11 +188,11 @@ function M.install(deps)
 					return
 				end
 				if not deps.aliases.set(item, deps.current(), name) then
-					vim.notify("[ask_agent] Could not write the alias to the cache file", vim.log.levels.WARN)
+					notify.notify("[ask_agent] Could not write the alias to the cache file", vim.log.levels.WARN)
 					return
 				end
 				local now = deps.aliases.get(item, deps.current())
-				vim.notify(
+				notify.notify(
 					now and ("[ask_agent] #%d is now called %s"):format(item.index or 0, now)
 						or ("[ask_agent] Alias for #%d cleared"):format(item.index or 0),
 					vim.log.levels.INFO

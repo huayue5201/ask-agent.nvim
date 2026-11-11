@@ -16,6 +16,7 @@
 -- its own session.
 
 local M = { id = "pi", label = "pi" }
+local notify = require("ask_agent.notify")
 
 -- The icon is not hardcoded here: pickers and notifications resolve it from the
 -- backend id / instance id in ask_agent/icons.lua (pi = π), and it can be
@@ -157,7 +158,7 @@ function M.send(target, text)
 			local line = data and data[1] or ""
 			if line:find('"ok":false', 1, true) then
 				vim.schedule(function()
-					vim.notify("[pi] send failed: " .. line, vim.log.levels.WARN)
+					notify.notify("[pi] send failed: " .. line, vim.log.levels.WARN)
 				end)
 			end
 		end,

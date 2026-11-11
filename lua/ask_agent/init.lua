@@ -20,6 +20,7 @@
 -- UI: :AskAgentDashboard (sidebar tree: agents + their tasks), ask_agent.statusline().
 
 local backends = require("ask_agent.backends")
+local notify = require("ask_agent.notify")
 local generic = require("ask_agent.backends.generic")
 local context = require("ask_agent.context")
 local message = require("ask_agent.message")
@@ -147,7 +148,7 @@ local function note_busy(mod, target, st)
 	if not st.busy then
 		return
 	end
-	vim.notify(
+	notify.notify(
 		("[%s] %s is busy — the question is queued behind the current task"):format(
 			mod.label or mod.id,
 			name_of(target)
@@ -175,7 +176,7 @@ local function resolve(id, target_id)
 	-- Explicitly selected a managed instance (e.g. pi inside codecompanion): allowed, but explain the consequence first
 	local function note_avoid(t)
 		if t and t.avoid then
-			vim.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
+			notify.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
 		end
 	end
 	if target_id then
@@ -356,7 +357,7 @@ local function list_ui(items, opts, on_choice)
 			return ui.select(items, opts, on_choice)
 		end
 		if list_impl == "ui_menu" then
-			vim.notify("[ask_agent] ui-menu is not installed; falling back to vim.ui.select", vim.log.levels.WARN)
+			notify.notify("[ask_agent] ui-menu is not installed; falling back to vim.ui.select", vim.log.levels.WARN)
 		end
 	end
 	return vim.ui.select(items, opts, on_choice)
@@ -377,7 +378,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 		local st = candidate_status(mod, c)
 		if not st.running then
 			local mark, detail = status_mark(st)
-			vim.notify(
+			notify.notify(
 				("[%s] %s is %s%s — not sent"):format(
 					mod.label or mod.id,
 					name_of(c.target),
@@ -565,7 +566,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 			end
 			if item.status and not item.status.running then
 				local _, detail = status_mark(item.status)
-				vim.notify(
+				notify.notify(
 					("[%s] %s is not running%s — not sent"):format(
 						mod.label or mod.id,
 						name_of(item.target),
@@ -589,7 +590,7 @@ end
 local function choose_target(mod, cb)
 	local function note_avoid(t)
 		if t and t.avoid then
-			vim.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
+			notify.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
 		end
 	end
 	if pinned and pinned.backend == mod.id then
@@ -612,7 +613,7 @@ local function choose_target(mod, cb)
 	end
 	if #live == 0 then
 		local _, reason = backends.status(mod)
-		vim.notify(("[%s] %s"):format(mod.label or mod.id, reason or "no available instances"), vim.log.levels.WARN)
+		notify.notify(("[%s] %s"):format(mod.label or mod.id, reason or "no available instances"), vim.log.levels.WARN)
 		return cb(nil)
 	end
 	-- When the map can open, a sole exact-cwd candidate still goes through it: the
@@ -802,7 +803,7 @@ function M.ask(opts)
 	opts = opts or {}
 	local mod = backends.get(opts.backend or current)
 	if not mod then
-		vim.notify(
+		notify.notify(
 			("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
 			vim.log.levels.WARN
 		)
@@ -830,11 +831,11 @@ function M.ask(opts)
 				local text = message.render(anchor, prompt)
 				local ok, send_err = deliver_text(mod, target, text, { anchor = anchor })
 				if not ok then
-					vim.notify(("[%s] %s"):format(mod.label, send_err), vim.log.levels.WARN)
+					notify.notify(("[%s] %s"):format(mod.label, send_err), vim.log.levels.WARN)
 					return
 				end
 				local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
-				vim.notify(
+				notify.notify(
 					("[%s] Sent → #%d %s (%s)"):format(mod.label, target.index or 0, name_of(target), where),
 					vim.log.levels.INFO
 				)
@@ -851,7 +852,7 @@ function M.batch_ask(opts)
 	opts = opts or {}
 	local mod = backends.get(opts.backend or current)
 	if not mod then
-		vim.notify(
+		notify.notify(
 			("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
 			vim.log.levels.WARN
 		)
@@ -863,7 +864,7 @@ function M.batch_ask(opts)
 		title = ("Batch %s · %s · %d queued"):format(mod.label, context.describe(anchor), queue.count()),
 		on_submit = function(prompt)
 			local entry = queue.add(anchor, prompt)
-			vim.notify(
+			notify.notify(
 				("[ask_agent] Queued #%d (%d pending) — :AskAgentBatchSend sends them all"):format(
 					entry.index,
 					queue.count()
@@ -969,7 +970,7 @@ end
 function M.picker(value)
 	if value ~= nil then
 		if value ~= "map" and value ~= "list" then
-			vim.notify(("[ask_agent] Picker must be map or list (currently %s)"):format(picker), vim.log.levels.WARN)
+			notify.notify(("[ask_agent] Picker must be map or list (currently %s)"):format(picker), vim.log.levels.WARN)
 		else
 			picker = value
 		end
@@ -984,7 +985,7 @@ end
 function M.list_impl(value)
 	if value ~= nil then
 		if value ~= "auto" and value ~= "ui_menu" and value ~= "vim_ui" then
-			vim.notify(
+			notify.notify(
 				("[ask_agent] list_impl must be auto, ui_menu, or vim_ui (currently %s)"):format(list_impl),
 				vim.log.levels.WARN
 			)
@@ -1028,7 +1029,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, persist?: boolean|{ path?: string, enabled?: boolean } }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify_style?: boolean, notify_sound?: boolean, persist?: boolean|{ path?: string, enabled?: boolean } }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1053,6 +1054,8 @@ function M.setup(opts)
 	current = opts.default or "pi"
 	-- One poller for every backend; views subscribe instead of polling on their own
 	state.notify = opts.state_notify ~= false
+	-- Notification house style: bold + level colour, optional terminal bell
+	require("ask_agent.notify").setup({ style = opts.notify_style, sound = opts.notify_sound })
 	-- Journal (tasks/unread marks survive a restart): true | false | { path, persist }
 	local persist = opts.persist
 	if type(persist) == "table" then

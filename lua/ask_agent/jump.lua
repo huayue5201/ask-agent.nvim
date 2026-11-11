@@ -17,6 +17,7 @@
 -- Register your own with ask.register_jump({...}) — no plugin changes needed.
 
 local M = {}
+local notify = require("ask_agent.notify")
 
 local adapters = {}
 
@@ -131,7 +132,7 @@ M.register({
 		end
 		cmds[#cmds + 1] = focus
 		run(cmds, function(cmd, res)
-			vim.notify(
+			notify.notify(
 				("[ask_agent] %s failed: %s"):format(cmd[1] .. " " .. cmd[2], (res.stderr or ""):gsub("%s+$", "")),
 				vim.log.levels.WARN
 			)

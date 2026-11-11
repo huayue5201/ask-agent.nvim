@@ -18,6 +18,7 @@
 -- milliseconds instead of up to one interval later.
 
 local M = {}
+local notify = require("ask_agent.notify")
 
 local TTL = 1500
 
@@ -183,7 +184,7 @@ function M.watch(session, cb)
 				local why = vim.trim(w.err)
 				if why ~= "" then
 					vim.schedule(function()
-						vim.notify(("[ask_agent] rex events for %s: %s"):format(session, why), vim.log.levels.DEBUG)
+						notify.notify(("[ask_agent] rex events for %s: %s"):format(session, why), vim.log.levels.DEBUG)
 					end)
 				end
 				return

@@ -30,6 +30,7 @@
 -- changes); the on-disk file is only used as a fallback when no buffer matches.
 
 local M = {}
+local notify = require("ask_agent.notify")
 
 ---@type table<string, fun(req: table): table>
 local extra_handlers = {}
@@ -492,7 +493,7 @@ function M.attach()
 		ok, addr = pcall(vim.fn.serverstart, SOCK)
 	end
 	if not ok then
-		vim.notify("[ask_agent.bridge] serverstart failed: " .. tostring(addr), vim.log.levels.WARN)
+		notify.notify("[ask_agent.bridge] serverstart failed: " .. tostring(addr), vim.log.levels.WARN)
 		return
 	end
 	attached = true

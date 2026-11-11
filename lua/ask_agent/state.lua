@@ -25,6 +25,7 @@
 -- stays until acknowledged.
 
 local backends = require("ask_agent.backends")
+local notify = require("ask_agent.notify")
 local aliases = require("ask_agent.aliases")
 local rex = require("ask_agent.status.rex")
 local jump = require("ask_agent.jump")
@@ -197,7 +198,7 @@ local function notify_change(rec)
 		return
 	end
 	if rec.state == "blocked" then
-		vim.notify(
+		notify.notify(
 			("%s %s%s"):format(
 				notify_prefix(rec),
 				WAITING[rec.kind] or "is waiting for you",
@@ -209,7 +210,7 @@ local function notify_change(rec)
 		if watching(rec) or throttled(rec, "done") then
 			return
 		end
-		vim.notify(
+		notify.notify(
 			("%s finished%s"):format(notify_prefix(rec), rec.msg and (": " .. rec.msg) or ""),
 			vim.log.levels.INFO
 		)
@@ -217,7 +218,7 @@ local function notify_change(rec)
 		if throttled(rec, "error") then
 			return
 		end
-		vim.notify(
+		notify.notify(
 			("%s failed%s"):format(notify_prefix(rec), rec.msg and (": " .. rec.msg) or ""),
 			vim.log.levels.ERROR
 		)
@@ -234,7 +235,7 @@ local function notify_gone(rec, prev)
 	if throttled(rec, "gone") then
 		return
 	end
-	vim.notify(
+	notify.notify(
 		("%s exited while %s"):format(notify_prefix(rec), prev == "blocked" and "waiting for you" or "working"),
 		vim.log.levels.WARN
 	)

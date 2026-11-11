@@ -37,6 +37,8 @@ require("ask_agent").setup({
   tick = 90,                     -- animation interval in ms (default 90)
   state_interval = 2000,         -- state polling interval in ms (default 2000)
   state_notify = true,           -- notify on finished/blocked agents (default true)
+  notify_style = true,           -- bold + level colour for notifications (default true)
+  notify_sound = false,          -- terminal bell on every notification (default false)
   persist = true,                -- keep tasks/unread marks in the journal (default true)
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time

@@ -6,6 +6,7 @@
 -- pick a target, how to deliver text), so init injects them with `attach()`.
 
 local backends = require("ask_agent.backends")
+local notify = require("ask_agent.notify")
 local context = require("ask_agent.context")
 local message = require("ask_agent.message")
 local queue = require("ask_agent.queue")
@@ -86,13 +87,13 @@ local function deliver_one(mod, target, entries)
 	end
 	if sent > 0 then
 		local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
-		vim.notify(
+		notify.notify(
 			("[%s] Sent %d batched question(s) → %s (%s)"):format(mod.label, sent, api.name_of(target), where),
 			vim.log.levels.INFO
 		)
 	end
 	for _, f in ipairs(failed) do
-		vim.notify(
+		notify.notify(
 			("[%s] Batch #%d failed: %s"):format(mod.label, f.index, f.err or "unknown error"),
 			vim.log.levels.WARN
 		)
@@ -108,11 +109,11 @@ function M.send(opts)
 	opts = opts or {}
 	local pending, sel_err = select_entries(opts.ids)
 	if not pending then
-		vim.notify("[ask_agent] " .. sel_err, vim.log.levels.WARN)
+		notify.notify("[ask_agent] " .. sel_err, vim.log.levels.WARN)
 		return false
 	end
 	if #pending == 0 then
-		vim.notify(
+		notify.notify(
 			opts.ids and ("[ask_agent] No queued question matches %s (queue has %d)"):format(opts.ids, queue.count())
 				or "[ask_agent] Batch queue is empty",
 			vim.log.levels.INFO
@@ -143,13 +144,13 @@ function M.send(opts)
 			for _, entry in ipairs(group.entries) do
 				indices[#indices + 1] = "#" .. entry.index
 			end
-			vim.notify(("[ask_agent] Kept %s queued: %s"):format(table.concat(indices, ", "), why), vim.log.levels.WARN)
+			notify.notify(("[ask_agent] Kept %s queued: %s"):format(table.concat(indices, ", "), why), vim.log.levels.WARN)
 		end
 	end
 	if #rest > 0 then
 		local mod = backends.get(opts.backend or api.current())
 		if not mod then
-			vim.notify(
+			notify.notify(
 				("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
 				vim.log.levels.WARN
 			)
@@ -173,23 +174,23 @@ function M.route(ids, opts)
 	opts = opts or {}
 	local entries, sel_err = select_entries(ids)
 	if not entries then
-		vim.notify("[ask_agent] " .. sel_err, vim.log.levels.WARN)
+		notify.notify("[ask_agent] " .. sel_err, vim.log.levels.WARN)
 		return false
 	end
 	if #entries == 0 then
-		vim.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
+		notify.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
 		return false
 	end
 	if opts.clear then
 		for _, entry in ipairs(entries) do
 			queue.route(entry.id, nil)
 		end
-		vim.notify(("[ask_agent] Cleared the route of %d queued question(s)"):format(#entries), vim.log.levels.INFO)
+		notify.notify(("[ask_agent] Cleared the route of %d queued question(s)"):format(#entries), vim.log.levels.INFO)
 		return true
 	end
 	local mod = backends.get(opts.backend or api.current())
 	if not mod then
-		vim.notify(
+		notify.notify(
 			("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
 			vim.log.levels.WARN
 		)
@@ -203,7 +204,7 @@ function M.route(ids, opts)
 		for _, entry in ipairs(entries) do
 			queue.route(entry.id, route)
 		end
-		vim.notify(
+		notify.notify(
 			("[ask_agent] Routed %d queued question(s) → %s"):format(#entries, route.name),
 			vim.log.levels.INFO
 		)
@@ -221,7 +222,7 @@ local function goto_entry(entry)
 		col = (entry.col or 0) + 1,
 	})
 	if not ok then
-		vim.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+		notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
 	end
 end
 
@@ -229,7 +230,7 @@ end
 function M.list()
 	local list = queue.list()
 	if #list == 0 then
-		vim.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
+		notify.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
 		return
 	end
 	local function describe(entry)
@@ -269,7 +270,7 @@ function M.list()
 				})
 			elseif action == "delete" then
 				queue.remove(entry.id)
-				vim.notify(
+				notify.notify(
 					("[ask_agent] Deleted queued question #%d (:AskAgentBatchUndo restores it)"):format(entry.index),
 					vim.log.levels.INFO
 				)
@@ -293,7 +294,7 @@ function M.delete_query()
 		end
 	end
 	if #hits == 0 then
-		vim.notify(
+		notify.notify(
 			("[ask_agent] No queued question on this line (queue has %d)"):format(queue.count()),
 			vim.log.levels.INFO
 		)
@@ -301,7 +302,7 @@ function M.delete_query()
 	end
 	local function drop(entry)
 		queue.remove(entry.id)
-		vim.notify(("[ask_agent] Deleted queued question on line %d (:AskAgentBatchUndo restores it)"):format(line))
+		notify.notify(("[ask_agent] Deleted queued question on line %d (:AskAgentBatchUndo restores it)"):format(line))
 	end
 	if #hits == 1 then
 		return drop(hits[1])
@@ -322,25 +323,25 @@ end
 function M.undo()
 	local restored, skipped, label = queue.undo()
 	if not label then
-		vim.notify("[ask_agent] Nothing to undo in the batch queue", vim.log.levels.INFO)
+		notify.notify("[ask_agent] Nothing to undo in the batch queue", vim.log.levels.INFO)
 		return
 	end
 	local msg = ("[ask_agent] Restored %d queued question(s) from last %s"):format(restored, label)
 	if skipped > 0 then
 		msg = msg .. (" (%d skipped: buffer was wiped)"):format(skipped)
 	end
-	vim.notify(msg, skipped > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
+	notify.notify(msg, skipped > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
 end
 
 --- Drop every queued question and its marker. Undoable with M.batch_undo().
 function M.clear()
 	local n = queue.count()
 	if n == 0 then
-		vim.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
+		notify.notify("[ask_agent] Batch queue is empty", vim.log.levels.INFO)
 		return
 	end
 	queue.clear()
-	vim.notify(
+	notify.notify(
 		("[ask_agent] Cleared %d queued question(s) (:AskAgentBatchUndo restores them)"):format(n),
 		vim.log.levels.INFO
 	)

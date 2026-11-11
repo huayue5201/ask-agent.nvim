@@ -179,6 +179,14 @@ require("ask_agent").setup({
   -- report finished/blocked agents through vim.notify (default true)
   state_notify = true,
 
+  -- notification house style: bold text in the level's diagnostic colour
+  -- (default true; a notification plugin such as nvim-notify keeps its own look)
+  notify_style = true,
+
+  -- ring the terminal bell with every notification (default false);
+  -- :set belloff=all still mutes it
+  notify_sound = false,
+
   -- keep tasks and unread marks across restarts (default true);
   -- persist = { path = ".../journal.json", enabled = false } moves or disables it
   persist = true,
