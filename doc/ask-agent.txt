@@ -40,7 +40,8 @@ require("ask_agent").setup({
   notify_style = true,           -- bold + level colour for notifications (default true)
   notify_sound = false,          -- terminal bell on every notification (default false)
   tree_lines = true,             -- │ ├ └ between agents and tasks (default true)
-  running_line = "pulse",        -- green path to the running task: "pulse" | "static" | "off"
+  running_line = "dash",         -- green path to the running task:
+                                 -- "dash" | "pulse" | "static" | "off"
   persist = true,                -- keep tasks/unread marks in the journal (default true)
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time
@@ -451,7 +452,8 @@ turns already sent (spinner running, `✓` done, `✗` failed). Agent glyphs: `�
 idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `○` exited.
 Tasks are connected to their agent with `│ ├ └` lines (`tree_lines`, default true).
 The path from an agent to the task it is running right now is green: `running_line`
-defaults to `"pulse"`, a bright cell travelling down it with the spinner;
+defaults to `"dash"`, a dashed line whose bright cells march down one step per
+spinner frame; `"pulse"` sends a single bright cell with a trailing mid shade,
 `"static"` draws a dim→bright gradient and `"off"` leaves plain tree lines. Both
 degrade gracefully: below 20 columns the connectors give way to indentation, and
 without 'termguicolors' the path is one flat green. The connectors use the

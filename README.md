@@ -191,10 +191,11 @@ require("ask_agent").setup({
   -- narrower than 20 columns fall back to plain indentation
   tree_lines = true,
 
-  -- light the path from an agent to the task running right now: "pulse"
-  -- (default; a bright cell travels down it), "static" (dim→bright), or
-  -- "off". Without truecolor it degrades to a single flat green.
-  running_line = "pulse",
+  -- light the path from an agent to the task running right now: "dash"
+  -- (default; bright cells march down it), "pulse" (one bright cell with a
+  -- trailing mid shade), "static" (dim→bright), or "off". Without
+  -- truecolor it degrades to a single flat green.
+  running_line = "dash",
 
   -- keep tasks and unread marks across restarts (default true);
   -- persist = { path = ".../journal.json", enabled = false } moves or disables it
@@ -665,10 +666,12 @@ agent's tasks — the questions still queued for it and the turns already sent t
 ```
 
 Tasks hang off their agent with `│ ├ └` connectors (`tree_lines`). The path from
-an agent down to the task it is running right now is green and animated: a bright
-cell travels along it with the spinner (`running_line = "pulse"`; `"static"` keeps
-a dim→bright gradient, `"off"` draws plain tree lines). Sidebars narrower than 20
-columns drop the connectors and keep the old indentation.
+an agent down to the task it is running right now is green and animated as a
+marching dashed line: one bright cell every three, shifted down one step per
+spinner frame (`running_line = "dash"`). `"pulse"` sends a single bright cell with
+a trailing mid shade instead, `"static"` keeps a dim→bright gradient, and `"off"`
+draws plain tree lines. Sidebars narrower than 20 columns drop the connectors and
+keep the old indentation.
 
 Agent glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌`
 unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `✗` failed.

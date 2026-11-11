@@ -35,11 +35,11 @@ local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 
 -- Tree lines and the running-task connector. Both are cosmetic: `tree_lines`
 -- (default true) draws │ ├ └ between an agent and its tasks, and `running_line`
--- ("pulse" | "static" | "off", default "pulse") lights the path from the agent
--- down to the task that is running right now. Narrow sidebars fall back to plain
--- indentation so the text keeps its room.
+-- ("dash" | "pulse" | "static" | "off", default "dash") lights the path from the
+-- agent down to the task that is running right now. Narrow sidebars fall back to
+-- plain indentation so the text keeps its room.
 local TREE_MIN_WIDTH = 20
-local cfg = { tree_lines = true, running_line = "pulse" }
+local cfg = { tree_lines = true, running_line = "dash" }
 local RUN_HL = { "AskAgentRunDim", "AskAgentRunMid", "AskAgentRunBright" }
 local RUN_FG = { "#2b6b3e", "#3fb950", "#7ee787" }
 local run_hl_tc -- termguicolors value the groups were built for
@@ -282,6 +282,9 @@ local function run_shade(i, n)
 	if cfg.running_line == "static" then
 		local s = math.floor(i * 3 / math.max(1, n)) + 1
 		return RUN_HL[math.min(3, math.max(1, s))]
+	elseif cfg.running_line == "dash" then
+		-- marching dashes: one bright cell every three, shifted down each frame
+		return (i - frame) % 3 == 0 and RUN_HL[3] or RUN_HL[1]
 	end
 	-- pulse: a bright cell travels down the path, mid shade right behind it
 	local head = frame % n
@@ -668,7 +671,7 @@ local function attach(bufnr)
 end
 
 ---Dashboard appearance knobs (setup-level; per-call :AskAgentDashboard opts win).
----@param o { tree_lines?: boolean, running_line?: "pulse"|"static"|"off" }|nil
+---@param o { tree_lines?: boolean, running_line?: "dash"|"pulse"|"static"|"off" }|nil
 function M.configure(o)
 	if type(o) ~= "table" then
 		return
@@ -677,7 +680,8 @@ function M.configure(o)
 		cfg.tree_lines = o.tree_lines ~= false
 	end
 	if o.running_line ~= nil then
-		cfg.running_line = (o.running_line == "static" or o.running_line == "off") and o.running_line or "pulse"
+		local v = o.running_line
+		cfg.running_line = (v == "pulse" or v == "static" or v == "off") and v or "dash"
 	end
 end
 
