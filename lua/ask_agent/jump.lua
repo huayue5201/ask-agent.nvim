@@ -70,8 +70,8 @@ end
 function M.focus(target)
 	local reasons = {}
 	for _, a in ipairs(adapters) do
-		local can = pcall(a.can, target)
-		if can then
+		local ok_can, can = pcall(a.can, target)
+		if ok_can and can then
 			local ok, err = pcall(a.focus, target)
 			if ok then
 				return true, nil
@@ -224,12 +224,17 @@ M.register({
 	id = "herdr",
 	priority = 15,
 	can = function(target)
-		if type(target.pane) == "string" and target.pane ~= "" then
-			return true
-		end
 		local spec = target.herdr
 		if type(spec) == "table" and (spec.agent or spec.id or spec.pane) ~= nil then
 			return true
+		end
+		if type(target.pane) == "string" and target.pane ~= "" then
+			-- only a pane herdr actually knows: a tmux pane id (`%3`) belongs to
+			-- the tmux adapter below
+			local ok, backend = pcall(require, "ask_agent.backends.herdr")
+			if ok and backend.at_pane and backend.at_pane(target.pane) then
+				return true
+			end
 		end
 		-- an agent herdr did not start (pi begun by hand in a pane) is matched
 		-- by pid, the same way the viewer matches it
@@ -241,7 +246,7 @@ M.register({
 	end,
 	focus = function(target)
 		local spec = type(target.herdr) == "table" and target.herdr or {}
-		local name = spec.agent or spec.id or spec.pane or target.pane
+		local name = spec.agent or spec.id or spec.pane
 		if not name and target.pid then
 			local ok, backend = pcall(require, "ask_agent.backends.herdr")
 			name = ok and backend.pane_of_pid and backend.pane_of_pid(target.pid) or nil

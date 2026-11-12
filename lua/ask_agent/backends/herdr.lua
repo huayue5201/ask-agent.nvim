@@ -178,6 +178,21 @@ local function locate(target)
 	return cache.by[key]
 end
 
+---The herdr agent running in `pane`, if herdr knows that pane. Pane ids look
+---like `wV:p4`; tmux's `%3` is rejected without a CLI call, so a tmux target is
+---never mistaken for a herdr one.
+---@param pane string|nil
+---@return table|nil
+function M.at_pane(pane)
+	if type(pane) ~= "string" or not pane:match("^[%w_%-]+:p%d+$") then
+		return nil
+	end
+	if vim.uv.now() - cache.ts >= TTL then
+		M.refresh(true)
+	end
+	return cache.by[pane]
+end
+
 ---Live herdr agents as targets. The `herdr` sub-table is what the viewer float
 ---(`herdr agent attach`) and the jump adapter (`herdr agent focus`) look for.
 ---@return table[]

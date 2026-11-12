@@ -40,7 +40,12 @@ require("ask_agent").setup({
   state_interval = 2000,         -- state polling interval in ms (default 2000)
   state_notify = true,           -- notify on finished/blocked agents (default true)
   notify_style = true,           -- bold + level colour for notifications (default true)
-  notify_sound = false,          -- terminal bell on every notification (default false)
+  notify_sound = false,          -- make a sound on every notification (default false)
+  notify_sound_cmd = { "afplay", "/System/Library/Sounds/Glass.aiff" },
+                                 -- play this instead of the terminal bell
+  notify_belloff = false,        -- true = `belloff=all` also mutes the plugin
+  notify_popup = false,          -- corner card instead of one cmdline line
+  notify_popup_ms = 3000,        -- how long that card stays up
   notify = {                     -- per-state copy/level/bell; false = silent
     done = { text = "[{backend}] {name} finished{msg}", sound = true },
     blocked = { text = "[{backend}] {name} is waiting for you{msg}" },
@@ -524,8 +529,18 @@ require("ask_agent").setup({
 The same table can be changed at runtime with
 `require("ask_agent.state").configure({ messages = {...}, gap = n })`.
 `notify_gap` (default 30000) throttles `done`/`error`/`gone` per agent; a
-transition into `blocked` always notifies. `notify_sound = true` rings on every
-notification instead of per state.
+transition into `blocked` always notifies. `notify_sound = true` makes a sound
+on every notification instead of per state.
+
+The plugin writes its own bell, so Neovim's default `belloff=all` does not
+silence it (`notify_belloff = true` asks for belloff to win). Terminals are
+silent for a bell more often than not, so `notify_sound_cmd` plays a sound
+through `vim.system` instead; a plain string runs through `sh -c`. For the
+message to be seen, `notify_popup = true` draws a card in the top-right corner
+that stays for `notify_popup_ms` instead of one cmdline line the next keystroke
+erases (it still lands in `:messages`). A turn typed straight into the agent's
+terminal is not announced: only turns this plugin dispatched (or sources that
+report `done` themselves, like rex) are detected.
 
 States: `idle`, `working`, `blocked` (kind: permission | question | auth),
 `done`, `error`, `unknown`, `gone`. Every transition into `blocked` is reported;

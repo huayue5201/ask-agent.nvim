@@ -186,9 +186,31 @@ assert(bells == 2, "the module default rings")
 notify.notify("three", vim.log.levels.INFO, { sound = false })
 assert(bells == 2, "sound = false stays quiet even when the default is on")
 
+-- Neovim's own default is belloff=all: honouring it would silence the plugin
+-- for everyone who never touched the option, so the bell is written anyway and
+-- `respect_belloff` is the opt-in to the old behaviour
 vim.o.belloff = "all"
 notify.notify("four", vim.log.levels.INFO, { sound = true })
-assert(bells == 2, "belloff=all wins")
+assert(bells == 3, "belloff does not mute the plugin's own bell: " .. bells)
+notify.respect_belloff = true
+notify.notify("five", vim.log.levels.INFO, { sound = true })
+assert(bells == 3, "respect_belloff asks for belloff to win")
+notify.respect_belloff = false
+
+-- a real sound instead of the terminal bell (most terminals are silent by default)
+local ran
+vim.system = function(cmd)
+	ran = cmd
+	return { wait = function() end }
+end
+notify.setup({ sound_cmd = "afplay /System/Library/Sounds/Glass.aiff" })
+notify.notify("six", vim.log.levels.INFO, { sound = true })
+assert(bells == 3, "a sound command replaces the bell: " .. bells)
+assert(ran and ran[1] == "sh" and ran[3]:match("afplay"), "sound_cmd runs: " .. vim.inspect(ran))
+notify.setup({ sound_cmd = { "afplay", "/x.aiff" } })
+notify.notify("seven", vim.log.levels.INFO, { sound = true })
+assert(vim.deep_equal(ran, { "afplay", "/x.aiff" }), "a list runs as-is: " .. vim.inspect(ran))
+notify.sound_cmd = nil
 
 rawset(io, "stdout", stdout)
 

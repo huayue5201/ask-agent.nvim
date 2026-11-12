@@ -209,9 +209,15 @@ require("ask_agent").setup({
   -- (default true; a notification plugin such as nvim-notify keeps its own look)
   notify_style = true,
 
-  -- ring the terminal bell with every notification (default false);
-  -- :set belloff=all still mutes it
+  -- make a sound with every notification (default false); the plugin's own
+  -- switches are the mute, so Neovim's default `belloff=all` does not silence it
   notify_sound = false,
+  -- play this instead of the terminal bell (most terminals are silent by default)
+  notify_sound_cmd = { "afplay", "/System/Library/Sounds/Glass.aiff" },
+  -- show state notifications as a small card in the corner (default false):
+  -- a cmdline line is redrawn away by the next keystroke, a card is not
+  notify_popup = true,
+  notify_popup_ms = 3000,
 
   -- per-state notification copy, level and bell (see "Notification copy");
   -- a state set to false is silent, a string replaces only the text
@@ -774,11 +780,27 @@ Placeholders: `{backend}`, `{name}` (the instance name), `{msg}` (already prefix
 with `": "`, or empty), `{state}`, `{kind}`, `{was}` (what a vanished agent was
 doing — translate it with `was = { blocked = "在等你", working = "在干活" }` inside
 the same `notify` table). `level` is a `vim.log.levels` key as a string (`"INFO"`, `"WARN"`,
-`"ERROR"`, …). `sound = true` rings the terminal bell for that message alone —
-unless `:set belloff` contains `all` — and it works whether the plugin paints the
-message itself or a notification UI (nvim-notify, noice, snacks, fidget) owns it.
-`notify_sound = true` rings for *every* notification instead; `opts.sound` on a
-single `notify.notify()` call overrides both.
+`"ERROR"`, …). `sound = true` makes a sound for that message alone, and it works whether the
+plugin paints the message itself or a notification UI (nvim-notify, noice,
+snacks) owns it.
+
+Two details decide whether you actually *perceive* a notification, and both
+default to the least intrusive setting:
+
+- **Sound.** The plugin writes its own bell, so Neovim's default `belloff=all`
+  does not silence it (`notify_belloff = true` restores the old behaviour). Most
+  terminals are silent for a bell anyway, so `notify_sound_cmd` plays a real
+  sound instead — on macOS `afplay /System/Library/Sounds/Glass.aiff` is one
+  line of config. `notify_sound = true` sounds *every* notification;
+  `opts.sound` on a single `notify.notify()` call overrides both.
+- **Visibility.** Without a notification plugin, a message is one line on the
+  cmdline, which the next keystroke redraws away. `notify_popup = true` draws a
+  card in the top-right corner that stays for `notify_popup_ms` — the same
+  message, still recorded in `:messages`.
+
+Note that a turn you type straight into the agent's own terminal is not
+announced: the plugin can only tell that a turn ended for the messages it
+dispatched itself (or when the source reports `done` on its own, as rex does).
 
 Throttling keeps bursts quiet: `done`, `error` and `gone` fire at most once per
 `notify_gap` ms per agent, while a transition into `blocked` always fires. A

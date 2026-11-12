@@ -10,18 +10,27 @@ local registry = require("ask_agent.views")
 ---The pane a target lives in: declared, or looked up by pid.
 ---@param target table
 ---@return string|nil pane
+local function backend()
+	local ok, mod = pcall(require, "ask_agent.backends.herdr")
+	return ok and mod or nil
+end
+
 local function pane_of(target)
 	if type(target.pane) == "string" and target.pane ~= "" then
-		return target.pane
+		local mod = backend()
+		if mod and mod.at_pane and mod.at_pane(target.pane) then
+			return target.pane
+		end
+		return nil
 	end
 	if not target.pid then
 		return nil
 	end
-	local ok, backend = pcall(require, "ask_agent.backends.herdr")
-	if not ok or type(backend.pane_of_pid) ~= "function" then
+	local mod = backend()
+	if not mod or type(mod.pane_of_pid) ~= "function" then
 		return nil
 	end
-	return backend.pane_of_pid(target.pid)
+	return mod.pane_of_pid(target.pid)
 end
 
 registry.register({

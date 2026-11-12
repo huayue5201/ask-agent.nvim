@@ -16,6 +16,21 @@ local M = {}
 M.style = true
 ---Ring the terminal bell with every notification (default false).
 M.sound = false
+---Play this command instead of the bell (`{ "afplay", "/System/Library/Sounds/
+---Glass.aiff" }`); the terminal's own bell is silent in most setups.
+---@type string[]|nil
+M.sound_cmd = nil
+---Neovim defaults to `belloff=all`, which would make every bell a no-op for
+---everyone who never touched the option. The plugin's own `sound` setting is the
+---mute switch, so the bell is written regardless; set this to respect `belloff`.
+M.respect_belloff = false
+---Show state notifications as a small floating card instead of one cmdline line
+---(default false: a toast is a visible change, opt in with `notify_popup`).
+M.popup = false
+---How long the card stays up, in ms.
+M.popup_ms = 3000
+local popup_win
+local popup_timer
 
 local HL = {
 	[vim.log.levels.TRACE] = "AskAgentNotifyTrace",
@@ -32,9 +47,6 @@ local SOURCE = {
 	[vim.log.levels.WARN] = "DiagnosticWarn",
 	[vim.log.levels.ERROR] = "DiagnosticError",
 }
-
--- Notification UIs that replace vim.notify; they render level/colour themselves.
-local UI_MODULES = { "notify", "noice", "snacks", "fidget", "nvim-notify" }
 
 local groups_ready = false
 
@@ -60,16 +72,6 @@ local function ensure_groups()
 	end
 end
 
----@return boolean
-local function external_ui()
-	for _, name in ipairs(UI_MODULES) do
-		if package.loaded[name] then
-			return true
-		end
-	end
-	return false
-end
-
 ---Does Neovim's own vim.notify still own the message, or has something replaced
 ---it (a notification plugin, or a user/test stub we must not bypass)?
 ---@return boolean
@@ -82,9 +84,15 @@ local function stock_notify()
 	return source:find("vim/_core/editor", 1, true) ~= nil or source:find("vim/_editor", 1, true) ~= nil
 end
 
----Ring the terminal bell, unless the user muted it (`:set belloff=all`).
+---Ring the terminal bell (or play `sound_cmd`).
 local function ring()
-	if vim.o.belloff:find("all", 1, true) then
+	if M.sound_cmd then
+		pcall(function()
+			vim.system(M.sound_cmd, { detach = true })
+		end)
+		return
+	end
+	if M.respect_belloff and vim.o.belloff:find("all", 1, true) then
 		return
 	end
 	pcall(function()
@@ -121,7 +129,8 @@ local function fit(msg)
 	return cut .. "…"
 end
 
----@param opts { style?: boolean, sound?: boolean }|nil
+---@param opts { style?: boolean, sound?: boolean, sound_cmd?: string|string[],
+---  popup?: boolean, popup_ms?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	if opts.style ~= nil then
@@ -130,6 +139,71 @@ function M.setup(opts)
 	if opts.sound ~= nil then
 		M.sound = opts.sound ~= false
 	end
+	if opts.sound_cmd ~= nil then
+		M.sound_cmd = type(opts.sound_cmd) == "string" and { "sh", "-c", opts.sound_cmd } or opts.sound_cmd
+	end
+	if opts.popup ~= nil then
+		M.popup = opts.popup ~= false
+	end
+	if opts.popup_ms ~= nil then
+		M.popup_ms = opts.popup_ms
+	end
+end
+
+---A card in the corner: the one shape a cmdline echo cannot give you — it stays
+---put until it is read, instead of being redrawn away by the next keystroke.
+---@param msg string
+local function toast(msg)
+	ensure_groups()
+	local text = fit(msg)
+	local ok, res = pcall(function()
+		local ui = vim.api.nvim_list_uis()[1]
+		if not ui then
+			return false
+		end
+		local width = math.min(vim.api.nvim_strwidth(text) + 2, math.max(20, ui.width - 4))
+		local rows = math.max(1, math.ceil(vim.api.nvim_strwidth(text) / width))
+		if popup_win and vim.api.nvim_win_is_valid(popup_win) then
+			pcall(vim.api.nvim_win_close, popup_win, true)
+		end
+		local buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n", { plain = true }))
+		popup_win = vim.api.nvim_open_win(buf, false, {
+			relative = "editor",
+			anchor = "NE",
+			row = 1,
+			col = ui.width - 2,
+			width = width,
+			height = rows,
+			style = "minimal",
+			border = "rounded",
+			title = " ask-agent ",
+			title_pos = "left",
+			zindex = 200,
+			focusable = false,
+			noautocmd = true,
+		})
+		vim.wo[popup_win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder"
+		vim.bo[buf].filetype = "ask-agent-notify"
+		return true
+	end)
+	if not ok or not res then
+		return false
+	end
+	if popup_timer then
+		popup_timer:stop()
+		popup_timer:close()
+	end
+	popup_timer = vim.uv.new_timer()
+	popup_timer:start(M.popup_ms, 0, function()
+		vim.schedule(function()
+			if popup_win and vim.api.nvim_win_is_valid(popup_win) then
+				pcall(vim.api.nvim_win_close, popup_win, true)
+			end
+			popup_win = nil
+		end)
+	end)
+	return true
 end
 
 ---Ring the bell once, for callers that want it on their own schedule.
@@ -152,8 +226,15 @@ function M.notify(msg, level, opts)
 	if sound then
 		ring()
 	end
-	if not M.style or external_ui() or not stock_notify() then
+	-- a notification UI plugin owns the message only when it actually replaced
+	-- vim.notify; merely being loaded (fidget, snacks, noice often are) must not
+	-- cost us the styled line — otherwise every state change is a plain cmdline
+	-- flicker, which is exactly the "I never saw a notification" complaint
+	if not stock_notify() or not M.style then
 		vim.notify(msg, level, opts)
+		return
+	end
+	if M.popup and toast(msg) then
 		return
 	end
 	ensure_groups()

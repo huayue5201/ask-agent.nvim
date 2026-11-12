@@ -1228,7 +1228,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, persist?: boolean|{ path?: string, enabled?: boolean }, task_limit?: integer, task_ttl?: integer }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, task_limit?: integer, task_ttl?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1256,7 +1256,14 @@ function M.setup(opts)
 	-- Per-state notification copy, level and bell (see README "Notifications")
 	state.configure({ messages = opts.notify, gap = opts.notify_gap })
 	-- Notification house style: bold + level colour, optional terminal bell
-	require("ask_agent.notify").setup({ style = opts.notify_style, sound = opts.notify_sound })
+	require("ask_agent.notify").setup({
+		style = opts.notify_style,
+		sound = opts.notify_sound,
+		sound_cmd = opts.notify_sound_cmd,
+		respect_belloff = opts.notify_belloff,
+		popup = opts.notify_popup,
+		popup_ms = opts.notify_popup_ms,
+	})
 	-- Sidebar tree: connectors between agents and tasks, and the green path to the running task
 	dashboard_opts = {
 		tree_lines = opts.tree_lines,
