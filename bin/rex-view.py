@@ -3,9 +3,17 @@
 
 Rex has no attach command, so this is a mirror rather than a second client: it
 reads the block's screen as VT text and repaints it, and it forwards whatever you
-type with `com.superlogical.terminal.write`. Repainting whole frames (instead of
-splicing the live byte stream into the terminal) keeps the picture honest even
-when the window and the block disagree about size.
+type with `com.superlogical.terminal.write`.
+
+Splicing the live byte stream straight into the terminal would be one emulation
+instead of two, but the stream is addressed to the block's own grid, and rex only
+lets the block's *owner* (the native window) pick that size: `terminal.resize`
+"applies at once if the caller owns the block or no client does, and otherwise
+when the caller becomes the owner", and the data connection's first frame is a
+binary Ghostty snapshot rather than something a plain terminal can be fed. So the
+stream drives the repaint (it is a dirty flag), the screen comes from
+`terminal.format`, and only the lines that actually changed are rewritten — a
+full clear/redraw every 20ms flashed and cost the whole screen per frame.
 
 Frames are driven by the block's data connection (`rex.data.terminal.v1`), not by
 a timer: when output arrives the mirror repaints right away (at most once every
@@ -380,6 +388,34 @@ def main():
 
     out = sys.stdout.buffer
     painted = None
+    shown = []  # what the terminal currently holds, line by line
+
+    def draw(body):
+        """Repaint only the lines that changed.
+
+        A full clear + redraw of every line every 20ms flashes on fast output and
+        costs the whole screen per frame; the picture is the same either way, so
+        diff against what is already on screen and move the cursor per line.
+        """
+        nonlocal shown
+        frame = []
+        if not shown:
+            frame.append(b"\x1b[H\x1b[J")
+        for i, line in enumerate(body):
+            if i < len(shown) and shown[i] == line:
+                continue
+            frame.append(b"\x1b[%d;1H" % (i + 1))
+            frame.append(line.encode("utf-8", "replace"))
+            frame.append(b"\x1b[K")
+        if len(shown) > len(body):
+            frame.append(b"\x1b[%d;1H\x1b[J" % (len(body) + 1))
+        shown = body
+        if not frame:
+            return  # nothing moved: leave the screen and the cursor alone
+        # leave the cursor on the last line, where a terminal would show it
+        frame.append(b"\x1b[%d;1H\x1b[?25h" % max(1, len(body)))
+        out.write(b"".join(frame))
+        out.flush()
 
     def paint():
         nonlocal painted, block_cols, block_rows
@@ -399,11 +435,7 @@ def main():
         cols, rows = tty_size()
         cols = min(cols, block_cols)
         rows = min(rows, block_rows)
-        body = screen(content, rows, cols)
-        frame = b"\x1b[H\x1b[J" + b"".join(ln.encode("utf-8", "replace") + b"\x1b[K\r\n" for ln in body)
-        frame += b"\x1b[?25h"
-        out.write(frame)
-        out.flush()
+        draw(screen(content, rows, cols))
         return None
 
     def gone():
