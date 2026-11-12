@@ -813,8 +813,11 @@ reacts to stray keys. `view.readonly = true` refuses `i` and passes `-r` to tmux
 And rex viewers are read-only no matter what: the Rex data stream has no input
 path, so the float says "read only" and you type in Rex itself.
 
-Limits worth knowing: this is a second client, not a mirror, so a full-screen TUI
-may repaint when the float's size differs; a multiplexer can be configured
+tmux is attached with `-f ignore-size` and the float is sized to the session's
+own grid (window rows plus the status line), so viewing an agent never reflows
+the panes somebody else is looking at. Limits worth knowing: this is a second
+client, not a mirror, so a full-screen TUI may still repaint when the float is
+clamped to a smaller screen than the session; a multiplexer can be configured
 (`destroy-unattached`) to end a session when its last client leaves; and the rex
 viewer paints the current screen with `rex capture` and then streams live VT
 bytes, so output produced during the few milliseconds between those two calls can

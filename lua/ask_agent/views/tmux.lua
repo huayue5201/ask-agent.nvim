@@ -26,6 +26,50 @@ local function session_of(pane)
 	return nil
 end
 
+---The size of the session's window. With `-f ignore-size` the attached client
+---never resizes it, so the float must match this grid exactly: a client grid
+---larger than the window leaves tmux filling the rest, smaller one clips it.
+---`#{window_height}` is the pane area: a client that should fit the window
+---exactly needs the status rows on top of it, otherwise tmux shrinks the window
+---by that much on attach.
+---@param session string
+---@return integer|nil width, integer|nil height
+local function window_size(session)
+	local function ask(fmt)
+		local ok, res = pcall(function()
+			return vim.system({ "tmux", "display-message", "-p", "-t", tostring(session), fmt }, { text = true })
+				:wait(1000)
+		end)
+		return ok and res and res.code == 0 and ((res.stdout or ""):gsub("%s+$", "")) or nil
+	end
+	local size = ask("#{window_width}x#{window_height}")
+	if not size then
+		return nil
+	end
+	local w, h = size:match("(%d+)x(%d+)")
+	local status = ask("#{status}") -- "off", "on" or a line count
+	local rows = 1
+	if status == "off" then
+		rows = 0
+	elseif status and status:match("^%d+$") then
+		rows = tonumber(status)
+	end
+	return tonumber(w), tonumber(h) + rows
+end
+
+---`env` for a nested-client attach: tmux refuses to attach when TMUX is set
+---(it thinks the client is nested). Neovim stringifies `vim.NIL` in `jobstart`
+---env into the literal "v:null" -- tmux sees a set variable and exits -- so the
+---only reliable way to unset is to hand over a copy of the environment without
+---those keys.
+---@return table<string,string>
+local function detached_env()
+	local env = vim.fn.environ()
+	env.TMUX = nil
+	env.TMUX_PANE = nil
+	return env
+end
+
 registry.register({
 	id = "tmux",
 	priority = 10,
@@ -38,18 +82,25 @@ registry.register({
 		end
 		local session = session_of(target.pane)
 		local cmd = { "tmux", "attach-session" }
+		-- `ignore-size` keeps the attached client from resizing the shared
+		-- window: viewing an agent must not reflow the panes of whoever else is
+		-- attached (and of the agent itself)
+		vim.list_extend(cmd, { "-f", "ignore-size" })
 		if opts and opts.readonly then
 			vim.list_extend(cmd, { "-r" })
 		end
 		if session then
+			local w, h = window_size(session)
 			return {
 				cmd = vim.list_extend(cmd, { "-t", session }),
+				width = w,
+				height = h,
 				-- inside tmux, a nested client would be a tmux-in-tmux; drop the
 				-- marker so the attach below is a fresh client
-				env = { TMUX = vim.NIL, TMUX_PANE = vim.NIL },
+				env = detached_env(),
 			}
 		end
 		vim.list_extend(cmd, { "-t", target.pane })
-		return { cmd = cmd, env = { TMUX = vim.NIL, TMUX_PANE = vim.NIL } }
+		return { cmd = cmd, env = detached_env() }
 	end,
 })

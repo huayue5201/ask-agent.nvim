@@ -569,9 +569,11 @@ included — reaches the agent until you press `i`. `view.readonly = true` refus
 `i` and passes `-r` to tmux. Rex viewers are read-only regardless, because the
 Rex data stream has no input path; the float says so and you type in Rex.
 
-A viewer is a second client, not a mirror: a full-screen TUI may repaint when
-the float's size differs, and `destroy-unattached` can end a tmux session when
-its last client leaves. The rex viewer paints `rex capture` first and then
+tmux is attached with `-f ignore-size` and the float is sized to the session's
+grid (window rows plus the status line), so viewing never reflows the panes
+somebody else is looking at. A viewer is a second client, not a mirror: a
+full-screen TUI may still repaint when the screen is too small for the session,
+and `destroy-unattached` can end a tmux session when its last client leaves. The rex viewer paints `rex capture` first and then
 streams live VT bytes, so output in the few milliseconds between those calls can
 be missed until the agent redraws. tmux and herdr need only their own binary;
 the rex viewer runs `bin/rex-view.py` with `python3` (override with

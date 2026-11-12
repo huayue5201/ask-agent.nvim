@@ -66,6 +66,15 @@ assert(vim.fn.maparg("i", "n", false, true).buffer == 1, "i starts typing")
 vim.wait(120)
 local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
 assert(text:match("hello from the agent"), "the command's output lands in the float: " .. text)
+-- a writable viewer opens in terminal mode (type right away, like :terminal)
+vim.wait(60)
+-- headless has no UI, so the terminal mode reports as "nt"; a real UI reports "t"
+assert(
+	vim.api.nvim_get_mode().mode:match("t"),
+	"writable viewer starts in terminal mode: " .. vim.api.nvim_get_mode().mode
+)
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
+vim.wait(60)
 vim.api.nvim_feedkeys("q", "x", false)
 vim.wait(80)
 assert(#vim.api.nvim_list_wins() == before, "q closed the float")
@@ -116,6 +125,12 @@ vim.system = function(cmd, _, cb)
 	systems[#systems + 1] = cmd
 	local function out()
 		if cmd[2] == "display-message" then
+			local fmt = cmd[#cmd]
+			if fmt == "#{window_width}x#{window_height}" then
+				return { code = 0, stdout = "80x24\n" }
+			elseif fmt == "#{status}" then
+				return { code = 0, stdout = "on\n" }
+			end
 			return { code = 0, stdout = "$7\n" }
 		end
 		return { code = 0, stdout = "" }
@@ -136,12 +151,24 @@ end
 assert(tmux_provider and tmux_provider.can({ pane = "%3" }), "tmux handles pane targets")
 local spec = tmux_provider.cmd({ pane = "%3" }, { readonly = true })
 assert(
-	vim.deep_equal(spec.cmd, { "tmux", "attach-session", "-r", "-t", "$7" }),
+	vim.deep_equal(spec.cmd, { "tmux", "attach-session", "-f", "ignore-size", "-r", "-t", "$7" }),
 	"tmux readonly argv: " .. vim.inspect(spec.cmd)
 )
-assert(spec.env.TMUX == vim.NIL, "TMUX is dropped for the nested client")
+-- jobstart turns vim.NIL into the string "v:null", so a fresh client must get a
+-- copy of the environment with the keys actually absent
+assert(spec.env.TMUX == nil, "TMUX is dropped for the nested client: " .. tostring(spec.env.TMUX))
+assert(spec.env.TMUX_PANE == nil, "TMUX_PANE is dropped for the nested client")
+assert(type(spec.env.PATH) == "string", "the rest of the environment survives")
+-- the float matches the client grid: window rows + one status row
+assert(
+	spec.width == 80 and spec.height == 25,
+	"tmux window size: " .. tostring(spec.width) .. "x" .. tostring(spec.height)
+)
 local rw = tmux_provider.cmd({ pane = "$7" }, {})
-assert(vim.deep_equal(rw.cmd, { "tmux", "attach-session", "-t", "$7" }), "tmux writable argv: " .. vim.inspect(rw.cmd))
+assert(
+	vim.deep_equal(rw.cmd, { "tmux", "attach-session", "-f", "ignore-size", "-t", "$7" }),
+	"tmux writable argv: " .. vim.inspect(rw.cmd)
+)
 
 -- herdr provider: agent attach, no --takeover unless the target asks for it
 local herdr = require("ask_agent.views.herdr")

@@ -46,13 +46,36 @@ function M.find(target)
 	return registry.find(target)
 end
 
+---Detach: SIGTERM, then SIGKILL if the host client is still around. tmux's
+---client can take a moment to let go of the session, and a viewer that outlives
+---its float keeps the session attached (and may hold a read lock on a pane).
+---@param job integer|nil
+local function kill(job)
+	if not job or job <= 0 then
+		return
+	end
+	-- take the pid first: jobstop() can retire the channel immediately, and
+	-- jobpid() then raises E900 for a process that is still shutting down
+	local ok, pid = pcall(vim.fn.jobpid, job)
+	pcall(vim.fn.jobstop, job)
+	if not ok or not pid or pid <= 0 then
+		return
+	end
+	vim.defer_fn(function()
+		local ok, res = pcall(vim.fn.jobwait, { job }, 0)
+		if ok and res[1] == -1 then
+			pcall(vim.uv.kill, pid, "sigkill")
+		end
+	end, 400)
+end
+
 local function close_win(win)
 	if not vim.api.nvim_win_is_valid(win) then
 		return
 	end
 	local job = active[win] and active[win].job
 	if job then
-		pcall(vim.fn.jobstop, job)
+		kill(job)
 	end
 	if #vim.api.nvim_tabpage_list_wins(0) > 1 then
 		pcall(vim.api.nvim_win_close, win, true)
@@ -69,7 +92,7 @@ function M.close(win)
 		return close_win(win)
 	end
 	if rec.job then
-		pcall(vim.fn.jobstop, rec.job)
+		kill(rec.job)
 	end
 	if vim.api.nvim_win_is_valid(win) and #vim.api.nvim_tabpage_list_wins(0) > 1 then
 		pcall(vim.api.nvim_win_close, win, true)
@@ -100,10 +123,11 @@ function M.open(target, opts)
 	seq = seq + 1
 	local width = math.max(20, math.min(vim.o.columns - 4, math.floor(vim.o.columns * (opts.width or 0.8))))
 	local height = math.max(6, math.min(vim.o.lines - 4, math.floor(vim.o.lines * (opts.height or 0.75))))
-	if spec.width and spec.height then
+	local block_w, block_h = spec.width, spec.height
+	if block_w and block_h then
 		-- a terminal viewer wants the block's own cell grid: replayed VT assumes it
-		width = math.max(20, math.min(vim.o.columns - 4, spec.width))
-		height = math.max(6, math.min(vim.o.lines - 4, spec.height))
+		width = math.max(20, math.min(vim.o.columns - 4, block_w))
+		height = math.max(6, math.min(vim.o.lines - 4, block_h))
 	end
 	local buf = vim.api.nvim_create_buf(false, true)
 	local win = vim.api.nvim_open_win(buf, true, {
@@ -165,7 +189,40 @@ function M.open(target, opts)
 		end,
 	})
 
-	vim.cmd("stopinsert")
+	-- Closing the float any other way (:q, :close, a plugin) must detach too,
+	-- otherwise the host client keeps the session attached in the background.
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = group,
+		pattern = tostring(win),
+		callback = function()
+			local rec = active[win]
+			if rec then
+				active[win] = nil
+				kill(rec.job)
+			end
+			pcall(vim.api.nvim_del_augroup_by_id, group)
+		end,
+	})
+
+	-- `jobstart` puts a visible terminal into terminal mode on its own. Leave it
+	-- on the next tick, so the float opens in normal mode: `q` closes it and
+	-- `i` opts into typing (auto-typing would swallow <Esc>, which agents use to
+	-- interrupt a turn).
+	vim.schedule(function()
+		if vim.api.nvim_win_is_valid(win) then
+			vim.api.nvim_set_current_win(win)
+			vim.cmd("stopinsert")
+		end
+	end)
+	if block_w and block_w > width then
+		notify.notify(
+			("[ask_agent] the terminal is %d columns wide, this float %d — the picture will wrap"):format(
+				block_w,
+				width
+			),
+			vim.log.levels.WARN
+		)
+	end
 	if spec.note then
 		notify.notify("[ask_agent] " .. spec.note, vim.log.levels.INFO)
 	end
@@ -176,7 +233,7 @@ end
 function M.stop_all()
 	for win, rec in pairs(active) do
 		if rec.job then
-			pcall(vim.fn.jobstop, rec.job)
+			kill(rec.job)
 		end
 		active[win] = nil
 	end
