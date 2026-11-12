@@ -210,6 +210,13 @@ end
 function M.thread(name)
 	load()
 	name = vim.trim(name or "")
+	-- an id is accepted wherever a name is (`thread = chat.thread("main")`), which
+	-- is what the window passes: creating a *second* thread named "t1" would
+	-- silently send every message into a thread nobody is looking at
+	if threads[name] then
+		current_id = name
+		return name
+	end
 	if name == "" then
 		name = current_id and threads[current_id] and threads[current_id].name or "main"
 	end
@@ -441,6 +448,40 @@ function M.resolve(name)
 	return nil, candidates
 end
 
+---Who can be addressed right now, so the window can show a member list (and the
+---input can complete `@` from it). Busy means "has a chat task in flight".
+---@return { name: string, key: string, backend: string, label: string, busy: boolean, state: string }[]
+function M.roster()
+	local seen, out = {}, {}
+	for _, info in ipairs(backends.list()) do
+		local mod = backends.get(info.id)
+		if mod and info.available then
+			local ok, targets = pcall(mod.targets)
+			targets = ok and targets or {}
+			for _, t in ipairs(targets) do
+				local key = key_of(mod.id, t.id)
+				if not seen[key] then
+					seen[key] = true
+					target_cache[key] = t
+					local rec = state.get(key)
+					out[#out + 1] = {
+						name = aliases.get(t, mod.id) or aliases.default_name(t),
+						key = key,
+						backend = mod.id,
+						label = t.label or mod.label or mod.id,
+						busy = running[key] ~= nil,
+						state = rec and rec.state or "unknown",
+					}
+				end
+			end
+		end
+	end
+	table.sort(out, function(a, b)
+		return a.name:lower() < b.name:lower()
+	end)
+	return out
+end
+
 ---Split `@name` tokens out of a message (a mention only counts at a word start).
 ---@param text string
 ---@return string cleaned, { raw: string, match: table|nil, candidates: string[] }[]
@@ -657,13 +698,13 @@ end
 ---The text stored for a user message: the cleaned one, unless stripping every
 ---mention would leave nothing (a bare "@claude" is still worth showing).
 ---@param original string
----@param cleaned string
----@param mentions table[]
 ---@return string
-local function stored_text(original, cleaned, mentions)
-	if cleaned ~= "" or #mentions == 0 then
-		return cleaned
-	end
+---What the transcript shows: exactly what the human wrote. The mention is
+---routing, not decoration, but a chat log that silently deletes `@claude` from
+---your own message reads like the message was edited behind your back.
+---@param original string
+---@return string
+local function stored_text(original)
 	return vim.trim(original)
 end
 
@@ -679,7 +720,7 @@ function M.post(text, opts)
 	local entry = append(thread, {
 		kind = "msg",
 		author = "user",
-		text = stored_text(text, cleaned, mentions),
+		text = stored_text(text),
 		anchor = opts.anchor,
 	})
 	if #mentions == 0 then

@@ -583,16 +583,24 @@ warnings. |ask.jump()| does the same from Lua, |ask.jumps()| lists the adapters.
 Group chat: `:AskAgentChat` opens one transcript for several agents. A message is
 a message; `@name` is routing — the named agent gets a task whose prompt carries a
 projection of the log (pinned facts plus the entries after that agent's cursor, at
-most `chat.window`, 24), and its answer comes back as an entry of its own. Keys:
+most `chat.window`, 24), and its answer comes back as an entry of its own.
 
-  i / a / <CR>  write a message (`@claude` addresses that agent)   |i|
-  gp            pin a fact every agent sees; gu unpins             |gp| |gu|
-  gr            repaint
-  q             close
+The transcript is a float with the input bar at its bottom, and the footer lists
+the agents you can address (plus `◐ n` running and `⏳ n` queued). Typing `@` in
+the input completes from that list.
 
-One agent runs one chat task at a time: a second mention is queued (`⏳ n` in the
-winbar) and starts when the turn ends. Agents cannot mention each other, so
-routing only ever follows a message a human posted.
+  i / a / <CR>   go to the input bar                               |i|
+  @              complete an agent name
+  <CR>           send
+  <C-j>          newline in the message
+  <Esc>          input bar: back to the transcript, nothing is sent
+  gp             pin a fact every agent sees; gu unpins            |gp| |gu|
+  gr             repaint
+  q / <Esc>      close the panel
+
+One agent runs one chat task at a time: a second mention is queued and starts when
+the turn ends. Agents cannot mention each other, so routing only ever follows a
+message a human posted.
 
 The answer is scraped from the agent's screen (rex: `block call format`, tmux:
 `capture-pane`); the log keeps roughly its last 60 lines. |ask.chat()| opens the

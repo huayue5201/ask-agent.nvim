@@ -30,7 +30,12 @@ backends.register({
 local win = ui.open({ thread = "ui", width = 44 })
 local buf = vim.api.nvim_win_get_buf(win)
 assert(vim.bo[buf].filetype == "ask-agent-chat", "filetype is set")
+assert(vim.api.nvim_win_get_config(win).relative == "editor", "the chat is a float, not a split")
+assert(vim.api.nvim_win_get_config(win).border[1] == "╭", "rounded border")
 assert(vim.api.nvim_win_get_width(win) == 44, "requested width")
+local iw = ui.input_win()
+assert(iw and vim.api.nvim_win_is_valid(iw) and iw ~= win, "the input bar is its own float")
+assert(vim.api.nvim_win_get_config(iw).row > vim.api.nvim_win_get_config(win).row, "input bar sits below")
 
 chat.post("hello there", { thread = "ui" })
 vim.wait(220)
@@ -66,7 +71,7 @@ local widest = 0
 for _, l in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
 	widest = math.max(widest, vim.fn.strdisplaywidth(l))
 end
-assert(widest <= 44, "wrapped to the panel, got " .. widest)
+assert(widest <= 42, "wrapped to the panel, got " .. widest)
 
 -- keys are wired: <CR>/i compose, gp pins, q closes
 local keys = {}
@@ -76,7 +81,20 @@ end
 assert(keys["<CR>"] and keys["i"] and keys["a"] and keys["gp"] and keys["gu"] and keys["q"], "keymaps")
 assert(keys["gr"], "repaint key")
 
+-- the member list: who can be addressed, so a message knows its target
+local roster = chat.roster()
+assert(#roster == 1 and roster[1].name == "claude", "roster lists the agent by name")
+assert(roster[1].backend == "group", "roster carries the backend")
+local footer = vim.inspect(vim.api.nvim_win_get_config(win).footer)
+assert(footer:find("claude", 1, true), "the member list is on the panel: " .. footer)
+local ikeys = {}
+for _, m in ipairs(vim.api.nvim_buf_get_keymap(vim.api.nvim_win_get_buf(iw), "i")) do
+	ikeys[m.lhs] = true
+end
+assert(ikeys["<C-S>"] or ikeys["<C-s>"], "the input bar sends with <C-s>")
+
 ui.close()
 assert(not vim.api.nvim_win_is_valid(win), "closes")
+assert(not vim.api.nvim_win_is_valid(iw), "closes the input bar too")
 
 print("CHATUI OK")

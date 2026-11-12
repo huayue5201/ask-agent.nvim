@@ -60,7 +60,7 @@ assert(sent[1].target.id == "c1", "sent to the named target")
 assert(sent[1].text:find("把映射改成 J", 1, true), "the question travels")
 assert(not sent[1].text:find("@claude", 1, true), "the mention itself is stripped")
 assert(sent[1].text:find('<chat thread="main">', 1, true), "the projection is attached")
-assert(e2.text == "把映射改成 J", "the log keeps the message without the mention")
+assert(e2.text == "@claude 把映射改成 J", "the log keeps what the human wrote, mention included")
 
 -- unknown and ambiguous mentions are reported, not silently dropped
 chat.post("@ghost hello")
@@ -135,5 +135,12 @@ for _, e in ipairs(data.threads[tid].entries) do
 	kinds[e.kind] = true
 end
 assert(kinds.msg and kinds.result and kinds.system, "every kind survives")
+
+-- an id and a name both address the same thread (the window passes ids)
+local tid = chat.thread("by-name")
+chat.post("first", { thread = tid })
+chat.post("second", { thread = "by-name" })
+assert(#chat.get(tid).entries == 2, "an id posts into the thread it names, got " .. #chat.get(tid).entries)
+assert(#chat.list() == 2, "no duplicate thread was created under the id, got " .. #chat.list())
 
 print("CHAT OK")

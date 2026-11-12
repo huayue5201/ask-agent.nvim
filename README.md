@@ -905,12 +905,21 @@ back into the same log. The log is the truth — the window, the dashboard and t
 API all read it (`lua/ask_agent/chat.lua`), so nothing can disagree about what was
 said.
 
-| key | does |
-| --- | --- |
-| `i` / `a` / `<CR>` | write a message (`@claude` addresses that agent) |
-| `gp` | pin a fact every agent sees (`gu` unpins) |
-| `gr` | repaint |
-| `q` | close |
+The window is a float, not a split: bubbles on top, an input bar at the bottom
+(the panel starts with the cursor in it), and the member list — who you can
+address — in the footer next to the running counters. Typing `@` completes from
+that list, so you never have to remember which agents are up.
+
+| key | where | does |
+| --- | --- | --- |
+| `i` / `a` / `<CR>` | transcript | go to the input bar |
+| `@` | input | complete an agent name |
+| `<CR>` | input | send |
+| `<C-j>` | input | newline in the message |
+| `<Esc>` | input | back to the transcript, nothing sent |
+| `gp` / `gu` | transcript | pin / unpin a fact every agent sees |
+| `gr` | transcript | repaint |
+| `q` / `<Esc>` | transcript | close |
 
 Three rules keep a group chat from turning into a token fire hose:
 
@@ -919,7 +928,7 @@ Three rules keep a group chat from turning into a token fire hose:
 * **pin** — facts a human pinned travel with every task, instead of the whole
   history;
 * **gate** — one agent runs one chat task at a time; a second mention is queued
-  (`⏳ n` in the winbar) and starts when the first turn ends.
+  (`⏳ n` in the footer) and starts when the first turn ends.
 
 Agents cannot mention each other: only messages a human posts are routed, so
 coordination happens through the shared transcript and its artifacts, never
