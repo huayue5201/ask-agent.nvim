@@ -377,6 +377,18 @@ Claude Code is bundled: `backends/claude.lua` builds the tmux backend above with
 
 and switch with `:AskAgentBackend claude`. `new()` accepts
 `id, label, command, command_pattern, state_dir, field, ttl, keys_after`.
+
+Herdr is bundled too: `backends/herdr.lua` lists the agents herdr recognizes in
+its panes and reuses herdr's own lifecycle state (idle, working, blocked, done),
+so "waiting for you" needs no scraping. It is not registered by default (an agent
+under herdr is often visible through another backend as well):
+
+  require("ask_agent").setup({ extra = { require("ask_agent.backends.herdr") } })
+
+One `herdr agent list` per polling pass serves every target; sending goes through
+`herdr agent prompt`, viewing through `herdr agent attach`, and `J` through
+`herdr agent focus`. A target is `{ herdr = { agent = "<name>" } }`, or a pane id.
+Limit what is listed with `M.filter(agent)` before registering the module.
 The matching hook script is `extensions/claude-ask-agent-state.sh`; install it as
 `~/.claude/ask-agent-state.sh` and add these hooks to `~/.claude/settings.json`:
 
@@ -604,14 +616,17 @@ one to the front. A jump adapter is the whole interface:
 
 >lua
   require("ask_agent").register_jump({
-    id = "herdr",
+    id = "kitty",
     priority = 10,                 -- higher wins when several adapters match
-    can = function(target) return target.herdr ~= nil end,
-    focus = function(target) vim.system({ "herdr", "focus", target.herdr.id }) end,
+    can = function(target) return target.kitty ~= nil end,
+    focus = function(target)
+      vim.system({ "kitty", "@", "focus-window", "--match", target.kitty })
+    end,
   })
 <
 
-rex (`target.rex`) and tmux (`target.pane`) ship built in. The first matching
+rex (`target.rex`), herdr (`target.herdr`, via `herdr agent focus`) and tmux
+(`target.pane`) ship built in. The first matching
 adapter (highest `priority`) handles the jump. The rex adapter runs three steps,
 because a Rex app shows one session and one window (tab) at a time: `rex block
 inspect` finds the block's `window_id`, `rex window focus <window> -s <session>`
@@ -639,7 +654,8 @@ ask.register_view({
 optional (`env` unsets inherited variables, `note` is shown on the float). The
 first matching provider (highest `priority`) handles the target. rex
 (`target.rex = { session, block }`), tmux (`target.pane`) and herdr
-(`target.herdr = { id }`) ship built in, and |health| lists them.
+(`target.herdr = { agent }`, or `{ pane }`) ship built in, and |health| lists
+them.
 
 The float opens in terminal mode, like |:terminal|: open it and type. The float
 adds only these keys, and its footer always shows them:

@@ -507,6 +507,21 @@ Bundled backends:
 
   `new()` takes `{ id, label, command (default "claude"), command_pattern, state_dir,
   field, ttl, keys_after }`. Then `:AskAgentBackend claude`.
+- `herdr` — the agents [herdr](https://herdr.dev) recognizes in its panes, with the
+  state herdr already tracks (`idle`, `working`, `blocked`, `done`). Not registered
+  by default, because an agent running under herdr is often visible through another
+  backend too:
+
+  ```lua
+  require("ask_agent").setup({ extra = { require("ask_agent.backends.herdr") } })
+  ```
+
+  One `herdr agent list` per polling pass feeds every target and their `probe()`, so
+  `blocked` costs nothing to detect; `send` goes through `herdr agent prompt`, and
+  the viewer (`herdr agent attach`) and `J` (`herdr agent focus`) are built in —
+  a target is `{ herdr = { agent = "<name>" } }` (a pane id works too). Restrict
+  what shows up with `local h = require("ask_agent.backends.herdr"); h.filter =
+  function(agent) return agent.workspace == "wV" end` before registering.
 
 ## The map picker
 
@@ -866,7 +881,7 @@ require("ask_agent").register_view({
 `cmd` returns `{ cmd, env, width, height, note }` (everything but `cmd` optional;
 `env` removes inherited variables, `note` is a one-line hint shown on the float).
 A target matches the first provider (by `priority`) whose `can(target)` returns
-true: `target.rex = { session, block }`, `target.pane`, and `target.herdr = { id }`
+true: `target.rex = { session, block }`, `target.pane`, and `target.herdr = { agent }` (a pane id works too)
 are what the built-ins look for.
 
 The float opens in terminal mode, exactly like `:terminal`: open it and type.
@@ -927,14 +942,15 @@ through a jump adapter — the same contract idea one level down:
 
 ```lua
 require("ask_agent").register_jump({
-  id = "herdr",
+  id = "kitty",
   priority = 10,                          -- higher wins when several adapters match
-  can = function(target) return target.herdr ~= nil end,
-  focus = function(target) vim.system({ "herdr", "focus", target.herdr.id }) end,
+  can = function(target) return target.kitty ~= nil end,
+  focus = function(target) vim.system({ "kitty", "@", "focus-window", "--match", target.kitty }) end,
 })
 ```
 
-rex (`target.rex`) and tmux (`target.pane`) ship built in. The first matching
+rex (`target.rex`), herdr (`target.herdr`, via `herdr agent focus`) and tmux
+(`target.pane`) ship built in. The first matching
 adapter (highest `priority`) handles the jump. The rex adapter runs three steps,
 because a Rex app shows one session and one window (tab) at a time: `rex block
 inspect` finds the block's `window_id`, `rex window focus <window> -s <session>`

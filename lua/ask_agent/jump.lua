@@ -209,6 +209,27 @@ M.register({
 })
 
 M.register({
+	id = "herdr",
+	priority = 15,
+	can = function(target)
+		local spec = target.herdr
+		return type(spec) == "table" and (spec.agent or spec.id or spec.pane or target.pane) ~= nil
+	end,
+	focus = function(target)
+		local spec = target.herdr or {}
+		local name = spec.agent or spec.id or spec.pane or target.pane
+		-- `agent focus` takes a name or a pane id, switches to its workspace/tab
+		-- and marks the completion seen on the way, which is what we want here.
+		run({ { "herdr", "agent", "focus", tostring(name) } }, function(cmd, res)
+			notify.notify(
+				("[ask_agent] herdr agent focus failed: %s"):format((res.stderr or ""):gsub("%s+$", "")),
+				vim.log.levels.WARN
+			)
+		end)
+	end,
+})
+
+M.register({
 	id = "tmux",
 	priority = 10,
 	can = function(target)
