@@ -1228,7 +1228,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify_style?: boolean, notify_sound?: boolean, persist?: boolean|{ path?: string, enabled?: boolean }, task_limit?: integer, task_ttl?: integer }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, persist?: boolean|{ path?: string, enabled?: boolean }, task_limit?: integer, task_ttl?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1253,6 +1253,8 @@ function M.setup(opts)
 	current = opts.default or "pi"
 	-- One poller for every backend; views subscribe instead of polling on their own
 	state.notify = opts.state_notify ~= false
+	-- Per-state notification copy, level and bell (see README "Notifications")
+	state.configure({ messages = opts.notify, gap = opts.notify_gap })
 	-- Notification house style: bold + level colour, optional terminal bell
 	require("ask_agent.notify").setup({ style = opts.notify_style, sound = opts.notify_sound })
 	-- Sidebar tree: connectors between agents and tasks, and the green path to the running task

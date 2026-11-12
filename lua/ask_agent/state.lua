@@ -40,7 +40,6 @@ local timer, refreshing = nil, false
 
 local ORDER = { blocked = 1, done = 2, error = 3, working = 4, unknown = 5, idle = 6, gone = 7 }
 local KIND = { permission = 0, question = 1, auth = 2 }
-local NOTIFY_GAP = 30000
 local PRUNE_MS = 600000
 local TASK_KEEP = 20
 ---Finished tasks older than this are dropped from the journal; one per agent stays
@@ -142,17 +141,102 @@ local function emit(event, ...)
 	end
 end
 
----Notification copy per blocked kind.
-local WAITING = {
-	permission = "needs your permission",
-	auth = "is waiting for credentials",
-	question = "is waiting for your answer",
+---One message per state, overridable through `setup({ notify = { … } })`.
+--
+-- `{backend}`, `{name}`, `{msg}`, `{state}`, `{kind}` and `{was}` are filled in;
+-- `{msg}` already carries its ": " separator, so `"…finished{msg}"` reads right.
+-- `sound = true` rings the terminal bell (unless `belloff` contains "all"), and
+-- `level` is a key of `vim.log.levels` as a name. A state set to `false` is silent.
+M.messages = {
+	done = { text = "[{backend}] {name} finished{msg}", level = "INFO", sound = true },
+	blocked = { text = "[{backend}] {name} is waiting for you{msg}", level = "WARN", sound = true },
+	permission = { text = "[{backend}] {name} needs your permission{msg}", level = "WARN", sound = true },
+	auth = { text = "[{backend}] {name} is waiting for credentials{msg}", level = "WARN", sound = true },
+	question = { text = "[{backend}] {name} is waiting for your answer{msg}", level = "WARN", sound = true },
+	error = { text = "[{backend}] {name} failed{msg}", level = "ERROR", sound = true },
+	gone = { text = "[{backend}] {name} exited while {was}", level = "WARN", sound = true },
 }
 
----@param rec table
+---Minimum milliseconds between two notifications of the same kind for one agent
+---(`done`/`error`/`gone` bursts are throttled, a blocked transition is not).
+M.notify_gap = 30000
+
+local LEVELS = {
+	TRACE = vim.log.levels.TRACE,
+	DEBUG = vim.log.levels.DEBUG,
+	INFO = vim.log.levels.INFO,
+	WARN = vim.log.levels.WARN,
+	ERROR = vim.log.levels.ERROR,
+}
+
+---Fill `{name}` placeholders; unknown keys expand to nothing.
+---@param tpl string
+---@param ctx table<string, string>
 ---@return string
-local function notify_prefix(rec)
-	return ("[%s] %s"):format(rec.backend, M.name(rec))
+local function fill(tpl, ctx)
+	return (
+		tpl:gsub("{(%w+)}", function(key)
+			local value = ctx[key]
+			return value ~= nil and tostring(value) or ""
+		end)
+	)
+end
+
+---Render the message configured for `key`.
+---@param rec table
+---@param key string
+---@param ctx table<string, string>
+---@return string|nil text, integer|nil level, boolean sound
+local function message(rec, key, ctx)
+	local cfg = M.messages[key]
+	if cfg == nil then
+		cfg = M.messages.blocked
+	end
+	if cfg == false or type(cfg) ~= "table" or type(cfg.text) ~= "string" then
+		return nil
+	end
+	ctx.backend, ctx.name = rec.backend, M.name(rec)
+	ctx.msg = rec.msg and (": " .. rec.msg) or ""
+	local level = LEVELS[cfg.level or "INFO"] or vim.log.levels.INFO
+	return fill(cfg.text, ctx), level, cfg.sound ~= false
+end
+
+---Say it once: render the configured text, at the configured level, with the bell
+---when the state asks for one.
+---@param rec table
+---@param key string
+---@param ctx table<string, string>
+local function announce(rec, key, ctx)
+	local text, level, sound = message(rec, key, ctx)
+	if text then
+		notify.notify(text, level, { sound = sound })
+	end
+end
+
+---Override the notification copy (merged into `M.messages`).
+--
+--   state.configure({ messages = {
+--     done = "✅ {name} 完成{msg}",
+--     error = false,                            -- never notify about errors
+--     blocked = { text = "⏸ {name} 等你{msg}", sound = false },
+--   }, gap = 10000 })
+---@param o { messages?: table, gap?: integer }|nil
+---@return table messages
+function M.configure(o)
+	o = o or {}
+	for key, cfg in pairs(o.messages or {}) do
+		if cfg == false then
+			M.messages[key] = false
+		elseif type(cfg) == "string" then
+			M.messages[key] = vim.tbl_extend("force", M.messages[key] or {}, { text = cfg })
+		elseif type(cfg) == "table" then
+			M.messages[key] = vim.tbl_extend("force", M.messages[key] or {}, cfg)
+		end
+	end
+	if type(o.gap) == "number" and o.gap >= 0 then
+		M.notify_gap = o.gap
+	end
+	return M.messages
 end
 
 ---One throttle per instance and notification kind: short task bursts must not spam,
@@ -165,7 +249,7 @@ local function throttled(rec, kind)
 	if type(rec.notified) ~= "table" then
 		rec.notified = {}
 	end
-	if now - (rec.notified[kind] or 0) < NOTIFY_GAP then
+	if now - (rec.notified[kind] or 0) < M.notify_gap then
 		return true
 	end
 	rec.notified[kind] = now
@@ -200,30 +284,18 @@ local function notify_change(rec)
 		return
 	end
 	if rec.state == "blocked" then
-		notify.notify(
-			("%s %s%s"):format(
-				notify_prefix(rec),
-				WAITING[rec.kind] or "is waiting for you",
-				rec.msg and (": " .. rec.msg) or ""
-			),
-			vim.log.levels.WARN
-		)
+		local key = (rec.kind and M.messages[rec.kind] ~= nil) and rec.kind or "blocked"
+		announce(rec, key, { kind = rec.kind or "", state = rec.state })
 	elseif rec.state == "done" then
 		if watching(rec) or throttled(rec, "done") then
 			return
 		end
-		notify.notify(
-			("%s finished%s"):format(notify_prefix(rec), rec.msg and (": " .. rec.msg) or ""),
-			vim.log.levels.INFO
-		)
+		announce(rec, "done", { state = rec.state })
 	elseif rec.state == "error" then
 		if throttled(rec, "error") then
 			return
 		end
-		notify.notify(
-			("%s failed%s"):format(notify_prefix(rec), rec.msg and (": " .. rec.msg) or ""),
-			vim.log.levels.ERROR
-		)
+		announce(rec, "error", { state = rec.state })
 	end
 end
 
@@ -237,10 +309,10 @@ local function notify_gone(rec, prev)
 	if throttled(rec, "gone") then
 		return
 	end
-	notify.notify(
-		("%s exited while %s"):format(notify_prefix(rec), prev == "blocked" and "waiting for you" or "working"),
-		vim.log.levels.WARN
-	)
+	announce(rec, "gone", {
+		state = rec.state,
+		was = prev == "blocked" and "waiting for you" or "working",
+	})
 end
 
 local schedule_save -- journal writer, defined below (apply() is above it)

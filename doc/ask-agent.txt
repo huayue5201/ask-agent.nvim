@@ -41,6 +41,16 @@ require("ask_agent").setup({
   state_notify = true,           -- notify on finished/blocked agents (default true)
   notify_style = true,           -- bold + level colour for notifications (default true)
   notify_sound = false,          -- terminal bell on every notification (default false)
+  notify = {                     -- per-state copy/level/bell; false = silent
+    done = { text = "[{backend}] {name} finished{msg}", sound = true },
+    blocked = { text = "[{backend}] {name} is waiting for you{msg}" },
+    permission = { text = "[{backend}] {name} needs your permission{msg}" },
+    question = { text = "[{backend}] {name} is waiting for your answer{msg}" },
+    auth = { text = "[{backend}] {name} is waiting for credentials{msg}" },
+    error = { text = "[{backend}] {name} failed{msg}", level = "ERROR" },
+    gone = { text = "[{backend}] {name} exited while {was}" },
+  },
+  notify_gap = 30000,            -- ms between done/error/gone per agent
   tree_lines = true,             -- │ ├ └ between agents and tasks (default true)
   running_line = "dash",         -- green path to the running task:
                                  -- "dash" | "pulse" | "static" | "off"
@@ -473,6 +483,35 @@ Sources, strongest first:
 
 `rec.source` says which one produced the state: `rex`, `probe`, or `heuristic`
 (the last one only knows idle, so the sidebar labels the turn `inferred`).
+
+Notifications                                 *ask-agent-notify-config*
+
+Four state changes reach the user: `done`, `blocked` (with its kinds
+`permission` / `question` / `auth`), `error` and `gone` (the agent disappeared
+while it still owed you something). `working`/`idle`/`unknown` stay silent.
+
+Each state's copy is a template with `{backend}`, `{name}`, `{msg}` (already
+prefixed with ": "), `{state}`, `{kind}` and `{was}`; `level` is a key of
+`vim.log.levels` as a string, and `sound = true` rings the terminal bell for that
+message (unless `belloff` contains "all"). Set a state to `false` to silence it,
+or give just a string to replace only its text:
+
+>lua
+require("ask_agent").setup({
+  notify = {
+    done = "✅ {name} 完成{msg}",
+    error = false,
+    blocked = { text = "⏸ {name} 等你{msg}", sound = false },
+  },
+  notify_gap = 10000,
+})
+<
+
+The same table can be changed at runtime with
+`require("ask_agent.state").configure({ messages = {...}, gap = n })`.
+`notify_gap` (default 30000) throttles `done`/`error`/`gone` per agent; a
+transition into `blocked` always notifies. `notify_sound = true` rings on every
+notification instead of per state.
 
 States: `idle`, `working`, `blocked` (kind: permission | question | auth),
 `done`, `error`, `unknown`, `gone`. Every transition into `blocked` is reported;

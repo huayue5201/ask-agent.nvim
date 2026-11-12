@@ -213,6 +213,22 @@ require("ask_agent").setup({
   -- :set belloff=all still mutes it
   notify_sound = false,
 
+  -- per-state notification copy, level and bell (see "Notification copy");
+  -- a state set to false is silent, a string replaces only the text
+  notify = {
+    done = { text = "[{backend}] {name} finished{msg}", sound = true },
+    blocked = { text = "[{backend}] {name} is waiting for you{msg}" },
+    permission = { text = "[{backend}] {name} needs your permission{msg}" },
+    question = { text = "[{backend}] {name} is waiting for your answer{msg}" },
+    auth = { text = "[{backend}] {name} is waiting for credentials{msg}" },
+    error = { text = "[{backend}] {name} failed{msg}", level = "ERROR" },
+    gone = { text = "[{backend}] {name} exited while {was}" },
+  },
+
+  -- minimum ms between two `done`/`error`/`gone` notifications for one agent
+  -- (default 30000; a blocked transition is never throttled)
+  notify_gap = 30000,
+
   -- draw │ ├ └ between an agent and its tasks (default true); sidebars
   -- narrower than 20 columns fall back to plain indentation
   tree_lines = true,
@@ -718,6 +734,40 @@ Every send is also appended to `rec.tasks` (newest first, last 20): `{ text, ts,
 status = "running" | "done" | "error", correlation, anchor }` — that is what the
 sidebar shows under each agent. Tasks finish when the instance reports `done` /
 `error`, or when a turn ends after we sent something.
+
+### Notification copy and the bell
+
+Every state change that matters reaches `vim.notify` with copy you can rewrite:
+`done`, `blocked` (plus its kinds `permission` / `question` / `auth`), `error`,
+and `gone` (an agent disappeared while it still owed you something). `working`,
+`idle` and `unknown` are silent on purpose — they are poll noise.
+
+```lua
+require("ask_agent").setup({
+  notify = {
+    done = "✅ {name} 完成{msg}",
+    blocked = { text = "⏸ {name} 等你 ({kind}){msg}", sound = true },
+    error = { text = "💥 {name} 失败{msg}", level = "ERROR", sound = true },
+    gone = false,                             -- never report exits
+  },
+  notify_gap = 10000,
+})
+require("ask_agent.state").configure({ messages = { done = "…" } })  -- or at runtime
+```
+
+Placeholders: `{backend}`, `{name}` (the instance name), `{msg}` (already prefixed
+with `": "`, or empty), `{state}`, `{kind}`, `{was}` (what a vanished agent was
+doing). `level` is a `vim.log.levels` key as a string (`"INFO"`, `"WARN"`,
+`"ERROR"`, …). `sound = true` rings the terminal bell for that message alone —
+unless `:set belloff` contains `all` — and it works whether the plugin paints the
+message itself or a notification UI (nvim-notify, noice, snacks, fidget) owns it.
+`notify_sound = true` rings for *every* notification instead; `opts.sound` on a
+single `notify.notify()` call overrides both.
+
+Throttling keeps bursts quiet: `done`, `error` and `gone` fire at most once per
+`notify_gap` ms per agent, while a transition into `blocked` always fires. A
+finished turn is not announced at all while its own terminal is the window you
+are looking at.
 
 ## Dashboard
 

@@ -132,13 +132,24 @@ function M.setup(opts)
 	end
 end
 
+---Ring the bell once, for callers that want it on their own schedule.
+function M.ring()
+	ring()
+end
+
 ---Drop-in replacement for `vim.notify(msg, level, opts)` with the house style.
+---`opts.sound` overrides the module-wide bell for this one message (`true` rings
+---even when `M.sound` is off, `false` stays quiet even when it is on).
 ---@param msg string
 ---@param level integer|nil
 ---@param opts table|nil forwarded to vim.notify when a UI plugin owns it
 function M.notify(msg, level, opts)
 	level = level or vim.log.levels.INFO
-	if M.sound then
+	local sound = opts and opts.sound
+	if sound == nil then
+		sound = M.sound
+	end
+	if sound then
 		ring()
 	end
 	if not M.style or external_ui() or not stock_notify() then
