@@ -62,6 +62,47 @@ local function cli(args)
 	return data
 end
 
+-- pane -> foreground pid, so an agent that herdr did not start (pi begun by hand
+-- inside a herdr pane) can still be recognized as living in that pane. Built by
+-- asking every pane for its process info, which is one call per pane, so it is
+-- cached longer than the agent list.
+local PID_TTL = 3000
+local pid_cache = { ts = -math.huge, by = {} }
+
+---Which herdr pane is running this pid?
+---@param pid string|number|nil
+---@return string|nil pane
+function M.pane_of_pid(pid)
+	local wanted = tonumber(pid)
+	if not wanted then
+		return nil
+	end
+	local now = vim.uv.now()
+	if now - pid_cache.ts >= PID_TTL then
+		local by = {}
+		local list = cli({ "pane", "list" })
+		local rows = (type(list) == "table" and list.result and list.result.panes) or {}
+		for _, row in ipairs(rows) do
+			local id = row.pane_id or row.id
+			if id then
+				local info = cli({ "pane", "process-info", "--pane", id })
+				local procs = info and info.result and info.result.process_info
+				for _, proc in ipairs((procs and procs.foreground_processes) or {}) do
+					if proc.pid then
+						by[tostring(proc.pid)] = id
+					end
+				end
+				-- the pane's shell, in case the agent is its foreground child
+				if procs and procs.shell_pid then
+					by[tostring(procs.shell_pid)] = by[tostring(procs.shell_pid)] or id
+				end
+			end
+		end
+		pid_cache = { ts = now, by = by }
+	end
+	return pid_cache.by[tostring(wanted)]
+end
+
 ---Index one agent record by name and by pane id.
 ---@param a table
 local function index(a)
@@ -219,6 +260,7 @@ end
 ---Drop the cache (tests, and after we know state moved).
 function M.invalidate()
 	cache = { ts = -math.huge, agents = {}, by = {} }
+	pid_cache = { ts = -math.huge, by = {} }
 end
 
 return M

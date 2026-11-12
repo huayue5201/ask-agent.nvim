@@ -33,7 +33,7 @@ end
 ---Whether rex is usable at all (installed and reachable).
 ---@return boolean
 function M.available()
-	return vim.fn.executable("rex") == 1
+	return require("ask_agent.rex_cli").available()
 end
 
 ---@param records table[]
@@ -85,7 +85,8 @@ function M.query(loc, cb)
 	end
 	local waiters = { cb }
 	inflight[block] = waiters
-	local cmd = { "rex", "block", "call", "-b", block }
+	local bin = require("ask_agent.rex_cli").path() or "rex"
+	local cmd = { bin, "block", "call", "-b", block }
 	if loc.session then
 		vim.list_extend(cmd, { "-s", loc.session })
 	end
@@ -160,7 +161,7 @@ function M.watch(session, cb)
 			return
 		end
 		local started = vim.uv.now()
-		w.proc = vim.system({ "rex", "events", "-s", session, "--json" }, {
+		w.proc = vim.system({ require("ask_agent.rex_cli").path() or "rex", "events", "-s", session, "--json" }, {
 			text = true,
 			stdout = function(err, chunk)
 				-- vim.system calls this with err set and chunk=nil when the pipe breaks

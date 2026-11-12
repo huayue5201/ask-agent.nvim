@@ -36,6 +36,10 @@ import tty
 import unicodedata
 import urllib.parse
 
+# The rex CLI: REX_BIN wins (the plugin resolves it — the app bundle's CLI is not
+# on $PATH for a Neovim started outside Rex), then whatever $PATH offers.
+REX = os.environ.get("REX_BIN") or "rex"
+
 # Frames are painted at most this often, and at least this often when idle.
 MIN_FRAME_GAP = 0.02
 IDLE_REPAINT = 1.0
@@ -66,7 +70,7 @@ def rex_server():
     if env.startswith("unix://"):
         return urllib.parse.unquote(env[len("unix://") :])
     out = subprocess.run(
-        ["rex", "server", "status", "--json"],
+        [REX, "server", "status", "--json"],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         timeout=5,
@@ -294,7 +298,7 @@ def main():
         """
         try:
             res = subprocess.run(
-                ["rex", "block", "call", "-b", args.block, "-s", args.session, method],
+                [REX, "block", "call", "-b", args.block, "-s", args.session, method],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=5,

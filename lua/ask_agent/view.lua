@@ -60,6 +60,33 @@ function M.find(target)
 	return registry.find(target)
 end
 
+---The first provider that can show this target *and* whose command is usable.
+---Providers are tried in priority order and a failing one is skipped: an agent
+---visible through two hosts (pi's registration still names the rex block it was
+---started in, while it now runs under herdr) must not lose its viewer because
+---the higher-priority host is unreachable from here.
+---@param target table
+---@param opts { readonly?: boolean }|nil
+---@return table|nil provider, string|nil err
+function M.find_usable(target, opts)
+	local reasons = {}
+	for _, p in ipairs(registry.list()) do
+		local ok, can = pcall(p.can, target)
+		if ok and can then
+			local readonly = opts and opts.readonly == true or p.readonly_only == true
+			local spec, err = p.cmd(target, { readonly = readonly })
+			if spec and spec.cmd then
+				return p
+			end
+			reasons[#reasons + 1] = err or ("view provider %s cannot show this agent"):format(p.id)
+		end
+	end
+	if #reasons == 0 then
+		return nil, "no view provider knows this agent (ask.register_view({...}) adds one)"
+	end
+	return nil, table.concat(reasons, "; ")
+end
+
 ---Detach: SIGTERM, then SIGKILL if the host client is still around. tmux's
 ---client can take a moment to let go of the session, and a viewer that outlives
 ---its float keeps the session attached (and may hold a read lock on a pane).
@@ -266,9 +293,9 @@ function M.open(target, opts)
 		return true
 	end
 
-	local p = M.find(target)
+	local p, err = M.find_usable(target, { readonly = opts.readonly == true })
 	if not p then
-		return false, "no view provider knows this agent (ask.register_view({...}) adds one)"
+		return false, err
 	end
 
 	if key then
@@ -280,9 +307,9 @@ function M.open(target, opts)
 	end
 
 	local readonly = opts.readonly == true or p.readonly_only == true
-	local spec, err = p.cmd(target, { readonly = readonly })
+	local spec, why = p.cmd(target, { readonly = readonly })
 	if not spec or not spec.cmd then
-		return false, err or ("view provider %s cannot show this agent"):format(p.id)
+		return false, why or ("view provider %s cannot show this agent"):format(p.id)
 	end
 
 	seq = seq + 1
@@ -346,7 +373,13 @@ function M.open(target, opts)
 
 	local jopts = { term = true }
 	if spec.env and next(spec.env) ~= nil then
-		jopts.env = spec.env
+		-- jobstart's `env` REPLACES the environment (clear_env defaults to true
+		-- when it is given), so merge instead of handing over the bare delta
+		local env = vim.fn.environ()
+		for k, v in pairs(spec.env) do
+			env[k] = v
+		end
+		jopts.env = env
 	end
 	local job = vim.fn.jobstart(spec.cmd, jopts)
 	if job <= 0 then

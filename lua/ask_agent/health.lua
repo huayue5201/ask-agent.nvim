@@ -161,12 +161,18 @@ function M.check()
 	else
 		info("view providers: none — <CR> in the dashboard opens no float")
 	end
-	for _, name in ipairs({ "rex", "tmux", "herdr" }) do
+	for _, name in ipairs({ "tmux", "herdr" }) do
 		if vim.fn.executable(name) ~= 1 then
 			info(("view provider %s: %s is not on PATH"):format(name, name))
 		end
 	end
-	if vim.fn.executable("rex") == 1 and vim.fn.executable(vim.g.ask_agent_python or "python3") ~= 1 then
+	local rex_path = require("ask_agent.rex_cli").path()
+	if rex_path and rex_path ~= "rex" then
+		info("rex CLI: not on PATH, using " .. rex_path)
+	elseif not rex_path then
+		info("rex: not found (neither on PATH nor in the Rex app bundle)")
+	end
+	if rex_path and vim.fn.executable(vim.g.ask_agent_python or "python3") ~= 1 then
 		warn("rex viewer: python3 is not on PATH — the rex viewer float cannot start")
 	end
 

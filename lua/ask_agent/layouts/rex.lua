@@ -35,7 +35,7 @@ end
 
 ---Whether the map is usable at all: inside rex and the rex command is available.
 function M.available()
-	return M.session() ~= nil and vim.fn.executable("rex") == 1
+	return M.session() ~= nil and require("ask_agent.rex_cli").available()
 end
 
 ---Get the inspect result for a session (short cache so one picker session does
@@ -53,7 +53,10 @@ function M.inspect(session)
 		return hit.data
 	end
 	local ok, res = pcall(function()
-		return vim.system({ "rex", "session", "inspect", session, "--json" }, { text = true }):wait(2000)
+		return vim.system(
+			{ require("ask_agent.rex_cli").path() or "rex", "session", "inspect", session, "--json" },
+			{ text = true }
+		):wait(2000)
 	end)
 	if not ok or not res or res.code ~= 0 then
 		return nil, "rex session inspect failed"

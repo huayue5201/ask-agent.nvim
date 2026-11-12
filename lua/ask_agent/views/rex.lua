@@ -8,6 +8,7 @@
 -- keep the picture correct even when the float and the block differ in size.
 
 local registry = require("ask_agent.views")
+local rex = require("ask_agent.rex_cli")
 
 local function root()
 	local src = debug.getinfo(1, "S").source:sub(2)
@@ -34,7 +35,8 @@ registry.register({
 		return type(target.rex) == "table" and target.rex.block ~= nil
 	end,
 	cmd = function(target, opts)
-		if vim.fn.executable("rex") ~= 1 then
+		local bin = rex.path()
+		if not bin then
 			return nil, "rex is not installed"
 		end
 		local py = vim.g.ask_agent_python or "python3"
@@ -56,13 +58,18 @@ registry.register({
 		if opts and opts.readonly then
 			vim.list_extend(cmd, { "--readonly" })
 		end
-		local spec = { cmd = cmd, note = "rex mirror — keys go to the agent" }
+		-- the helper shells out to rex on its own: hand it the resolved binary
+		local spec = {
+			cmd = cmd,
+			env = { REX_BIN = bin },
+			note = "rex mirror — keys go to the agent",
+		}
 
 		-- Match the float to the block so VT coordinates line up. The session is
 		-- required: without it `block call` only resolves the block when the shell
 		-- that runs Neovim happens to sit in the same rex session (otherwise the
 		-- lookup fails and the float falls back to a guessed size, which wraps).
-		local size_cmd = { "rex", "block", "call", "-b", tostring(block) }
+		local size_cmd = { bin, "block", "call", "-b", tostring(block) }
 		if session then
 			vim.list_extend(size_cmd, { "-s", tostring(session) })
 		end

@@ -279,6 +279,7 @@ vim.system = real_system
 -- rex provider: a writable mirror (keys are forwarded), needs a session, sizes
 -- the float to the block
 local rex = require("ask_agent.views.rex")
+require("ask_agent.rex_cli").reset()
 local rex_provider
 for _, p in ipairs(view.list()) do
 	if p.id == "rex" then
@@ -291,6 +292,8 @@ local rspec = rex_provider.cmd({ rex = { block = "b", session = "s" } }, {})
 assert(rspec and rspec.cmd[#rspec.cmd] == "s", "rex argv carries the session: " .. vim.inspect(rspec and rspec.cmd))
 local rro = rex_provider.cmd({ rex = { block = "b", session = "s" } }, { readonly = true })
 assert(rro and rro.cmd[#rro.cmd] == "--readonly", "readonly reaches the helper")
+-- the helper shells out to rex itself, so the resolved binary travels with it
+assert(rspec.env and rspec.env.REX_BIN, "the helper is told which rex to use")
 
 -- the size lookup must carry the session: without it `block call` cannot resolve
 -- the block from outside the session and the float falls back to a guessed grid
@@ -321,7 +324,9 @@ for _, c in ipairs(rex_cmds) do
 	end
 end
 assert(
-	size_cmd and vim.deep_equal(size_cmd, { "rex", "block", "call", "-b", "b", "-s", "s", "size" }),
+	size_cmd
+		and vim.deep_equal({ unpack(size_cmd, 2) }, { "block", "call", "-b", "b", "-s", "s", "size" })
+		and size_cmd[1]:match("rex$"),
 	"size query carries the session: " .. vim.inspect(size_cmd)
 )
 assert(sized.width == 120 and sized.height == 40, "the float follows the block grid: " .. vim.inspect(sized))
@@ -329,5 +334,42 @@ local rok, rerr = rex_provider.cmd({ rex = { block = "b" } }, {})
 assert(not rok and rerr:match("no session"), "rex needs a session: " .. tostring(rerr))
 
 assert(view.describe():match("rex"), "describe lists providers: " .. view.describe())
+
+-- a provider that cannot run is skipped, not fatal: an agent started in a rex
+-- block but now living under herdr still gets a viewer
+local fake_high = {
+	id = "fake-high",
+	priority = 90,
+	can = function(t)
+		return t.fake == true
+	end,
+	cmd = function()
+		return nil, "fake-high is not installed"
+	end,
+}
+local fake_low = {
+	id = "fake-low",
+	priority = 1,
+	can = function(t)
+		return t.fake == true
+	end,
+	cmd = function()
+		return { cmd = { "true" } }
+	end,
+}
+view.register(fake_high)
+view.register(fake_low)
+local picked, perr = view.find_usable({ fake = true })
+assert(picked and picked.id == "fake-low", "a failing provider falls through: " .. tostring(perr))
+fake_low.cmd = function()
+	return nil, "fake-low is broken too"
+end
+local none, nerr = view.find_usable({ fake = true })
+assert(
+	none == nil and nerr:match("fake%-high is not installed") and nerr:match("fake%-low is broken too"),
+	"reasons add up: " .. tostring(nerr)
+)
+local stranger, serr = view.find_usable({})
+assert(stranger == nil and serr:match("no view provider knows this agent"), "no provider at all: " .. tostring(serr))
 
 print("VIEW OK")
