@@ -108,6 +108,34 @@ local function new_tab(cwd)
 	end
 end
 
+---A window that could show a file rather than the sidebar: a plain editing window
+---(no special buffer, no float).
+---@param win integer
+---@return boolean
+local function plain(win)
+	local buf = vim.api.nvim_win_get_buf(win)
+	return vim.bo[buf].buftype == "" and vim.api.nvim_win_get_config(win).relative == ""
+end
+
+---The window a jump should land in: the current one when it is a plain editing
+---window, another one in this tab when not, and a tab of its own when this tab is
+---all sidebar. Never the dashboard/panel/quickfix/terminal the jump came from —
+---a panel must keep its own content.
+---@return integer win
+local function editing_window()
+	local win = vim.api.nvim_get_current_win()
+	if plain(win) then
+		return win
+	end
+	for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if plain(w) then
+			return w
+		end
+	end
+	vim.cmd("tabnew")
+	return vim.api.nvim_get_current_win()
+end
+
 ---Jump to the buffer/line an anchor points at. Returns false + reason when the
 ---buffer is gone or its number was reused by a different file.
 ---@param a table anchor (needs `buf`, optional `bufname`, `line`, `col`)
@@ -137,22 +165,7 @@ function M.jump_to(a)
 			new_tab(a.cwd)
 			vim.api.nvim_win_set_buf(0, buf)
 		else
-			local win = vim.api.nvim_get_current_win()
-			local cur = vim.api.nvim_win_get_buf(win)
-			if vim.bo[cur].buftype ~= "" or vim.api.nvim_win_get_config(win).relative ~= "" then
-				win = nil
-				for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-					local b = vim.api.nvim_win_get_buf(w)
-					if vim.bo[b].buftype == "" and vim.api.nvim_win_get_config(w).relative == "" then
-						win = w
-						break
-					end
-				end
-				if not win then
-					vim.cmd("tabnew")
-					win = vim.api.nvim_get_current_win()
-				end
-			end
+			local win = editing_window()
 			vim.api.nvim_win_set_buf(win, buf)
 			vim.api.nvim_set_current_win(win)
 		end
@@ -184,9 +197,14 @@ function M.open(a)
 	if vim.fn.filereadable(file) == 0 then
 		return false, (err and (err .. " — ") or "") .. "the file no longer exists: " .. a.path
 	end
+	-- `:edit` acts on the current window: put the cursor in a window that may show
+	-- a file first, or the fallback would replace the sidebar with the code.
+	local win = editing_window()
 	if not inside(file, project_root()) then
 		new_tab(a.cwd)
+		win = vim.api.nvim_get_current_win()
 	end
+	vim.api.nvim_set_current_win(win)
 	vim.cmd.edit(vim.fn.fnameescape(file))
 	local line = math.max(1, a.line or 1)
 	vim.api.nvim_win_set_cursor(0, { math.min(line, vim.api.nvim_buf_line_count(0)), math.max(0, (a.col or 1) - 1) })

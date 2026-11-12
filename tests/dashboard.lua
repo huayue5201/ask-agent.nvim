@@ -436,6 +436,33 @@ assert(vim.api.nvim_win_get_buf(panel_win) == panel_buf, "the panel kept its own
 vim.api.nvim_set_current_win(panel_win)
 vim.cmd("bwipeout! " .. file)
 
+-- the path fallback must not edit the panel window either: a dead buffer opened
+-- from the sidebar lands in a normal window and leaves the panel as it was
+local context = require("ask_agent.context")
+local panel_file = "/tmp/ask-agent-panel-fallback.lua"
+vim.fn.writefile({ "a", "b", "c" }, panel_file)
+local dead = vim.fn.bufadd(vim.fn.fnameescape(panel_file))
+vim.fn.bufload(dead)
+local dead_anchor = {
+	buf = dead,
+	bufname = vim.api.nvim_buf_get_name(dead),
+	path = panel_file,
+	line = 2,
+	col = 1,
+}
+vim.api.nvim_buf_delete(dead, { force = true })
+vim.api.nvim_set_current_win(panel_win)
+local opened, open_err = context.open(dead_anchor)
+assert(opened, "the fallback opens: " .. tostring(open_err))
+assert(vim.api.nvim_win_get_buf(panel_win) == panel_buf, "the panel kept its buffer through the fallback")
+assert(
+	vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p") == vim.fn.resolve(vim.fn.fnamemodify(panel_file, ":p")),
+	"the fallback landed elsewhere: " .. vim.api.nvim_buf_get_name(0)
+)
+assert(vim.api.nvim_win_get_buf(0) ~= panel_buf, "the fallback did not edit the panel")
+vim.api.nvim_set_current_win(panel_win)
+vim.fn.delete(panel_file)
+
 -- view providers: rex, tmux and herdr claim their own targets
 assert(view.find({ rex = { session = "s", block = "b" } }).id == "rex", "rex provider")
 assert(view.find({ pane = "%1" }).id == "tmux", "tmux provider")
