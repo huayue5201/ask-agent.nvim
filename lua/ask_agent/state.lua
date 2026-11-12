@@ -44,6 +44,9 @@ local KIND = { permission = 0, question = 1, auth = 2 }
 local NOTIFY_GAP = 30000
 local PRUNE_MS = 600000
 local TASK_KEEP = 20
+---Finished tasks older than this are dropped from the journal; one per agent stays
+---so a restart can still show what the instance did last.
+M.task_ttl = 24 * 3600 * 1000
 local JOURNAL_KEEP = 50
 local JOURNAL_DEBOUNCE = 1000
 local JOURNAL_TTL = 7 * 24 * 3600 * 1000
@@ -59,7 +62,7 @@ M.journal_path = nil
 
 local journal_timer
 
----What a task looks like: { text, ts, status = "running" | "done" | "error", correlation, anchor }.
+---What a task looks like: { text, ts, status = "running" | "done" | "error", finish, correlation, anchor }.
 ---Every send that reaches an instance appends one (newest first), so the dashboard can
 ---show "what did I hand this agent, and how did it end". The queue lives in queue.lua.
 
@@ -278,6 +281,7 @@ local function apply(rec, st, src)
 		for _, task in ipairs(rec.tasks or {}) do
 			if task.status == "running" then
 				task.status = state == "done" and "done" or "error"
+				task.finish = now_ms()
 			end
 		end
 	end
@@ -325,9 +329,20 @@ local function slim_task(task)
 		text = task.text,
 		ts = task.ts,
 		status = task.status,
+		finish = task.finish,
 		correlation = task.correlation,
 		anchor = task.anchor,
 	}
+end
+
+---A finished task nobody will look at again (the newest one per agent is exempt).
+---@param task table
+---@param cutoff integer
+---@return boolean
+local function stale_task(task, cutoff)
+	local finished = task.status == "done" or task.status == "error"
+	local at = task.finish or task.ts
+	return finished and type(at) == "number" and at < cutoff
 end
 
 local function save_journal()
@@ -340,12 +355,15 @@ local function save_journal()
 		return
 	end
 	local out = { version = 1, agents = {} }
+	local cutoff = M.now() - M.task_ttl
 	for _, key in ipairs(order) do
 		local rec = agents[key]
 		if rec.tasks and #rec.tasks > 0 then
 			local tasks = {}
 			for i = 1, math.min(#rec.tasks, JOURNAL_KEEP) do
-				tasks[i] = slim_task(rec.tasks[i])
+				if i == 1 or not stale_task(rec.tasks[i], cutoff) then
+					tasks[#tasks + 1] = slim_task(rec.tasks[i])
+				end
 			end
 			out.agents[key] = { backend = rec.backend, id = rec.id, unread = rec.unread, tasks = tasks }
 		end
@@ -387,10 +405,11 @@ local function load_journal()
 	-- tasks older than a week are noise: an instance that comes back with the same
 	-- key (a reused pid) must not inherit someone else's history
 	local cutoff = M.now() - JOURNAL_TTL
+	local task_cutoff = M.now() - M.task_ttl
 	for _, entry in pairs(data.agents) do
 		local tasks = {}
-		for _, task in ipairs(entry.tasks or {}) do
-			if type(task.ts) == "number" and task.ts > cutoff then
+		for i, task in ipairs(entry.tasks or {}) do
+			if type(task.ts) == "number" and task.ts > cutoff and (i == 1 or not stale_task(task, task_cutoff)) then
 				tasks[#tasks + 1] = task
 			end
 		end

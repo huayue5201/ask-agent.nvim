@@ -14,7 +14,9 @@ CONTENTS                                              *ask-agent-contents*
   9. RPC bridge ................................. |ask-agent-bridge|
   10. Agent status .............................. |ask-agent-status|
   11. Batch questions ........................... |ask-agent-batch|
-  12. API ....................................... |ask-agent-api|
+  12. Change review ............................. |ask-agent-review|
+  13. History and prompts ....................... |ask-agent-history|
+  14. API ....................................... |ask-agent-api|
 
 ==============================================================================
 1. DESIGN                                                   *ask-agent-design*
@@ -42,7 +44,29 @@ require("ask_agent").setup({
   tree_lines = true,             -- │ ├ └ between agents and tasks (default true)
   running_line = "dash",         -- green path to the running task:
                                  -- "dash" | "pulse" | "static" | "off"
+  task_limit = 5,                -- rows per agent before "… N older tasks"
+                                 -- (false shows every stored task)
+  task_ttl = 24 * 3600 * 1000,   -- prune finished tasks older than this (ms);
+                                 -- the newest task per agent always stays
   persist = true,                -- keep tasks/unread marks in the journal (default true)
+  snapshots = {                  -- turn trees for change review; false disables
+    enabled = true,
+    keep = 50,                   -- newest turns retained
+    ttl = 7 * 24 * 3600 * 1000,  -- max age in ms
+    trigger_state = true,        -- also bracket working -> done turns
+  },
+  review = {                     -- how |:AskAgentDiff| renders
+    backend = "auto",            -- auto | diffbandit | difftool | codediff | builtin
+    include_unsaved = true,      -- fold modified buffers into the end side
+  },
+  history = {                    -- delivered questions; false disables
+    enabled = true,
+    keep = 200,                  -- newest records retained
+    max_text = 20000,            -- cap per record (long pastes are truncated)
+  },
+  prompts = {                    -- global prompt file; project file is
+    global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json",
+  },                             -- <root>/.ask-agent/prompts.json
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time
   icons = {                      -- every glyph: flat key = an agent icon,
@@ -148,6 +172,38 @@ Only the keys you pass change; everything else keeps its default. A top-level
 
                                                   *:AskAgentBatchClear*
 :AskAgentBatchClear     Drop every queued question and its marker (undoable).
+
+                                                  *:AskAgentDiff*
+:AskAgentDiff [id|head] Review what changed in the newest turn, in turn `id`, or
+                        with `head` the whole worktree since HEAD. The interval is
+                        two git trees captured at the turn boundaries; see
+                        |ask-agent-review|.
+
+                                                  *:AskAgentSnapshot*
+:AskAgentSnapshot [id]  Start a manual review interval (no argument); close it
+                        with `last` or the id printed on start.
+
+                                                  *:AskAgentHistory*
+:AskAgentHistory [query]
+                        Search the questions sent before (text, anchor path or
+                        label); with no argument lists everything, newest
+                        first. Choosing one offers: put in the ask window (the
+                        text is prefilled and a fresh anchor is taken), copy
+                        text, jump to code, delete.
+
+                                                  *:AskAgentPrompt*
+:AskAgentPrompt[!] [name]
+                        Ask with a prompt template, rendered against the anchor
+                        captured now. Without [name], a picker offers use, copy,
+                        edit and delete; see |ask-agent-history|. `!` includes
+                        the selection in the anchor.
+
+                                                  *:AskAgentPromptSave*
+:AskAgentPromptSave[!] <name>
+                        Save the visual selection (or the current line) as a
+                        prompt after editing it in an input. `!` writes into
+                        `<root>/.ask-agent/prompts.json` so the repository can
+                        carry it; otherwise the global file is used.
 
 ==============================================================================
 4. KEYMAPS                                                 *ask-agent-keymaps*
@@ -450,7 +506,8 @@ with `status` = `running` / `done` / `error`.
 level: agent instances, most urgent first. Children: that agent's tasks — questions still queued for it (`◐`) and
 turns already sent (spinner running, `✓` done, `✗` failed). Agent glyphs: `●`
 idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `○` exited.
-Tasks are connected to their agent with `│ ├ └` lines (`tree_lines`, default true).
+Tasks are connected to their agent with `│ ├ └` lines (`tree_lines`, default
+true); the rail below the fold marker keeps that connection continuous.
 The path from an agent to the task it is running right now is green: `running_line`
 defaults to `"dash"`, a dashed line whose bright cells march down one step per
 spinner frame; `"pulse"` sends a single bright cell with a trailing mid shade,
@@ -463,8 +520,22 @@ without 'termguicolors' the path is one flat green. The connectors use the
 `<CR>` on an agent brings its window to the front; on a task it jumps to the code
 anchor the task was written at. `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
-queued task or dismisses a dead agent, `<Tab>` folds its tasks, `?` opens the key
-help float, `r` polls now, `q` closes. The view is event-driven (state + queue notifications) and keeps the
+queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
+the whole worktree for an agent), `y` copies the task text, `f` toggles "only
+agents that need you", `<Tab>` folds its tasks, `?` opens the key help float, `r`
+polls now, `q` closes.
+
+The winbar counts what wants you (`⚠2 ✓1 ◐3`) and lists the sort order in the
+`?` help: blocked/error, done, working, idle. A freshly opened sidebar grows once
+(up to 48 columns) when a row would be truncated; below 44 columns the backend
+column is dropped before the message is cut. Finished tasks show how long the turn
+took; running ones show how long it has been going. A long list keeps the newest
+`task_limit` rows and folds the rest into `… N older tasks  ⏎ show` (`<CR>` or
+`<Tab>` on that row expands it; folding the agent resets the slice). Finished
+tasks older than `task_ttl` are pruned from the journal on save/load, except the
+newest task of each agent. A turn dispatched by another tool (todo2, a plugin)
+shows that tool's key dim in brackets on the row — `[t42]` — so several sources
+can share one agent and still be told apart. The view is event-driven (state + queue notifications) and keeps the
 cursor where it was; the spinner is the only timer and only runs while a turn is
 in progress.
 
@@ -514,7 +585,86 @@ only).
 
 
 ==============================================================================
-13. API                                                    *ask-agent-api*
+12. CHANGE REVIEW                                         *ask-agent-review*
+
+|:AskAgentDiff| answers "what did the agent change?" with evidence instead of a
+heuristic. At a turn boundary the plugin records the worktree as a git tree: it
+copies `.git/index` to a temp file, runs `git add -A` against that copy and
+`git write-tree`. The real index and refs are never touched, nothing is staged
+or committed. When the turn ends the second tree is recorded, and the review is
+`git diff <start> <finish>` — an immutable interval anyone can re-run.
+
+What can be bracketed:
+
+  whole worktree vs HEAD   |:AskAgentDiff| `head`, no turn needed
+  one sent question        tree before the send, tree when the turn ends
+  typed-in turns           the state layer's working -> done (trigger_state)
+  one tool call            needs agent cooperation; out of scope
+
+Limits worth knowing: edits you make yourself inside the window are
+indistinguishable from the agent's; `blocked` does not close a turn; a second
+question sent while a turn is open widens the same window instead of starting a
+new one.
+
+Viewers are adapters, picked in order: `diffbandit` (installed), `nvim.difftool`
+(Neovim 0.12+, zero install), `codediff` (installed; trees wrapped in ref-less
+commits), `builtin` (always: one `filetype=diff` buffer plus a quickfix list of
+changed files). Pin one with `review.backend`. With `include_unsaved` (default)
+modified buffers are written into a throwaway copy of the end tree, so the
+review shows what is in the editor; the builtin backend diffs trees and
+therefore shows written bytes only.
+
+Snapshots live in `stdpath("cache")/ask-agent/snapshots.json` (newest 50, 7 days
+by default). Use |:AskAgentSnapshot| to bracket work that never passed through
+the plugin, `:AskAgentDiff <id>` to review a stored turn, and `ask.turns()` to
+list them.
+
+13. HISTORY AND PROMPTS                                  *ask-agent-history*
+
+Both features assemble the same payload the agent always receives — text plus
+anchor — so neither one reads the agent back or parses its transcript.
+
+History is written on the send path, after the backend accepted the text, so a
+failed send is never recorded as delivered. Each record keeps the text, the
+anchor (`path:line`, selection, cwd), the backend, the instance label and the
+caller's `correlation` (shown as `todo2 t42` when the question came from a task). The
+records survive restarts; jumping to the code falls back to opening the file by
+path when the original buffer is gone.
+
+  >lua
+  ask.history({ query = "rename", limit = 10 })  -- newest first
+  <
+Filter by `cwd`, `backend` or free `query` (text, path, label).
+
+Prompts are JSON files, `{ version = 1, prompts = [{ name, text, desc }] }`. A
+project prompt overrides a global one with the same name:
+
+  global    `stdpath("cache")/ask-agent/prompts.json`
+  project   `<root>/.ask-agent/prompts.json`  (root = git root, else nearest
+            ancestor containing `.ask-agent`)
+
+Placeholders are replaced against the anchor of that ask; unknown ones are left
+verbatim so a typo stays visible:
+
+  {{file}}         anchor path, e.g. `src/a.lua`
+  {{line}}         anchor line;  {{col}} column
+  {{filetype}}     buffer filetype
+  {{cwd}}          anchor cwd
+  {{selection}}    visual lines joined with newlines (empty without selection)
+  {{diagnostics}}  number of diagnostics on the anchor buffer
+  {{modified}}     `unsaved` when the buffer had unsaved changes
+
+  >lua
+  ask.prompt("review")                        -- render + open the ask window
+  ask.prompt_save("review", text, { project = true })
+  ask.prompt_remove("review")
+  ask.prompts(cwd)                            -- visible templates
+  <
+A history record can be re-asked through `ask.ask({ default = rec.text })`; it is
+the same code path as the ask window, with a fresh anchor.
+
+==============================================================================
+14. API                                                    *ask-agent-api*
 
 >lua
 local ask = require("ask_agent")
@@ -529,6 +679,13 @@ ask.on(event, fn)                       -- state | update | done | blocked | err
 ask.wait(key, want, ms, cb)             -- one-shot wait; cb(nil) on timeout
 ask.statusline() / ask.dashboard(opts)  -- sidebar; { pos = "right", width = 40 }
 ask.goto_anchor(a)                      -- jump to a captured anchor
+ask.diff({ id = "..." })                -- review a turn / { head = true }
+ask.snapshot(id)                        -- start (nil) / close ("last") an interval
+ask.turns(cwd)                          -- recorded turns, newest first
+ask.history({ query = "..." })          -- delivered questions, newest first
+ask.prompts(cwd)                        -- prompt templates (global + project)
+ask.prompt(name, opts)                  -- ask with a template
+ask.prompt_save(name, text, opts) / ask.prompt_remove(name, opts)
 ask.use("pi") / ask.current()
 ask.list() / ask.targets("pi")
 ask.pin(id) / ask.pinned()

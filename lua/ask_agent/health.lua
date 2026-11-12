@@ -121,6 +121,47 @@ function M.check()
 		info("journal: disabled (persist = false)")
 	end
 
+	-- change review: snapshots need git, inspection needs a viewer
+	local git = require("ask_agent.git")
+	if git.available() then
+		local root = git.root(vim.fn.getcwd())
+		if root then
+			ok("change review: git repository at " .. root)
+		else
+			info("change review: cwd is not inside a git repository")
+		end
+	else
+		warn("change review: git is not on PATH — :AskAgentDiff is unavailable")
+	end
+	local snap = require("ask_agent.snapshot")
+	if snap.enabled then
+		info(("turn snapshots: %d kept in %s"):format(#snap.list(), snap.path or "?"))
+	else
+		info("turn snapshots: disabled (snapshots = false)")
+	end
+	local review = require("ask_agent.review")
+	info("review viewers: " .. table.concat(review.viewers(), " → "))
+
+	-- question history and the prompt library are plain local files
+	local hist = require("ask_agent.history")
+	if hist.enabled then
+		info(
+			("question history: %d kept in %s"):format(
+				#hist.list(),
+				hist.path or (vim.fn.stdpath("cache") .. "/ask-agent/history.json")
+			)
+		)
+	else
+		info("question history: disabled (history = false)")
+	end
+	local prompts = require("ask_agent.prompts")
+	info(
+		("prompts: %d visible (global %s)"):format(
+			#prompts.all(),
+			prompts.global_path or (vim.fn.stdpath("cache") .. "/ask-agent/prompts.json")
+		)
+	)
+
 	local bridge = require("ask_agent.bridge")
 	if type(bridge.dir) == "function" then
 		local dir = bridge.dir()

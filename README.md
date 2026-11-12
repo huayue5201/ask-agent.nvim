@@ -52,6 +52,19 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   event, so a task list can own the work and the agent only owns the conversation.
 - **Optional RPC bridge** — lets the agent pull *live* Neovim context back (unsaved
   buffers, diagnostics, quickfix, project overview) instead of reading stale files.
+- **Change review** — `:AskAgentDiff` shows what an agent actually changed. The plugin
+  captures a git tree at the turn boundaries (before the send, when the turn ends) and
+  diffs the two: an immutable interval you can re-run with plain `git diff <a> <b>`, not
+  a heuristic. Rendered by whichever viewer you already have (diffbandit, Neovim 0.12's
+  builtin `nvim.difftool`, codediff), with a dependency-free diff buffer as the fallback.
+- **Question history** — every question the plugin delivers is recorded with its
+  anchor, target and text, across sessions. `:AskAgentHistory` searches it (full text,
+  path, label), then re-asks, copies, or jumps back to the exact line — even after a
+  restart. Answers stay in the agent; this is a ledger of questions, not a transcript.
+- **Prompt library** — reusable templates with placeholders (`{{file}}`, `{{line}}`,
+  `{{selection}}`, `{{cwd}}`, `{{diagnostics}}`…) that are filled from the anchor at
+  ask time. Keep them globally, or commit them as `.ask-agent/prompts.json` so a
+  team shares the same review prompts.
 - **Extensible backends** — a backend is four fields; a tmux-based agent (Claude Code, codex,
   opencode, aider…) is a five-line `generic.tmux(...)` call, busy state included.
 
@@ -69,6 +82,8 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   `layouts/generic.lua` has a tmux factory; anything else can be plugged in (see
   [Layout adapters](#layout-adapters)).
 - At least one agent backend (see [Backends](#backends)).
+- Optional: `git` for change review ([Change review](#change-review)). Without a
+  repository the feature is unavailable, and every other feature keeps working.
 
 ## Install
 
@@ -116,6 +131,11 @@ vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 | `:AskAgentBatchDelete` | Delete the queued question on the cursor line (undoable) |
 | `:AskAgentBatchUndo` | Undo the last delete / clear, restoring markers |
 | `:AskAgentBatchClear` | Drop every queued question (undoable) |
+| `:AskAgentDiff [id\|head]` | Review what changed: newest turn, a turn id, or `head` = whole worktree since HEAD |
+| `:AskAgentSnapshot [id]` | Start (no arg) or close (`last`, a turn id) a manual review interval |
+| `:AskAgentHistory [query]` | Search questions sent before (re-ask / copy / jump / delete) |
+| `:AskAgentPrompt[!] [name]` | Use a prompt template, rendered against the current anchor (`!` = include the selection) |
+| `:AskAgentPromptSave[!] <name>` | Save the selection/current line as a prompt (`!` = project file) |
 
 No keymaps are installed: the plugin only defines commands. Map them yourself, e.g.
 
@@ -196,6 +216,33 @@ require("ask_agent").setup({
   -- trailing mid shade), "static" (dim→bright), or "off". Without
   -- truecolor it degrades to a single flat green.
   running_line = "dash",
+
+  -- task rows shown per agent before the "… N older tasks" row (default 5;
+  -- false shows every stored task)
+  task_limit = 5,
+
+  -- drop finished tasks older than this from the journal, in ms (default 24h);
+  -- the newest task of every agent always stays
+  task_ttl = 24 * 3600 * 1000,
+
+  -- turn snapshots for change review; `false` disables the feature entirely.
+  -- Every sent question (and, with trigger_state, every working→done turn) records
+  -- two git trees under the cache dir. keep = newest turns retained,
+  -- ttl = max age in ms. Trees are immutable, so review always works offline.
+  snapshots = { enabled = true, keep = 50, ttl = 7 * 24 * 3600 * 1000, trigger_state = true },
+
+  -- how :AskAgentDiff renders: "auto" picks the best installed viewer
+  -- (diffbandit → nvim.difftool → codediff → builtin). include_unsaved folds
+  -- modified buffers into the end side, so an in-flight edit is reviewable too.
+  review = { backend = "auto", include_unsaved = true },
+
+  -- delivered questions, newest 200, with their anchors; `false` records nothing.
+  -- path moves the journal; max_text caps one record (a huge paste is truncated).
+  history = { enabled = true, keep = 200, max_text = 20000 },
+
+  -- prompt templates: global_path is the user file, project_file is looked up under
+  -- the git root (or the nearest ancestor with .ask-agent) and may be committed.
+  prompts = { global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json" },
 
   -- keep tasks and unread marks across restarts (default true);
   -- persist = { path = ".../journal.json", enabled = false } moves or disables it
@@ -568,6 +615,13 @@ ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(
 ask.statusline()              -- "⚠1 ✓2 ◐3", empty when nothing needs attention
 ask.dashboard(opts)           -- open the sidebar ({ pos = "right", width = 40 }; pos = "left" moves it)
 ask.goto_anchor(a)            -- jump to a captured anchor (false + reason if gone)
+ask.diff(opts)                -- review changes ({ id = turn, head = true, backend, cwd })
+ask.snapshot(id)              -- start (nil) or close ("last", an id) a manual interval
+ask.turns(cwd)                -- recorded turns, newest first ({ id, start, finish, ... })
+ask.history(opts)             -- delivered questions, newest first ({ query, cwd, backend, limit })
+ask.prompts(cwd)              -- prompt templates visible from a directory
+ask.prompt(name, opts)        -- ask with a template rendered against the anchor
+ask.prompt_save(name, text, opts) / ask.prompt_remove(name, opts)
 ask.use(id) / ask.current()   -- default backend
 ask.list() / ask.targets(id)  -- backends / instances
 ask.pin(id) / ask.pinned()    -- pin a target
@@ -657,21 +711,35 @@ agent's tasks — the questions still queued for it and the turns already sent t
 
 ```
 ▾ ⚠ reviewer (2)  claude  needs permission: run the test suite?  2m
-├─ ◐ add the retry path  queued  3m
-└─ ⠹ run the test suite  running  41s
-▾ ✓ worker-1 (1)  pi      done: 12 files changed  5m
-└─ ✓ update the docs  done  8m
+│ ├─ ◐ add the retry path  queued  3m
+│ └─ ⠹ run the test suite  running  41s
+▾ ✓ worker-1 (1)  pi      done: 12 files changed  1m
+│ └─ ✓ update the docs  done  38s
 ▾ ◐ worker-2  pi      busy  12s
-└─ ⠹ port the parser  running  12s
+  └─ ⠹ port the parser  running  12s
 ```
 
-Tasks hang off their agent with `│ ├ └` connectors (`tree_lines`). The path from
+Tasks hang off their agent with `│ ├ └` connectors (`tree_lines`); the rail under
+the fold marker keeps the agent → tasks connection continuous. The path from
 an agent down to the task it is running right now is green and animated as a
 marching dashed line: one bright cell every three, shifted down one step per
 spinner frame (`running_line = "dash"`). `"pulse"` sends a single bright cell with
 a trailing mid shade instead, `"static"` keeps a dim→bright gradient, and `"off"`
 draws plain tree lines. Sidebars narrower than 20 columns drop the connectors and
 keep the old indentation.
+
+The winbar counts what wants you (`⚠2 ✓1 ◐3`) and the sidebar grows once on open
+(up to 48 columns) when a row would be truncated; narrow sidebars drop the backend
+column before they cut the message. Finished tasks show how long the turn took
+(`38s`), running ones how long it has been going; the sort order is blocked/error,
+done, working, idle (also in the `?` help). A long task list shows the newest
+`task_limit` (5) rows and collapses the rest into `… N older tasks  ⏎ show`
+(`<CR>` on that row expands it; folding the agent with `<Tab>` resets the slice).
+Finished tasks older than `task_ttl` (24h) leave the journal on the next save, and
+loading a journal drops them too — the newest task per agent is always kept.
+A turn that another tool dispatched (todo2, a plugin) carries its key on the row,
+dim in brackets: `[t42]`, so several sources can share one agent and still be told
+apart; `:AskAgentHistory` shows the same as `todo2 t42` in the record line.
 
 Agent glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌`
 unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `✗` failed.
@@ -682,6 +750,9 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `n` | rename (empty restores the directory name) | |
+| `v` | review the whole worktree vs HEAD | review the turn behind that task |
+| `y` | copy the name | copy the task text |
+| `f` | only agents that need you (blocked / error / unread done) — toggle | |
 | `<Tab>` | fold the agent's tasks | |
 | `?` | key help (a float; `q` closes it) | |
 | `r` / `q` | poll now / close | |
@@ -742,6 +813,88 @@ their extmarks, and `:AskAgentBatchList` sends/routes/jumps/edits/deletes them.
 `:AskAgentBatchDelete` removes the entry on the cursor line; every delete and
 `:AskAgentBatchClear` can be undone with `:AskAgentBatchUndo` (in-memory, last 20
 operations).
+
+## Change review
+
+`:AskAgentDiff` answers "what did the agent change?" with evidence instead of a
+heuristic. At a turn boundary the plugin writes the worktree as a git tree — a temp
+copy of `.git/index`, `git add -A`, `git write-tree`, so your real index and refs are
+never touched, and nothing is staged or committed. When the turn ends it captures the
+second tree. The review is then literally `git diff <start> <finish>`: an immutable
+interval anyone can re-run, no transcript parsing, no agent cooperation.
+
+What the plugin can honestly bracket:
+
+| What | When | Limits |
+| --- | --- | --- |
+| Whole worktree vs `HEAD` | `:AskAgentDiff head`, no turn needed | uncommitted changes from before are included |
+| One sent question | tree before the send, tree when the turn ends | your own edits inside the window are indistinguishable |
+| Any turn, typed straight into the agent | state layer's `working → done` (`trigger_state`) | needs an agent whose state the backend can see |
+| One tool call | — | needs the agent to report it; out of scope |
+
+`blocked` does not close a turn (the agent is waiting, not finished), and a second
+question sent to the same agent while a turn is open widens the same window instead of
+starting a new one.
+
+**Viewers** are adapters; the plugin never implements a diff engine:
+
+| Backend | Used when | Notes |
+| --- | --- | --- |
+| `diffbandit` | installed | folder diff with its full rendering; unsaved buffers included |
+| `nvim.difftool` | Neovim 0.12+ | zero install (`:packadd nvim.difftool`), rename detection |
+| `codediff` | installed | trees are wrapped in ref-less commits, since it expects revisions |
+| `builtin` | always | one `filetype=diff` buffer + quickfix of changed files; no dependencies |
+
+Set `review.backend` to pin one, or pass `{ backend = ... }` per call. With
+`include_unsaved = true` (default) modified buffers are written into a throwaway copy of
+the end tree, so a review shows what is actually in the editor — never what was last
+saved. The builtin backend renders committed-to-disk bytes only, since it diffs trees.
+
+Snapshots live in `stdpath("cache")/ask-agent/snapshots.json` (newest 50, 7 days by
+default). `:AskAgentSnapshot` brackets an interval by hand (start, then
+`:AskAgentSnapshot last` to close) for work that never passed through the plugin;
+`:AskAgentDiff <id>` reviews any stored turn, and `:AskAgentDiff` with no argument
+reviews the newest one. `ask.turns()` lists what is available.
+
+## Question history and prompts
+
+Both features share one rule: the question the agent sees is `text + anchor`, so both
+work by assembling that payload before the send — never by reading the agent back.
+
+**History** (`:AskAgentHistory [query]`) is written on the send path, after the backend
+accepted the text, so it never claims a delivery that failed. Each record keeps the
+text, the anchor (`path:line`, selection, cwd), the backend and the instance label.
+Actions on a record: re-ask (prefills the ask window with the same text and takes a
+fresh anchor), copy, jump to the code, delete. Records survive restarts; `jump` falls
+back to opening the file by path when the original buffer is gone.
+
+```lua
+ask.history({ query = "rename", limit = 10 })  -- newest first, filter by cwd/backend too
+```
+
+**Prompts** are JSON files with `{ version = 1, prompts = [{ name, text, desc }] }`:
+
+- global: `stdpath("cache")/ask-agent/prompts.json`
+- project: `<root>/.ask-agent/prompts.json` — a project prompt overrides a global one
+  with the same name, and `:AskAgentPromptSave!` writes there so it can be committed.
+
+Placeholders are replaced against the anchor captured for that ask (unknown ones are
+left verbatim so typos show up):
+
+| Placeholder | Value |
+| --- | --- |
+| `{{file}}` | anchor path (`src/a.lua`) |
+| `{{line}}`, `{{col}}` | anchor position |
+| `{{filetype}}` | buffer filetype |
+| `{{cwd}}` | anchor cwd |
+| `{{selection}}` | visual lines, joined with newlines (empty without a selection) |
+| `{{diagnostics}}` | diagnostics attached to the anchor buffer |
+| `{{modified}}` | `unsaved` when the buffer had unsaved changes |
+
+`:AskAgentPromptSave <name>` opens an input prefilled with the selection (or the
+current line); `:AskAgentPrompt <name>` renders it immediately, and with no name opens
+a picker offering use / copy / edit / delete. In Lua: `ask.prompt(name)`,
+`ask.prompt_save(name, text, { project = true })`, `ask.prompt_remove(name)`.
 
 ## Health
 

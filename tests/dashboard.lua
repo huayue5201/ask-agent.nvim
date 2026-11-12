@@ -40,7 +40,10 @@ backends.register(mod)
 -- one question still queued and routed to alpha, one already sent
 queue.add({ buf = vim.api.nvim_get_current_buf(), line = 1, col = 1, path = "x.lua" }, "queued question")
 queue.route(1, { backend = "fake", id = "a", name = "alpha" })
-state.dispatch("fake", "a", "sent question", { anchor = { buf = vim.api.nvim_get_current_buf(), line = 2 } })
+state.dispatch("fake", "a", "sent question", {
+	anchor = { buf = vim.api.nvim_get_current_buf(), line = 2 },
+	correlation = { plugin = "test", key = 7 },
+})
 state.refresh()
 
 local sent = {}
@@ -66,11 +69,14 @@ assert(#lines == 4, "two agents + two tasks, got " .. #lines .. ": " .. vim.insp
 assert(lines[1]:match("alpha"), "agent name on the top-level row: " .. lines[1])
 assert(lines[4]:match("^· "), "no tasks, no fold marker: " .. lines[4])
 assert(lines[4]:match("quiet%-instance"), "the name column fits the longest name: " .. lines[4])
+assert(vim.wo[vim.api.nvim_get_current_win()].winbar:match("ask%-agent · 2"), "winbar counts the agents")
 assert(lines[1]:match("working"), "agent state on the row: " .. lines[1])
 assert(lines[2]:match("sent question") and lines[2]:match("running"), "running task first: " .. lines[2])
 assert(lines[3]:match("queued question") and lines[3]:match("queued"), "queued task: " .. lines[3])
 -- tree lines: first child branches, the last one corners
-local branch, corner = "\u{251c}\u{2500} ", "\u{2514}\u{2500} "
+-- a rail under the fold glyph keeps the agent -> tasks connection continuous
+local rail = "\u{2502} "
+local branch, corner = rail .. "\u{251c}\u{2500} ", rail .. "\u{2514}\u{2500} "
 assert(lines[2]:sub(1, #branch) == branch, "first task branches off the agent: " .. lines[2])
 assert(lines[3]:sub(1, #corner) == corner, "last task corners: " .. lines[3])
 -- the path from the working agent to its running task is green
@@ -109,6 +115,81 @@ vim.ui.input = real_input
 assert(state.name(state.get("fake:a")) == "api-worker", "the sidebar renamed the agent")
 assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("api%-worker"), "the row redrew")
 vim.fn.delete("/tmp/ask-agent-dashboard-aliases.json")
+
+-- v reviews the turn behind the task, y copies it, f keeps only what needs you
+local ask = require("ask_agent")
+local real_diff = ask.diff
+local reviewed
+ask.diff = function(o)
+	reviewed = o
+	return true
+end
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.api.nvim_feedkeys("v", "x", false)
+vim.wait(20)
+assert(reviewed and reviewed.correlation and reviewed.correlation.key == 7, "v opens the task's turn")
+ask.diff = real_diff
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+vim.api.nvim_feedkeys("y", "x", false)
+vim.wait(20)
+assert(vim.fn.getreg('"') == "queued question", "y copies the task text: " .. vim.fn.getreg('"'))
+vim.api.nvim_feedkeys("f", "x", false)
+vim.wait(20)
+assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("nothing needs you"), "f hides busy agents")
+vim.api.nvim_feedkeys("f", "x", false)
+vim.wait(20)
+assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("api%-worker"), "f is a toggle")
+
+-- a turn dispatched by another plugin shows where it came from
+state.dispatch("fake", "b", "from the todo list", { correlation = { plugin = "todo2", key = "t42" } })
+dashboard.open(nil)
+vim.wait(20)
+local tagged
+for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	if l:find("t42", 1, true) then
+		tagged = l
+	end
+end
+assert(tagged and tagged:find("[t42]", 1, true), "task row carries the todo2 id: " .. tostring(tagged))
+
+-- long task lists collapse to a slice: five rows plus "… N older tasks" (8 here)
+for i = 1, 7 do
+	state.dispatch("fake", "b", "old job " .. i, {})
+end
+dashboard.open(nil)
+vim.wait(20)
+local more_row
+for i, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	if l:match("older task") then
+		more_row = i
+		assert(l:match("… 3 older tasks"), "slices the list to task_limit: " .. l)
+	end
+end
+assert(more_row, "long task lists get an older-tasks row")
+vim.api.nvim_win_set_cursor(0, { more_row, 0 })
+vim.api.nvim_feedkeys("\r", "x", false)
+vim.wait(20)
+for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	assert(not l:match("older task"), "expanding shows every task")
+end
+
+-- finished turns report how long they took, not how long ago they were sent
+local rec = state.get("fake:a")
+local task = rec.tasks[1]
+task.status, task.finish = "done", task.ts + 65000
+dashboard.open(nil)
+vim.wait(20)
+local done_line
+for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	if l:match("sent question") then
+		done_line = l
+	end
+end
+assert(
+	done_line and done_line:match("done") and done_line:match("1m"),
+	"duration instead of age: " .. tostring(done_line)
+)
+task.status, task.finish = "running", nil -- restore, the rest of the test assumes ordering
 
 -- a narrow window truncates instead of overflowing
 vim.api.nvim_win_set_width(0, 24)
@@ -283,7 +364,8 @@ end, vim.api.nvim_tabpage_list_wins(0))
 assert(#floats == 1, "help float is open")
 local help_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(floats[1]), 0, -1, false)
 assert(help_lines[1]:match("Show these keys"), "help lists the keys: " .. help_lines[1])
-assert(#help_lines == 10, "every key has a row")
+assert(help_lines[#help_lines]:match("^Order: blocked/error"), "help explains the sort order")
+assert(#help_lines >= 14, "every key has a row")
 vim.api.nvim_feedkeys("q", "x", false)
 vim.wait(30)
 assert(#vim.tbl_filter(function(w)

@@ -137,6 +137,26 @@ state.refresh()
 vim.wait(20)
 local back = state.get("fake:a")
 assert(back and back.tasks and back.tasks[1].text == "do it again", "journal restores the task")
+
+-- a finished task older than task_ttl is pruned on save; the newest one is kept
+state.persist = true
+local rec = state.get("fake:a")
+local old = state.now() - state.task_ttl - 60000
+state.dispatch("fake", "a", "ancient", {})
+state.dispatch("fake", "a", "recent", {})
+for _, task in ipairs(rec.tasks) do
+	if task.text == "ancient" then
+		task.status, task.ts, task.finish = "done", old, old
+	end
+end
+state.flush()
+local saved = vim.json.decode(table.concat(vim.fn.readfile(state.journal_path), "\n"))
+local texts = {}
+for _, task in ipairs(saved.agents["fake:a"].tasks) do
+	texts[task.text] = true
+end
+assert(texts.recent, "the newest task survives")
+assert(not texts.ancient, "a stale finished task is pruned")
 state.persist = false
 
 -- notifications: blocked always reports, done/error throttle, exits report while working

@@ -39,7 +39,7 @@ local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 -- agent down to the task that is running right now. Narrow sidebars fall back to
 -- plain indentation so the text keeps its room.
 local TREE_MIN_WIDTH = 20
-local cfg = { tree_lines = true, running_line = "dash" }
+local cfg = { tree_lines = true, running_line = "dash", task_limit = 5 }
 local RUN_HL = { "AskAgentRunDim", "AskAgentRunMid", "AskAgentRunBright" }
 local RUN_FG = { "#2b6b3e", "#3fb950", "#7ee787" }
 local run_hl_tc -- termguicolors value the groups were built for
@@ -51,12 +51,28 @@ local ensure_run_hl
 local buf, win, api, opts
 local rows = {} -- line number -> node
 local collapsed = {} -- agent key -> true
+local only_needs = false -- `f`: show only blocked / error / unread-done agents
+local expanded_tasks = {} -- agent key -> show every task, past cfg.task_limit
+local truncated = false -- set by fit(); a fresh open grows the sidebar once
 local frame = 0
 local timer
 
 ---@param ms integer
 ---@return string
 local function age(ms)
+	local s = math.max(0, math.floor(ms / 1000))
+	if s < 60 then
+		return s .. "s"
+	elseif s < 3600 then
+		return math.floor(s / 60) .. "m"
+	end
+	return math.floor(s / 3600) .. "h"
+end
+
+---How long one turn took, for rows that are already finished.
+---@param ms integer
+---@return string
+local function duration(ms)
 	local s = math.max(0, math.floor(ms / 1000))
 	if s < 60 then
 		return s .. "s"
@@ -73,6 +89,7 @@ local function fit(text, width)
 	if width <= 0 or vim.fn.strdisplaywidth(text) <= width then
 		return text
 	end
+	truncated = true
 	local out, w = {}, 0
 	for _, ch in ipairs(vim.fn.split(text, "\\zs")) do
 		local cw = vim.fn.strdisplaywidth(ch)
@@ -83,6 +100,13 @@ local function fit(text, width)
 		out[#out + 1] = ch
 	end
 	return table.concat(out) .. "…"
+end
+
+---Does this agent want a human? (`f` keeps only these rows.)
+---@param rec table
+---@return boolean
+local function needs_you(rec)
+	return rec.state == "blocked" or rec.state == "error" or (rec.state == "done" and rec.unread)
 end
 
 ---@return integer
@@ -172,7 +196,8 @@ local function agent_line(rec, name_w, show_backend, now, n)
 	if n > 0 then
 		name = name .. (" (%d)"):format(n)
 	end
-	local left = ("%s %s %s"):format(fold, glyph, pad(fit(name, name_w), name_w))
+	local drawn = fit(name, name_w)
+	local left = ("%s %s %s"):format(fold, glyph, pad(drawn, name_w))
 	local msg = rec.msg or (rec.gone and "exited" or rec.state)
 	if rec.kind then
 		msg = msg .. " · " .. rec.kind
@@ -180,6 +205,7 @@ local function agent_line(rec, name_w, show_backend, now, n)
 		-- nobody reported the state: the turn simply stopped looking busy
 		msg = msg .. " · inferred"
 	end
+	local msg_start = #left + 2
 	left = left .. "  " .. msg
 	local right = age(now - (rec.since or now))
 	if show_backend then
@@ -187,10 +213,13 @@ local function agent_line(rec, name_w, show_backend, now, n)
 	end
 	local marks = {
 		{ glyph_start, glyph_start + #glyph, HL[rec.state] or "Comment" },
+		{ msg_start, msg_start + #msg, "Comment" },
 	}
 	local accent = rec.target and icons.accent_hl(icons.key(rec.target))
 	if accent then
-		marks[#marks + 1] = { name_start, name_start + #name, accent }
+		marks[#marks + 1] = { name_start, name_start + #drawn, accent }
+	else
+		marks[#marks + 1] = { name_start, name_start + #drawn, "Bold" }
 	end
 	return columns(left, right, inner_width()), marks, #fold
 end
@@ -202,7 +231,9 @@ local function tree_glyph(key, fallback)
 	return icons.ui("tree", key) or fallback
 end
 
----Prefix of a task row: branch + horizontal (or plain spaces when lines are off).
+---Prefix of a task row: a rail under the agent's fold glyph, then the branch and
+---horizontal. The rail is what makes the agent -> tasks connection continuous
+---instead of two separate segments; the running path is painted over it as well.
 ---@param i integer 1-based sibling index
 ---@param n integer number of siblings
 ---@param use_lines boolean
@@ -211,9 +242,10 @@ local function task_prefix(i, n, use_lines)
 	if not use_lines then
 		return "  ", 0, 0
 	end
+	local rail = tree_glyph("vertical", "│") .. " "
 	local branch = (i == n) and tree_glyph("corner", "└") or tree_glyph("branch", "├")
 	local horiz = tree_glyph("horizontal", "─")
-	return branch .. horiz .. " ", #branch, #horiz
+	return rail .. branch .. horiz .. " ", #rail + #branch, #horiz
 end
 
 ---@param node table
@@ -230,13 +262,29 @@ local function task_line(node, now, prefix)
 			or (icons.ui("task", node.kind) or icons.ui("tree", "leaf"))
 		text, right, hl = task.text, node.kind, TASK_HL[node.kind] or "DiagnosticInfo"
 		if task.ts then
-			right = right .. "  " .. age(now - task.ts)
+			if (node.kind == "done" or node.kind == "error") and task.finish then
+				-- a finished turn should say how long it took, not how long ago it was
+				right = right .. "  " .. duration(task.finish - task.ts)
+			else
+				right = right .. "  " .. age(now - task.ts)
+			end
 		end
 	end
 	local first = vim.split(text or "", "\n")[1] or ""
+	-- where the question came from (todo2, a plugin, ...), so the row is traceable
+	-- when several tools dispatch through the same agent
+	local tag = ""
+	local c = node.task and node.task.correlation
+	local key = c and (c.label or c.key)
+	if key then
+		tag = (c.plugin and c.plugin ~= "todo2") and ("[%s:%s] "):format(c.plugin, key) or ("[%s] "):format(key)
+	end
 	local start = #prefix
-	local line = columns(prefix .. ("%s %s"):format(glyph, first), right, inner_width())
+	local line = columns(prefix .. ("%s %s%s"):format(glyph, tag, first), right, inner_width())
 	local marks = { { start, start + #glyph, hl } }
+	if tag ~= "" then
+		marks[#marks + 1] = { start + #glyph + 1, start + #glyph + 1 + #tag, "Comment" }
+	end
 	if node.kind == "done" or node.kind == "error" then
 		marks[#marks + 1] = { 0, #line, "Comment" }
 	end
@@ -303,17 +351,24 @@ local function render()
 	if not (buf and vim.api.nvim_buf_is_valid(buf)) then
 		return
 	end
+	truncated = false
 	local now = state.now()
 	local list = state.all()
 	local queued = queued_by_agent()
 	local width = inner_width()
+	local shown = {}
+	for _, rec in ipairs(list) do
+		if not only_needs or needs_you(rec) then
+			shown[#shown + 1] = rec
+		end
+	end
 
 	-- name column: as wide as the longest name shown, but never wider than a third of the view
 	local name_w = 8
 	local backends_seen = {}
 	local seen = 0
 	local counts = {}
-	for _, rec in ipairs(list) do
+	for _, rec in ipairs(shown) do
 		counts[rec.key] = #tasks_of(rec, queued)
 		local name = state.name(rec)
 		if counts[rec.key] > 0 then
@@ -334,11 +389,11 @@ local function render()
 
 	local lines, map, marks = {}, {}, {}
 	local working = false
-	for _, rec in ipairs(list) do
+	for _, rec in ipairs(shown) do
 		working = working or rec.state == "working"
 		local children = tasks_of(rec, queued)
 		local show_children = not collapsed[rec.key]
-		local line, m, fold_bytes = agent_line(rec, name_w, seen > 1, now, counts[rec.key])
+		local line, m, fold_bytes = agent_line(rec, name_w, seen > 1 and width >= 44, now, counts[rec.key])
 		-- The running task sorts first, so the path is usually just the agent's
 		-- fold cell plus that one row's branch; it still reads as a link because
 		-- the pulse travels between them.
@@ -357,8 +412,17 @@ local function render()
 		end
 		lines[#lines + 1], map[#map + 1], marks[#marks + 1] = line, { kind = "agent", rec = rec }, m
 		if show_children then
-			local n = #children
-			for i, node in ipairs(children) do
+			local visible = children
+			local hidden = 0
+			if not expanded_tasks[rec.key] and cfg.task_limit and #children > cfg.task_limit then
+				hidden = #children - cfg.task_limit
+				visible = {}
+				for i = 1, cfg.task_limit do
+					visible[i] = children[i]
+				end
+			end
+			local n = #visible
+			for i, node in ipairs(visible) do
 				node.rec = rec
 				local prefix, branch_bytes, horiz_bytes = task_prefix(i, n, use_lines)
 				local tline, tm = task_line(node, now, prefix)
@@ -380,6 +444,12 @@ local function render()
 				lines[#lines + 1], map[#map + 1], marks[#marks + 1] = tline, node, tm
 				working = working or node.kind == "running"
 			end
+			if hidden > 0 then
+				local more = ("  … %d older task%s  ⏎ show"):format(hidden, hidden == 1 and "" or "s")
+				lines[#lines + 1] = columns(more, "", inner_width())
+				map[#map + 1] = { kind = "more", rec = rec, hidden = hidden }
+				marks[#marks + 1] = { { 2, #more, "Comment" } }
+			end
 		end
 	end
 	-- forget fold state of agents that went away
@@ -388,8 +458,15 @@ local function render()
 			collapsed[key] = nil
 		end
 	end
+	for key in pairs(expanded_tasks) do
+		if not state.get(key) then
+			expanded_tasks[key] = nil
+		end
+	end
 	if #lines == 0 then
-		lines = { "  no agents running" }
+		lines = {
+			only_needs and "  nothing needs you — f shows everyone" or "  no agents running — :AskAgent to ask",
+		}
 	end
 	vim.bo[buf].modifiable = true
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -408,8 +485,37 @@ local function render()
 	if win and vim.api.nvim_win_is_valid(win) then
 		local cur = vim.api.nvim_win_get_cursor(win)
 		vim.api.nvim_win_set_cursor(win, { math.min(cur[1], math.max(1, #map)), cur[2] })
-		local help = width >= 56 and "  ⏎ jump · s send · S flush · ? keys" or ""
-		vim.wo[win].winbar = ("%s ask-agent · %d%s"):format(icons.header(), #list, help)
+		local c = state.counts()
+		local flags = {}
+		if c.blocked > 0 then
+			flags[#flags + 1] = "⚠" .. c.blocked
+		end
+		if c.done > 0 then
+			flags[#flags + 1] = "✓" .. c.done
+		end
+		if c.error > 0 then
+			flags[#flags + 1] = "✗" .. c.error
+		end
+		if c.working > 0 then
+			flags[#flags + 1] = "◐" .. c.working
+		end
+		local title = ("%s ask-agent · %d"):format(icons.header(), #shown)
+		if #flags > 0 then
+			title = title .. "  " .. table.concat(flags, " ")
+		end
+		if only_needs then
+			title = title .. "  needs you"
+		end
+		local help = width >= 56 and "  ⏎ jump · v diff · ? keys" or ""
+		vim.wo[win].winbar = title .. help
+		-- A fresh sidebar that had to truncate grows once; the content decides the
+		-- width instead of the width cutting the content.
+		if opts and opts.autowidth and truncated and not opts.autosized and width >= 32 and width < 48 then
+			opts.autosized = true
+			pcall(vim.api.nvim_win_set_width, win, math.min(48, width + 6))
+			render()
+			return
+		end
 	end
 	if working then
 		ensure_timer()
@@ -449,6 +555,11 @@ end
 
 ---@param node table
 local function open_node(node)
+	if node.kind == "more" then
+		expanded_tasks[node.rec.key] = true
+		render()
+		return
+	end
 	if node.kind == "agent" then
 		focus_agent(node.rec)
 		return
@@ -509,10 +620,17 @@ local HELP = {
 	{ "a", "Acknowledge a done/blocked agent" },
 	{ "d", "Delete the queued task · dismiss a dead agent" },
 	{ "n", "Rename an agent (empty restores the directory name)" },
-	{ "<Tab>", "Fold or unfold the agent's tasks" },
+	{ "v", "Diff: the turn behind that task · the whole worktree for an agent" },
+	{ "y", "Copy the task text" },
+	{ "f", "Only agents that need you (blocked / error / unread done)" },
+	{ "<Tab>", "Fold or unfold the agent's tasks (and the older-task row)" },
 	{ "r", "Poll every agent now" },
 	{ "q", "Close the sidebar" },
 }
+
+-- Sorting is intentional: whatever waits on a human comes first, then finished
+-- work, then busy agents, then idle ones.
+local ORDER_HINT = "Order: blocked/error · done · working · idle"
 
 ---Help float, bottom-right, `q` / `<Esc>` / `?` closes it.
 local function show_help()
@@ -524,6 +642,9 @@ local function show_help()
 	for _, line in ipairs(lines) do
 		content = math.max(content, vim.fn.strdisplaywidth(line))
 	end
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ORDER_HINT
+	content = math.max(content, vim.fn.strdisplaywidth(ORDER_HINT))
 	local width = math.min(content + 4, vim.o.columns - 4)
 	local height = math.min(#lines, vim.o.lines - 3)
 	local b = vim.api.nvim_create_buf(false, true)
@@ -642,8 +763,22 @@ local function attach(bufnr)
 	vim.keymap.set(
 		"n",
 		"<Tab>",
-		with("agent", function(node)
-			collapsed[node.rec.key] = not collapsed[node.rec.key] or nil
+		with(nil, function(node)
+			if node.kind == "more" then
+				expanded_tasks[node.rec.key] = true
+				render()
+				return
+			end
+			if node.kind ~= "agent" then
+				return
+			end
+			if collapsed[node.rec.key] then
+				collapsed[node.rec.key] = nil
+			else
+				collapsed[node.rec.key] = true
+				-- folding is also "start over": unfold shows the recent slice again
+				expanded_tasks[node.rec.key] = nil
+			end
 			render()
 		end),
 		opts_buf
@@ -656,6 +791,51 @@ local function attach(bufnr)
 		end),
 		opts_buf
 	)
+	vim.keymap.set(
+		"n",
+		"v",
+		with(nil, function(node)
+			local ask = require("ask_agent")
+			local rec = node.rec
+			local cwd = rec and rec.target and rec.target.cwd or nil
+			if node.kind == "agent" then
+				ask.diff({ cwd = cwd })
+				return
+			end
+			local correlation = node.kind ~= "queued" and node.task and node.task.correlation
+			if not correlation then
+				notify.notify("[ask_agent] No turn recorded for this question yet", vim.log.levels.INFO)
+				return
+			end
+			ask.diff({ cwd = cwd, correlation = correlation })
+		end),
+		opts_buf
+	)
+	vim.keymap.set(
+		"n",
+		"y",
+		with(nil, function(node)
+			local text
+			if node.kind == "agent" then
+				text = state.name(node.rec)
+			elseif node.kind == "queued" then
+				text = node.entry.prompt
+			else
+				text = node.task and node.task.text
+			end
+			if not text or text == "" then
+				return
+			end
+			pcall(vim.fn.setreg, "+", text)
+			pcall(vim.fn.setreg, '"', text)
+			notify.notify("[ask_agent] Copied", vim.log.levels.INFO)
+		end),
+		opts_buf
+	)
+	vim.keymap.set("n", "f", function()
+		only_needs = not only_needs
+		render()
+	end, opts_buf)
 	vim.keymap.set("n", "?", show_help, opts_buf)
 	vim.keymap.set("n", "r", function()
 		state.refresh()
@@ -671,7 +851,7 @@ local function attach(bufnr)
 end
 
 ---Dashboard appearance knobs (setup-level; per-call :AskAgentDashboard opts win).
----@param o { tree_lines?: boolean, running_line?: "dash"|"pulse"|"static"|"off" }|nil
+---@param o { tree_lines?: boolean, running_line?: "dash"|"pulse"|"static"|"off", task_limit?: integer }|nil
 function M.configure(o)
 	if type(o) ~= "table" then
 		return
@@ -683,6 +863,10 @@ function M.configure(o)
 		local v = o.running_line
 		cfg.running_line = (v == "pulse" or v == "static" or v == "off") and v or "dash"
 	end
+	if o.task_limit ~= nil then
+		local n = math.floor(tonumber(o.task_limit) or 0)
+		cfg.task_limit = (n and n > 0) and n or false
+	end
 end
 
 ---Open (or focus) the sidebar.
@@ -691,12 +875,14 @@ end
 function M.open(callbacks, o)
 	api = callbacks or api
 	opts = vim.tbl_extend("force", { pos = "right", width = 40 }, o or {})
+	opts.autowidth = not (o and o.width ~= nil)
 	M.configure(opts)
 	if win and vim.api.nvim_win_is_valid(win) then
 		if vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_get_current_tabpage() then
 			vim.api.nvim_set_current_tabpage(vim.api.nvim_win_get_tabpage(win))
 		end
 		vim.api.nvim_set_current_win(win)
+		opts.autowidth = false -- only the fresh sidebar sizes itself
 		render()
 		return
 	end

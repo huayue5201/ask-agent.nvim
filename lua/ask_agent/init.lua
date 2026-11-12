@@ -590,11 +590,29 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 	return true
 end
 
-local function choose_target(mod, cb)
+local function choose_target(mod, cb, target_id)
 	local function note_avoid(t)
 		if t and t.avoid then
 			notify.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
 		end
+	end
+	-- An explicitly requested instance skips both pin and picker: same semantics as
+	-- ask.send({ target = ... }), so scripts and prompts can name the agent.
+	if target_id ~= nil then
+		for _, t in ipairs(mod.targets()) do
+			if tostring(t.id) == tostring(target_id) then
+				note_avoid(t)
+				return cb(t)
+			end
+		end
+		notify.notify(
+			("[%s] Target %s is not among the current instances (it may have exited)"):format(
+				mod.label or mod.id,
+				tostring(target_id)
+			),
+			vim.log.levels.WARN
+		)
+		return cb(nil)
 	end
 	if pinned and pinned.backend == mod.id then
 		for _, t in ipairs(mod.targets()) do
@@ -670,10 +688,28 @@ end
 ---@param opts { correlation?: table, anchor?: table }|nil
 ---@return boolean ok, string|nil err
 local function deliver_text(mod, target, text, opts)
+	-- Turn boundary before the send: the agent may start writing the moment the text
+	-- lands, so the tree has to be taken first. A failed send drops the record again.
+	local snap = require("ask_agent.snapshot")
+	local turn_ok, turn =
+		pcall(snap.on_dispatch, mod.id, target.id, text, opts and opts.anchor, opts and opts.correlation)
 	local ok, send_err = mod.send(target, text)
 	if not ok then
+		if turn_ok and turn then
+			pcall(snap.cancel, turn)
+		end
 		return false, send_err
 	end
+	-- History is the question ledger: only delivered text is recorded, and a broken
+	-- journal never breaks a send.
+	pcall(require("ask_agent.history").add, {
+		text = text,
+		backend = mod.id,
+		agent = target.id,
+		label = name_of(target),
+		anchor = opts and opts.anchor,
+		correlation = opts and opts.correlation,
+	})
 	state.dispatch(mod.id, target.id, text, opts)
 	return true, nil
 end
@@ -802,7 +838,7 @@ end
 --- Open the floating window and ask. opts.visual=true includes the current selection
 --- opts.extension: extra fields injected into the anchor (e.g. a project module digest); message.render decides the layout
 --- opts.note: extra note appended to the floating window title (e.g. "overview ~350 tok")
----@param opts { visual?: boolean, backend?: string, extension?: table, note?: string }|nil
+---@param opts { visual?: boolean, backend?: string, target?: string|number, extension?: table, note?: string, default?: string, prompt_fn?: fun(anchor: table): string }|nil
 function M.ask(opts)
 	opts = opts or {}
 	local mod = backends.get(opts.backend or current)
@@ -815,6 +851,15 @@ function M.ask(opts)
 	end
 	-- The anchor must be captured before any UI: pickers and floating windows change the current window
 	local anchor = context.capture(opts.visual)
+	-- A template is rendered against *this* anchor, then prefilled for editing: the
+	-- question the agent sees still travels with the anchor, like a hand-written one.
+	local default = opts.default
+	if type(opts.prompt_fn) == "function" then
+		local rendered_ok, rendered = pcall(opts.prompt_fn, anchor)
+		if rendered_ok and type(rendered) == "string" then
+			default = rendered
+		end
+	end
 	if opts.extension then
 		for k, v in pairs(opts.extension) do
 			anchor[k] = v
@@ -831,6 +876,7 @@ function M.ask(opts)
 				context.describe(anchor),
 				opts.note and (" · " .. opts.note) or ""
 			),
+			default = default,
 			on_submit = function(prompt)
 				local text = message.render(anchor, prompt)
 				local ok, send_err = deliver_text(mod, target, text, { anchor = anchor })
@@ -845,7 +891,7 @@ function M.ask(opts)
 				)
 			end,
 		})
-	end)
+	end, opts.target)
 end
 
 --- Queue a question for a later batch send instead of sending it now.
@@ -1028,12 +1074,113 @@ function M.layout(value)
 	return layout_id
 end
 
+--- Turn snapshots and review ("what did the agent change")
+-- -------------------------------------------------------------------
+
+---Review one turn (or the whole worktree since HEAD when there is none).
+---The interval is two git trees captured at the turn boundaries; rendering is delegated
+---to the best installed viewer, so the evidence (`git diff <from> <to>`) is reproducible.
+---@param opts { id?: string, cwd?: string, backend?: string, include_unsaved?: boolean }|nil
+---@return boolean ok, string|nil err
+function M.diff(opts)
+	local ok, err = require("ask_agent.review").open(opts)
+	if not ok then
+		notify.notify("[ask_agent] " .. (err or "review failed"), vim.log.levels.WARN)
+	end
+	return ok, err
+end
+
+---Bracket a review interval by hand: no argument starts one, an id (or "last") closes it.
+---@param id string|nil
+---@return table|nil rec
+function M.snapshot(id)
+	local snap = require("ask_agent.snapshot")
+	if id == nil or id == "" then
+		local rec, err = snap.begin({ trigger = "manual" })
+		if not rec then
+			notify.notify("[ask_agent] snapshot: " .. (err or "failed"), vim.log.levels.WARN)
+			return nil
+		end
+		notify.notify("[ask_agent] interval started (" .. rec.id:sub(1, 8) .. ")", vim.log.levels.INFO)
+		return rec
+	end
+	local rec = id == "last" and snap.last(nil, { open = true }) or snap.get(id)
+	if not rec then
+		notify.notify("[ask_agent] no such turn: " .. id, vim.log.levels.WARN)
+		return nil
+	end
+	snap.finish(rec)
+	notify.notify("[ask_agent] interval closed (" .. rec.id:sub(1, 8) .. ")", vim.log.levels.INFO)
+	return rec
+end
+
+---Turns recorded for a directory (or all of them), newest first.
+---@param cwd string|nil
+---@return table[]
+function M.turns(cwd)
+	return require("ask_agent.snapshot").list(cwd)
+end
+
+--- Recorded questions, newest first; filter by cwd, backend or free text.
+---@param opts { cwd?: string, query?: string, backend?: string, limit?: integer }|nil
+---@return table[]
+function M.history(opts)
+	return require("ask_agent.history").list(opts)
+end
+
+---Prompts visible from a directory: global first, project overrides by name.
+---@param cwd string|nil
+---@return table[]
+function M.prompts(cwd)
+	return require("ask_agent.prompts").all(cwd)
+end
+
+---Ask with a stored prompt: placeholders are rendered against the anchor captured now.
+---@param name string
+---@param opts { visual?: boolean, backend?: string, target?: string|number }|nil
+---@return boolean ok, string|nil err
+function M.prompt(name, opts)
+	opts = opts or {}
+	local prompts = require("ask_agent.prompts")
+	local entry = prompts.get(name)
+	if not entry then
+		return false, "no prompt named " .. tostring(name)
+	end
+	M.ask({
+		visual = opts.visual,
+		backend = opts.backend,
+		target = opts.target,
+		note = "prompt: " .. entry.name,
+		prompt_fn = function(anchor)
+			return prompts.render(entry.text, anchor)
+		end,
+	})
+	return true
+end
+
+---Create or update a prompt (`project = true` stores it in `.ask-agent/prompts.json`).
+---@param name string
+---@param text string
+---@param opts { desc?: string, project?: boolean, cwd?: string }|nil
+---@return boolean ok, string|nil err
+function M.prompt_save(name, text, opts)
+	return require("ask_agent.prompts").save(name, text, opts)
+end
+
+---Delete a prompt from where it is defined.
+---@param name string
+---@param opts { cwd?: string }|nil
+---@return boolean ok, string|nil err
+function M.prompt_remove(name, opts)
+	return require("ask_agent.prompts").remove(name, opts)
+end
+
 --- Register backends and install the user commands.
 --- The plugin installs no keymaps on purpose: commands are the public interface, and
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify_style?: boolean, notify_sound?: boolean, persist?: boolean|{ path?: string, enabled?: boolean } }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify_style?: boolean, notify_sound?: boolean, persist?: boolean|{ path?: string, enabled?: boolean }, task_limit?: integer, task_ttl?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1064,7 +1211,12 @@ function M.setup(opts)
 	dashboard_opts = {
 		tree_lines = opts.tree_lines,
 		running_line = opts.running_line,
+		task_limit = opts.task_limit,
 	}
+	-- How long finished tasks stay in the journal (one per agent always stays)
+	if type(opts.task_ttl) == "number" and opts.task_ttl > 0 then
+		state.task_ttl = opts.task_ttl
+	end
 	-- Journal (tasks/unread marks survive a restart): true | false | { path, persist }
 	local persist = opts.persist
 	if type(persist) == "table" then
@@ -1072,6 +1224,42 @@ function M.setup(opts)
 		state.persist = persist.enabled ~= false
 	else
 		state.persist = persist ~= false
+	end
+	-- Turn snapshots (what did the agent change): git trees taken at turn boundaries.
+	-- `snapshots = false` disables them; a table configures keep/ttl/trigger_state/path.
+	local snap = require("ask_agent.snapshot")
+	if opts.snapshots == false then
+		snap.enabled = false
+	else
+		snap.setup(type(opts.snapshots) == "table" and opts.snapshots or nil)
+		snap.attach(state)
+	end
+	-- Question history (searchable, re-askable) and the prompt library: both are
+	-- side channels that never touch the send path's contract.
+	local hist = require("ask_agent.history")
+	if opts.history == false then
+		hist.enabled = false
+	else
+		hist.setup(type(opts.history) == "table" and opts.history or nil)
+	end
+	local prompts = require("ask_agent.prompts")
+	if type(opts.prompts) == "table" then
+		if opts.prompts.global_path then
+			prompts.global_path = opts.prompts.global_path
+		end
+		if opts.prompts.project_file then
+			prompts.project_file = opts.prompts.project_file
+		end
+	end
+	-- Review rendering: "auto" picks the best installed viewer (diffbandit → builtin
+	-- nvim.difftool → codediff → a plain diff buffer).
+	local review = require("ask_agent.review")
+	local ropts = type(opts.review) == "table" and opts.review or {}
+	if ropts.backend then
+		review.backend = ropts.backend
+	end
+	if ropts.include_unsaved ~= nil then
+		review.include_unsaved = ropts.include_unsaved
 	end
 	state.start(opts.state_interval or 2000)
 	local grp = vim.api.nvim_create_augroup("AskAgentState", { clear = true })

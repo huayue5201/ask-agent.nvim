@@ -59,6 +59,30 @@ function M.install(deps)
 	vim.api.nvim_create_user_command("AskAgentPi", function()
 		api.ask()
 	end, { desc = "Ask agent: same as :AskAgent (legacy name)" })
+	vim.api.nvim_create_user_command("AskAgentDiff", function(args)
+		local arg = args.args ~= "" and args.args or nil
+		if arg == "head" then
+			api.diff({ head = true })
+		else
+			api.diff({ id = arg })
+		end
+	end, {
+		nargs = "?",
+		complete = function()
+			local ids = { "head" }
+			for _, rec in ipairs(api.turns() or {}) do
+				ids[#ids + 1] = rec.id:sub(1, 8)
+			end
+			return ids
+		end,
+		desc = "Ask agent: review what an agent changed (last turn, a turn id, or 'head' = since HEAD)",
+	})
+	vim.api.nvim_create_user_command("AskAgentSnapshot", function(args)
+		api.snapshot(args.args ~= "" and args.args or nil)
+	end, {
+		nargs = "?",
+		desc = "Ask agent: start (no arg) or close ('last' / a turn id) a manual review interval",
+	})
 	vim.api.nvim_create_user_command("AskAgentBackend", function(args)
 		if args.args ~= "" then
 			local ok, err = api.use(args.args)
@@ -203,6 +227,175 @@ function M.install(deps)
 		nargs = 0,
 		bang = true,
 		desc = "Ask agent: give an instance an alias (shown in lists, same color in the map)",
+	})
+
+	-- Question history: a searchable ledger of delivered questions. Every action is
+	-- local; nothing is re-sent behind your back.
+	vim.api.nvim_create_user_command("AskAgentHistory", function(args)
+		local history = require("ask_agent.history")
+		local recs = history.list({ query = args.args ~= "" and args.args or nil })
+		if #recs == 0 then
+			notify.notify(
+				args.args ~= "" and "[ask_agent] no questions match " .. args.args
+					or "[ask_agent] no questions recorded yet",
+				vim.log.levels.INFO
+			)
+			return
+		end
+		local function stamp(rec)
+			return os.date("%m-%d %H:%M", math.floor(rec.ts / 1000))
+		end
+		vim.ui.select(recs, {
+			prompt = ("Questions (%d)"):format(#recs),
+			format_item = function(rec)
+				return stamp(rec) .. "  " .. history.describe(rec)
+			end,
+		}, function(rec)
+			if not rec then
+				return
+			end
+			vim.ui.select({ "put in the ask window", "copy text", "jump to code", "delete" }, {
+				prompt = history.describe(rec),
+			}, function(action)
+				if action == "put in the ask window" then
+					api.ask({ default = rec.text })
+				elseif action == "copy text" then
+					pcall(vim.fn.setreg, "+", rec.text)
+					pcall(vim.fn.setreg, '"', rec.text)
+					notify.notify("[ask_agent] Question copied", vim.log.levels.INFO)
+				elseif action == "jump to code" then
+					local ok, err = history.jump(rec)
+					if not ok then
+						notify.notify("[ask_agent] " .. (err or "cannot jump"), vim.log.levels.WARN)
+					end
+				elseif action == "delete" then
+					history.remove(rec.id)
+					notify.notify("[ask_agent] Question removed from history", vim.log.levels.INFO)
+				end
+			end)
+		end)
+	end, {
+		nargs = "?",
+		desc = "Ask agent: search questions sent before (re-ask / copy / jump / delete)",
+	})
+
+	-- Prompt library: templates rendered against the anchor captured at ask time.
+	vim.api.nvim_create_user_command("AskAgentPrompt", function(args)
+		local prompts = require("ask_agent.prompts")
+		local name = args.args ~= "" and args.args or nil
+		local visual = args.bang -- `:AskAgentPrompt!` captures the last visual selection
+		if name then
+			local ok, err = api.prompt(name, { visual = visual })
+			if not ok then
+				notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+			end
+			return
+		end
+		local list = prompts.all()
+		if #list == 0 then
+			notify.notify(
+				"[ask_agent] no prompts yet — :AskAgentPromptSave <name> stores the selection as one",
+				vim.log.levels.INFO
+			)
+			return
+		end
+		vim.ui.select(list, {
+			prompt = "Prompts",
+			format_item = function(entry)
+				return ("%s%s  [%s]"):format(entry.name, entry.desc and (" — " .. entry.desc) or "", entry.source)
+			end,
+		}, function(entry)
+			if not entry then
+				return
+			end
+			vim.ui.select({ "use", "copy text", "edit", "delete" }, { prompt = entry.name }, function(action)
+				if action == "use" then
+					local ok, err = api.prompt(entry.name, { visual = visual })
+					if not ok then
+						notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+					end
+				elseif action == "copy text" then
+					pcall(vim.fn.setreg, "+", entry.text)
+					pcall(vim.fn.setreg, '"', entry.text)
+					notify.notify("[ask_agent] Prompt copied", vim.log.levels.INFO)
+				elseif action == "edit" then
+					require("ask_agent.ui").input({
+						title = ("Edit prompt %s ({{file}} {{line}} {{selection}} …)"):format(entry.name),
+						default = entry.text,
+						on_submit = function(text)
+							local ok, err = prompts.save(entry.name, text, {
+								desc = entry.desc,
+								project = entry.source == "project",
+							})
+							notify.notify(
+								ok and ("[ask_agent] Prompt saved: " .. entry.name)
+									or ("[ask_agent] " .. (err or "could not save the prompt")),
+								ok and vim.log.levels.INFO or vim.log.levels.WARN
+							)
+						end,
+					})
+				elseif action == "delete" then
+					local ok, err = prompts.remove(entry.name)
+					notify.notify(
+						ok and ("[ask_agent] Prompt deleted: " .. entry.name)
+							or ("[ask_agent] " .. (err or "could not delete the prompt")),
+						ok and vim.log.levels.INFO or vim.log.levels.WARN
+					)
+				end
+			end)
+		end)
+	end, {
+		nargs = "?",
+		bang = true,
+		complete = function()
+			local out = {}
+			for _, entry in ipairs(require("ask_agent.prompts").all()) do
+				out[#out + 1] = entry.name
+			end
+			return out
+		end,
+		desc = "Ask agent: use a prompt template, rendered against the anchor (! = include the selection)",
+	})
+
+	-- Store the selection (or the line under the cursor) as a prompt; `!` writes it
+	-- into the repository instead of the global cache, so it travels with the code.
+	vim.api.nvim_create_user_command("AskAgentPromptSave", function(args)
+		local name = vim.trim(args.args or "")
+		if name == "" then
+			notify.notify("[ask_agent] usage: :AskAgentPromptSave <name>  (bang = project file)", vim.log.levels.WARN)
+			return
+		end
+		local mode = vim.fn.mode()
+		local body = ""
+		if mode == "v" or mode == "V" or mode == "\22" then
+			local sl = vim.fn.getpos("'<")[2]
+			local el = vim.fn.getpos("'>")[2]
+			if sl > 0 and el >= sl then
+				body = table.concat(vim.api.nvim_buf_get_lines(0, sl - 1, el, false), "\n")
+			end
+		end
+		if body == "" then
+			body = vim.api.nvim_get_current_line()
+		end
+		require("ask_agent.ui").input({
+			title = ("Save prompt %s%s ({{file}} {{line}} {{selection}} {{cwd}} …)"):format(
+				name,
+				args.bang and " → project" or " → global"
+			),
+			default = body,
+			on_submit = function(text)
+				local ok, err = api.prompt_save(name, text, { project = args.bang })
+				notify.notify(
+					ok and ("[ask_agent] Prompt saved: " .. name)
+						or ("[ask_agent] " .. (err or "could not save the prompt")),
+					ok and vim.log.levels.INFO or vim.log.levels.WARN
+				)
+			end,
+		})
+	end, {
+		nargs = 1,
+		bang = true,
+		desc = "Ask agent: save the selection/current line as a prompt (bang = project file)",
 	})
 end
 
