@@ -218,7 +218,7 @@ end
 --- Jump to the code an entry is attached to.
 ---@param entry table
 local function goto_entry(entry)
-	local ok, err = context.jump_to({
+	local ok, err = context.open(entry.anchor or {
 		buf = entry.buf,
 		bufname = entry.bufname,
 		line = entry.line,

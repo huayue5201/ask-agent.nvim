@@ -100,17 +100,22 @@ end
 -- user was doing (very visible when it happens while a float is open). Newlines
 -- are folded and overlong text is cut with an ellipsis, so a notification can
 -- never steal the keyboard.
+--
+-- The margin is deliberately wide: the exact width at which Neovim decides to
+-- page is narrower than 'columns' (measured in an 80-column float: 69 cells
+-- already paged, 60 did not), and it is not worth guessing per UI.
 ---@param msg string
 ---@return string
 local function fit(msg)
 	local one = msg:gsub("%s*\n%s*", " "):gsub("\t", " ")
-	local width = math.max(20, vim.o.columns - 1)
+	local width = math.max(20, vim.o.columns - 20)
 	if vim.api.nvim_strwidth(one) <= width then
 		return one
 	end
+	-- the ellipsis counts too: cutting to `width - 1` cells and then appending
+	-- "…" would land exactly on `columns` and wrap, which is the pager again
 	local cut = vim.fn.strcharpart(one, 0, width - 1)
-	-- do not cut a double-width character in half
-	while cut ~= "" and vim.api.nvim_strwidth(cut) > width - 1 do
+	while cut ~= "" and vim.api.nvim_strwidth(cut .. "…") > width do
 		cut = vim.fn.strcharpart(cut, 0, vim.fn.strchars(cut) - 1)
 	end
 	return cut .. "…"

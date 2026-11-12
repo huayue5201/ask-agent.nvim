@@ -780,7 +780,7 @@ end
 ---@param anchor table
 ---@return boolean ok, string|nil err
 function M.goto_anchor(anchor)
-	return context.jump_to(anchor)
+	return context.open(anchor)
 end
 
 ---Open an agent in a viewer float: a second display attached to the terminal the

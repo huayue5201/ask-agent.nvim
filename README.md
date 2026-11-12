@@ -760,7 +760,8 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 
 | Key | On an agent | On a task |
 | --- | --- | --- |
-| `<CR>` | show it in a viewer float | jump to the task's code anchor |
+| `<CR>` | show it in a viewer float | jump to the anchor of a task another tool dispatched; open the agent for a turn of your own |
+| `o` | jump to the row's code anchor, when it has one | |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `n` | rename (empty restores the directory name) | |
@@ -772,7 +773,9 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `r` / `q` | poll now / close | |
 
 Row layout: fold marker, state glyph, name (padded to the longest name) with the task
-count, then the message; the age is flushed right, and the backend appears on the
+count, then the message; a task that has a code anchor shows it as `file.lua:42`
+flushed right (that is exactly what `<CR>`/`o` jump to), then the age, and the
+backend appears on the
 right too when more than one backend is running. Tree connectors are colored by
 `AskAgentTree` (links to `Comment`); the running path uses the `AskAgentRun*`
 groups so both can be restyled from a colorscheme. Rows are truncated to the window

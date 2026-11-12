@@ -9,9 +9,12 @@
 --       ⠹ port the parser      sent     12s
 --
 -- A row is either an agent (top level) or one of its tasks, and <CR> does the
--- obvious thing for that row: an agent opens in a viewer float (through a view
--- provider — rex, tmux, herdr, or whatever you registered with
--- ask.register_view), a task jumps to the code anchor it was written at.
+-- obvious thing for that row: an agent — or a turn of your own — opens in a viewer
+-- float (through a view provider — rex, tmux, herdr, or whatever you registered
+-- with ask.register_view); work another tool dispatched (todo2, a plugin over the
+-- bridge) jumps to the code anchor it was filed at, because that is where it
+-- lives. A task row only shows `file.lua:42` when it has an anchor, and `o`
+-- jumps to it from any row that has one.
 --
 -- Two task sources: the queue (questions not sent yet — `queued`) and the state
 -- layer's dispatch log (sent work — `sent`, `done`, `error`).
@@ -248,6 +251,20 @@ local function task_prefix(i, n, use_lines)
 	return rail .. branch .. horiz .. " ", #rail + #branch, #horiz
 end
 
+---"file.lua:42" for a row that can be jumped to, or nil.
+---@param a table|nil
+---@return string|nil
+local function anchor_label(a)
+	if not a or not a.path or a.path == "" then
+		return nil
+	end
+	local name = vim.fn.fnamemodify(a.path, ":t")
+	if name == "" then
+		return nil
+	end
+	return ("%s:%d"):format(name, a.line or 1)
+end
+
 ---@param node table
 ---@param now integer
 ---@param prefix string tree prefix (spaces when tree lines are off)
@@ -278,6 +295,11 @@ local function task_line(node, now, prefix)
 	local key = c and (c.label or c.key)
 	if key then
 		tag = (c.plugin and c.plugin ~= "todo2") and ("[%s:%s] "):format(c.plugin, key) or ("[%s] "):format(key)
+	end
+	-- the code the row is about, so `<CR>`/`o` are predictable before pressing them
+	local place = anchor_label(node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor))
+	if place then
+		right = place .. "  " .. right
 	end
 	local start = #prefix
 	local line = columns(prefix .. ("%s %s%s"):format(glyph, tag, first), right, inner_width())
@@ -506,7 +528,7 @@ local function render()
 		if only_needs then
 			title = title .. "  needs you"
 		end
-		local help = width >= 56 and "  ⏎ view · v diff · ? keys" or ""
+		local help = width >= 56 and "  ⏎ open · o jump · ? keys" or ""
 		vim.wo[win].winbar = title .. help
 		-- A fresh sidebar that had to truncate grows once; the content decides the
 		-- width instead of the width cutting the content.
@@ -548,13 +570,44 @@ end
 ---@param rec table
 local function view_agent(rec)
 	local ok, err
-	if api.view then
+	if api and api.view then
 		ok, err = api.view(rec.target)
 	else
 		ok, err = view.open(rec.target)
 	end
 	if not ok then
 		notify.notify("[ask_agent] " .. err, vim.log.levels.INFO)
+	end
+end
+
+---@param node table
+---@return table|nil anchor, boolean dispatched
+local function node_anchor(node)
+	if node.kind == "queued" then
+		return node.entry.anchor, true
+	end
+	if node.task then
+		-- A task another tool dispatched (todo2, a plugin over the bridge) carries
+		-- the anchor it was filed against; a turn of your own only carries the
+		-- cursor position when you asked, which is not where the task lives.
+		return node.task.anchor, node.task.correlation ~= nil
+	end
+	return nil, false
+end
+
+---@param node table
+local function jump_node(node)
+	local anchor = node_anchor(node)
+	if not anchor then
+		notify.notify("[ask_agent] This row has no code anchor", vim.log.levels.INFO)
+		return
+	end
+	-- open() is also called without the entry-point callbacks (a bare
+	-- require("ask_agent.dashboard").open()), so fall back to the real jump
+	local goto_anchor = (api and api.goto_anchor) or require("ask_agent").goto_anchor
+	local ok, err = goto_anchor(anchor)
+	if not ok then
+		notify.notify("[ask_agent] " .. tostring(err), vim.log.levels.WARN)
 	end
 end
 
@@ -569,17 +622,20 @@ local function open_node(node)
 		view_agent(node.rec)
 		return
 	end
-	local anchor = node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor)
+	local anchor, dispatched = node_anchor(node)
+	if not dispatched then
+		-- your own turn: it lives in the agent's transcript, not at the cursor
+		-- position it happened to be asked from (`o` still jumps there)
+		view_agent(node.rec)
+		return
+	end
 	if not anchor then
 		-- a task sent from this very sidebar has no anchor: the agent's window is the best we can do
 		notify.notify("[ask_agent] No anchor for this task — opening the agent instead", vim.log.levels.INFO)
 		view_agent(node.rec)
 		return
 	end
-	local ok, err = api.goto_anchor(anchor)
-	if not ok then
-		notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
-	end
+	jump_node(node)
 end
 
 ---Dismiss a dead agent — but never while questions are still routed to it,
@@ -619,7 +675,8 @@ end
 -- Keys, in the order they appear in the help float.
 local HELP = {
 	{ "?", "Show these keys" },
-	{ "<CR>", "Agent: show it in a viewer float · Task: jump to its code anchor" },
+	{ "<CR>", "Agent: show it in a viewer float · Task: jump to its anchor (dispatched tasks) or show the agent" },
+	{ "o", "Jump to the code anchor of that row, when it has one" },
 	{ "s", "Send a question to that agent" },
 	{ "S", "Send every queued question routed to it" },
 	{ "a", "Acknowledge a done/blocked agent" },
@@ -729,6 +786,7 @@ local function attach(bufnr)
 		end
 	end
 	vim.keymap.set("n", "<CR>", with(nil, open_node), opts_buf)
+	vim.keymap.set("n", "o", with(nil, jump_node), opts_buf)
 	vim.keymap.set(
 		"n",
 		"s",

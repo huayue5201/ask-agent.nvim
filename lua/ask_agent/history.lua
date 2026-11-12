@@ -277,7 +277,8 @@ function M.describe(rec)
 end
 
 ---Jump to the code a record was asked about. Uses the live buffer when it still
----exists; otherwise opens the file by path (the session may have restarted).
+---exists; otherwise opens the file by path (the session may have restarted, or
+---the buffer number was recycled by another file).
 ---@param rec table
 ---@return boolean ok, string|nil err
 function M.jump(rec)
@@ -285,28 +286,7 @@ function M.jump(rec)
 	if not anchor then
 		return false, "this record has no anchor"
 	end
-	local context = require("ask_agent.context")
-	local ok, err = context.jump_to(anchor)
-	if ok then
-		return true
-	end
-	if not anchor.path or anchor.path == "" then
-		return false, err
-	end
-	-- anchor.path is recorded relative to the anchor's cwd (":~:."), so resolve it
-	-- there rather than against whatever directory the plugin is running in now.
-	local path = anchor.path
-	if not path:match("^/") and not path:match("^~") then
-		path = (anchor.cwd or vim.fn.getcwd()) .. "/" .. path
-	end
-	local file = vim.fn.fnamemodify(vim.fn.expand(path), ":p")
-	if vim.fn.filereadable(file) == 0 then
-		return false, "the file no longer exists: " .. anchor.path
-	end
-	vim.cmd.edit(vim.fn.fnameescape(file))
-	vim.api.nvim_win_set_cursor(0, { math.max(1, anchor.line or 1), math.max(0, (anchor.col or 1) - 1) })
-	vim.cmd("normal! zz")
-	return true
+	return require("ask_agent.context").open(anchor)
 end
 
 return M

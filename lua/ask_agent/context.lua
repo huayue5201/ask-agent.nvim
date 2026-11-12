@@ -108,4 +108,38 @@ function M.jump_to(a)
 	return true, nil
 end
 
+---Go to what an anchor points at, falling back to the file it names.
+---
+---`jump_to` needs the buffer the anchor was captured in, and Neovim recycles
+---buffer numbers: after a `:bd` the number can belong to a different file, and
+---the anchor then cannot be trusted to still be the same text. The path and line
+---are still good, so an anchor that only survives in that weaker form is opened
+---from disk instead of failing.
+---@param a table anchor (needs `path` for the fallback)
+---@return boolean ok, string|nil err
+function M.open(a)
+	local ok, err = M.jump_to(a)
+	if ok then
+		return true, nil
+	end
+	if not a or not a.path or a.path == "" then
+		return false, err
+	end
+	-- anchor.path is recorded relative to the anchor's cwd (":~:."), so resolve it
+	-- there rather than against whatever directory the plugin is running in now.
+	local path = a.path
+	if not path:match("^/") and not path:match("^~") then
+		path = (a.cwd or vim.fn.getcwd()) .. "/" .. path
+	end
+	local file = vim.fn.fnamemodify(vim.fn.expand(path), ":p")
+	if vim.fn.filereadable(file) == 0 then
+		return false, (err and (err .. " — ") or "") .. "the file no longer exists: " .. a.path
+	end
+	vim.cmd.edit(vim.fn.fnameescape(file))
+	local line = math.max(1, a.line or 1)
+	vim.api.nvim_win_set_cursor(0, { math.min(line, vim.api.nvim_buf_line_count(0)), math.max(0, (a.col or 1) - 1) })
+	vim.cmd("normal! zz")
+	return true, nil
+end
+
 return M

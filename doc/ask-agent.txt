@@ -136,7 +136,8 @@ Only the keys you pass change; everything else keeps its default. A top-level
                                                   *:AskAgentDashboard*
 :AskAgentDashboard      Open the sidebar: agents as a tree, each agent's queued
                         and sent tasks below it. `<CR>` views the agent in a float (or jumps
-                        to a task's anchor), `s` send, `S` flush its queued questions,
+                        to the anchor of a task another tool dispatched), `o` jumps to
+                        a row's anchor, `s` send, `S` flush its queued questions,
                         `a` acknowledge, `d` delete a queued task or dismiss a
                         dead agent, `<Tab>` fold,
                         `?` key help, `r` poll now, `q` close.
@@ -522,8 +523,14 @@ without 'termguicolors' the path is one flat green. The connectors use the
 `AskAgentTree` highlight group (linked to `Comment`) and the path the
 `AskAgentRunDim` / `AskAgentRunMid` / `AskAgentRunBright` groups.
 
-`<CR>` on an agent opens it in a viewer float (see |ask-agent-viewer|); on a task it
-jumps to the code anchor the task was written at. `s` sends, `S` flushes every queued question
+`<CR>` on an agent opens it in a viewer float (see |ask-agent-viewer|). On a task it
+follows the source of that task: work another tool dispatched (todo2, a plugin over
+the bridge) jumps to the code anchor it was filed at, because that is where the task
+lives; a turn of your own opens the agent instead, since it lives in the agent's
+transcript and the anchor is only where your cursor happened to be. `o` jumps to
+the anchor of any row that has one (the row shows it as `file.lua:42`; an anchor
+whose buffer was wiped or whose buffer number now belongs to another file is
+reopened from its path). `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
 the whole worktree for an agent), `y` copies the task text, `f` toggles "only

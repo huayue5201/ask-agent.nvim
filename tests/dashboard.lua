@@ -152,7 +152,66 @@ for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
 end
 assert(tagged and tagged:find("[t42]", 1, true), "task row carries the todo2 id: " .. tostring(tagged))
 
--- long task lists collapse to a slice: five rows plus "… N older tasks" (8 here)
+-- a row only advertises the place it can jump to when it has one
+local queued_row
+for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	if l:find("queued question", 1, true) then
+		queued_row = l
+	end
+end
+assert(queued_row and queued_row:find("x.lua:1", 1, true), "queued row shows its anchor: " .. tostring(queued_row))
+assert(not tagged:find("%.lua:%d"), "a task without an anchor shows no place")
+
+-- <CR> follows the source of the row: work another tool dispatched jumps to the
+-- code it was filed at, a plain turn of yours opens the agent, and `o` jumps
+-- from any row that has an anchor
+local jumps, shown = {}, nil
+local real_view = view.open
+view.open = function(target)
+	shown = target
+	return true
+end
+dashboard.open({
+	goto_anchor = function(a)
+		jumps[#jumps + 1] = a
+		return true
+	end,
+}, { width = 50 })
+vim.wait(20)
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.api.nvim_feedkeys("\r", "x", false)
+vim.wait(20)
+assert(#jumps == 1 and jumps[1].line == 2, "a dispatched task jumps to its anchor")
+assert(shown == nil, "…and does not open the agent")
+state.dispatch("fake", "b", "talk about the design", {
+	anchor = { buf = vim.api.nvim_get_current_buf(), line = 3 },
+})
+dashboard.open({
+	goto_anchor = function(a)
+		jumps[#jumps + 1] = a
+		return true
+	end,
+}, { width = 50 })
+vim.wait(20)
+local turn_row
+for i, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+	if l:find("talk about the design", 1, true) then
+		turn_row = i
+	end
+end
+assert(turn_row, "the plain turn is listed")
+vim.api.nvim_win_set_cursor(0, { turn_row, 0 })
+vim.api.nvim_feedkeys("\r", "x", false)
+vim.wait(20)
+assert(#jumps == 1, "a turn of your own does not jump — it lives in the agent")
+assert(shown and shown.id == "b", "…it opens that agent's viewer instead")
+vim.api.nvim_win_set_cursor(0, { turn_row, 0 })
+vim.api.nvim_feedkeys("o", "x", false)
+vim.wait(20)
+assert(#jumps == 2 and jumps[2].line == 3, "o jumps to the anchor of a turn")
+view.open = real_view
+
+-- long task lists collapse to a slice: five rows plus "… N older tasks" (9 here)
 for i = 1, 7 do
 	state.dispatch("fake", "b", "old job " .. i, {})
 end
@@ -162,7 +221,7 @@ local more_row
 for i, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
 	if l:match("older task") then
 		more_row = i
-		assert(l:match("… 3 older tasks"), "slices the list to task_limit: " .. l)
+		assert(l:match("… 4 older tasks"), "slices the list to task_limit: " .. l)
 	end
 end
 assert(more_row, "long task lists get an older-tasks row")
@@ -329,5 +388,40 @@ vim.wait(30)
 assert(#vim.api.nvim_tabpage_list_wins(0) == 1, "sidebar closed")
 state.refresh()
 vim.wait(20)
+
+-- an anchor whose buffer number was recycled (or whose buffer is gone) still
+-- opens the file it names, instead of failing on the stale buffer id
+local context = require("ask_agent.context")
+local stale = "/tmp/ask-agent-stale-anchor.lua"
+vim.fn.writefile({ "one", "two", "three" }, stale)
+local stale_buf = vim.fn.bufadd(stale)
+vim.fn.bufload(stale_buf)
+local stale_anchor = {
+	buf = stale_buf,
+	bufname = vim.api.nvim_buf_get_name(stale_buf),
+	path = stale,
+	line = 3,
+	col = 1,
+}
+local stale_jump, stale_err = context.jump_to(stale_anchor)
+assert(stale_jump, "the live buffer jumps: " .. tostring(stale_err))
+vim.api.nvim_buf_delete(stale_buf, { force = true })
+local ok, err = context.open(stale_anchor)
+assert(ok, "a dead buffer falls back to path:line: " .. tostring(err))
+assert(
+	vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p") == vim.fn.resolve(vim.fn.fnamemodify(stale, ":p")),
+	"the file was opened: " .. vim.api.nvim_buf_get_name(0)
+)
+assert(vim.api.nvim_win_get_cursor(0)[1] == 3, "the fallback goes to the anchor line")
+
+-- the same guard catches a buffer number that now belongs to another file
+local other = "/tmp/ask-agent-other-anchor.lua"
+vim.fn.writefile({ "x" }, other)
+vim.cmd.edit(vim.fn.fnameescape(other))
+local reused = vim.api.nvim_get_current_buf()
+local reused_ok = context.jump_to({ buf = reused, bufname = "/nowhere/other.lua", line = 1 })
+assert(not reused_ok, "a recycled buffer number is not trusted")
+vim.fn.delete(stale)
+vim.fn.delete(other)
 
 print("DASHBOARD OK")
