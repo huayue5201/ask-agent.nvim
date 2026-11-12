@@ -1,11 +1,11 @@
 -- lua/ask_agent/views/rex.lua
 ---@brief Viewer provider for agents running in a Rex block.
 --
--- Rex has no attach command and its data connection is one-way, so the viewer
--- is a small helper (bin/rex-view.py): it paints the block's screen with
--- `rex capture --format=vt`, then follows the block's data stream and writes
--- the live bytes to the terminal buffer. Input is never forwarded — the float
--- is read-only by contract, type in Rex itself.
+-- Rex has no attach command, so the viewer is a mirror: bin/rex-view.py asks
+-- rex for the block's screen as VT text a few dozen times a second and repaints
+-- whole frames, and it forwards typed keys with
+-- `com.superlogical.terminal.write`. Frames (instead of a spliced byte stream)
+-- keep the picture correct even when the float and the block differ in size.
 
 local registry = require("ask_agent.views")
 
@@ -30,11 +30,10 @@ end
 registry.register({
 	id = "rex",
 	priority = 20,
-	readonly_only = true,
 	can = function(target)
 		return type(target.rex) == "table" and target.rex.block ~= nil
 	end,
-	cmd = function(target, _)
+	cmd = function(target, opts)
 		if vim.fn.executable("rex") ~= 1 then
 			return nil, "rex is not installed"
 		end
@@ -54,7 +53,10 @@ registry.register({
 		else
 			return nil, "the rex target has a block but no session"
 		end
-		local spec = { cmd = cmd, note = "Rex viewers are read-only — type in Rex" }
+		if opts and opts.readonly then
+			vim.list_extend(cmd, { "--readonly" })
+		end
+		local spec = { cmd = cmd, note = "Rex mirror — keys go to the agent" }
 
 		-- match the float to the block so VT coordinates line up
 		local size = first_line({ "rex", "block", "call", "-b", tostring(block), "size" }, 800)

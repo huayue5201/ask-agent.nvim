@@ -62,6 +62,7 @@ assert(#vim.api.nvim_list_wins() == before + 1, "one float window")
 assert(vim.bo.filetype == "terminal", "terminal buffer in the float")
 assert(vim.api.nvim_win_get_config(0).relative == "editor", "float is a floating window")
 assert(vim.fn.maparg("q", "n", false, true).buffer == 1, "q closes the viewer")
+assert(vim.fn.maparg("<C-q>", "t", false, true).buffer == 1, "<C-q> leaves terminal mode and closes")
 assert(vim.fn.maparg("i", "n", false, true).buffer == 1, "i starts typing")
 vim.wait(120)
 local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
@@ -73,11 +74,9 @@ assert(
 	vim.api.nvim_get_mode().mode:match("t"),
 	"writable viewer starts in terminal mode: " .. vim.api.nvim_get_mode().mode
 )
-vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
-vim.wait(60)
-vim.api.nvim_feedkeys("q", "x", false)
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-q>", true, false, true), "x", false)
 vim.wait(80)
-assert(#vim.api.nvim_list_wins() == before, "q closed the float")
+assert(#vim.api.nvim_list_wins() == before, "<C-q> closed the float")
 assert(vim.fn.jobwait({}, 0), "no job leak check")
 
 -- read-only: no insert keymap, and the provider sees readonly
@@ -185,7 +184,8 @@ local takeover = herdr_provider.cmd({ herdr = { id = "w", takeover = true } }, {
 assert(vim.deep_equal(takeover.cmd, { "herdr", "agent", "attach", "w", "--takeover" }), "takeover argv")
 vim.system = real_system
 
--- rex provider: read-only by contract, needs a session, sizes the float to the block
+-- rex provider: a writable mirror (keys are forwarded), needs a session, sizes
+-- the float to the block
 local rex = require("ask_agent.views.rex")
 local rex_provider
 for _, p in ipairs(view.list()) do
@@ -193,8 +193,12 @@ for _, p in ipairs(view.list()) do
 		rex_provider = p
 	end
 end
-assert(rex_provider and rex_provider.readonly_only, "rex viewer is read-only")
+assert(rex_provider and not rex_provider.readonly_only, "rex viewer forwards keys")
 assert(rex_provider.can({ rex = { block = "b", session = "s" } }), "rex handles block targets")
+local rspec = rex_provider.cmd({ rex = { block = "b", session = "s" } }, {})
+assert(rspec and rspec.cmd[#rspec.cmd] == "s", "rex argv carries the session: " .. vim.inspect(rspec and rspec.cmd))
+local rro = rex_provider.cmd({ rex = { block = "b", session = "s" } }, { readonly = true })
+assert(rro and rro.cmd[#rro.cmd] == "--readonly", "readonly reaches the helper")
 local rok, rerr = rex_provider.cmd({ rex = { block = "b" } }, {})
 assert(not rok and rerr:match("no session"), "rex needs a session: " .. tostring(rerr))
 

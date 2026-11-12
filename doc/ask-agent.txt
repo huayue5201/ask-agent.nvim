@@ -564,20 +564,25 @@ first matching provider (highest `priority`) handles the target. rex
 (`target.rex = { session, block }`), tmux (`target.pane`) and herdr
 (`target.herdr = { id }`) ship built in, and |health| lists them.
 
-Read-only has three layers. The float opens in normal mode, so no key — `q`
-included — reaches the agent until you press `i`. `view.readonly = true` refuses
-`i` and passes `-r` to tmux. Rex viewers are read-only regardless, because the
-Rex data stream has no input path; the float says so and you type in Rex.
+The float opens in terminal mode, like |:terminal|: open it and type. `<C-q>`
+closes the float and leaves the agent running, `<Esc>` belongs to the agent, and
+`<C-\><C-n>` drops into normal mode to copy text. `view.readonly = true` makes a
+watch-only float: tmux gets `-r`, the rex mirror drops stdin, herdr keeps its
+non-takeover display.
 
 tmux is attached with `-f ignore-size` and the float is sized to the session's
 grid (window rows plus the status line), so viewing never reflows the panes
 somebody else is looking at. A viewer is a second client, not a mirror: a
 full-screen TUI may still repaint when the screen is too small for the session,
-and `destroy-unattached` can end a tmux session when its last client leaves. The rex viewer paints `rex capture` first and then
-streams live VT bytes, so output in the few milliseconds between those calls can
-be missed until the agent redraws. tmux and herdr need only their own binary;
-the rex viewer runs `bin/rex-view.py` with `python3` (override with
-`vim.g.ask_agent_python`).
+and `destroy-unattached` can end a tmux session when its last client leaves.
+
+Rex has no attach, so that viewer mirrors instead: |bin/rex-view.py| asks rex for
+the block's screen as VT text about twelve times a second, repaints whole frames
+and forwards typed keys with `com.superlogical.terminal.write`. Whole frames keep
+the picture correct even when the float and the block disagree about size; the
+trade-off is up to ~80 ms between a keypress and its echo. tmux and herdr need
+only their own binary; the rex mirror runs `bin/rex-view.py` with `python3`
+(override with `vim.g.ask_agent_python`).
 
 ==============================================================================
 12. BATCH QUESTIONS                                         *ask-agent-batch*

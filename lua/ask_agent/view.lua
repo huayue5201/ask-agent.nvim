@@ -141,7 +141,7 @@ function M.open(target, opts)
 		title = (" %s · %s — %s "):format(
 			label(target),
 			p.id,
-			readonly and "read only · q closes" or "i to type · q closes"
+			readonly and "read only · <C-q> closes" or "<C-q> closes · <Esc> goes to the agent"
 		),
 		title_pos = "center",
 		zindex = 60,
@@ -162,6 +162,9 @@ function M.open(target, opts)
 	vim.bo[buf].filetype = "terminal"
 	active[win] = { job = job, readonly = readonly, id = p.id }
 
+	vim.keymap.set({ "n", "t" }, "<C-q>", function()
+		M.close(win)
+	end, { buffer = buf, desc = "Close the viewer (the agent keeps running)" })
 	vim.keymap.set("n", "q", function()
 		M.close(win)
 	end, { buffer = buf, desc = "Close the viewer (the agent keeps running)" })
@@ -204,14 +207,15 @@ function M.open(target, opts)
 		end,
 	})
 
-	-- `jobstart` puts a visible terminal into terminal mode on its own. Leave it
-	-- on the next tick, so the float opens in normal mode: `q` closes it and
-	-- `i` opts into typing (auto-typing would swallow <Esc>, which agents use to
-	-- interrupt a turn).
+	-- Open in terminal mode like sidekick's float: you land in the agent and can
+	-- type straight away. <Esc> belongs to the agent (interrupt), so leaving
+	-- means <C-q> (or <C-\><C-n> then q).
 	vim.schedule(function()
 		if vim.api.nvim_win_is_valid(win) then
 			vim.api.nvim_set_current_win(win)
-			vim.cmd("stopinsert")
+			if not readonly then
+				vim.cmd("startinsert")
+			end
 		end
 	end)
 	if block_w and block_w > width then

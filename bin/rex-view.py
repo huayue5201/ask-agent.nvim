@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""Show a Rex terminal block inside a plain terminal.
+"""Mirror a Rex terminal block inside a plain terminal (and type into it).
 
-Rex has no "attach" for an existing block, so this is a viewer, not a second
-client: it paints the block's current screen with `rex capture --format=vt`,
-then follows the block's data stream (rex.data.terminal.v1) and writes the live
-bytes to stdout. Input is never forwarded — type in Rex itself.
-
-The data stream starts with Ghostty's binary snapshot; we skip it by walking the
-snapshot's record framing (magic + tag/len/crc records) up to FINISH, then pass
-every following byte through. Skipping the snapshot keeps this helper free of a
-full terminal-state decoder, at the cost of a few milliseconds of output
-between the capture and the data connection.
+Rex has no attach command, so this is a mirror rather than a second client: it
+asks rex for the block's screen as VT text every few dozen milliseconds and
+repaints, and it forwards whatever you type with `com.superlogical.terminal.write`.
+Repainting whole frames (instead of splicing a live byte stream) keeps the
+picture honest even when the window and the block disagree about size.
 
 Only Python's standard library is used.
 """
@@ -25,16 +20,10 @@ import socket
 import struct
 import subprocess
 import sys
-import threading
+import termios
 import time
+import tty
 import urllib.parse
-
-MAGIC = b"GHOSTSNP"
-FINISH_TAG = 6
-
-
-def log(msg):
-    print("[ask-agent rex view] " + msg, file=sys.stderr, flush=True)
 
 
 def rex_server():
@@ -138,93 +127,44 @@ class WS:
             return opcode, payload
 
 
-class SnapshotSkipper:
-    """Incremental: drop the Ghostty snapshot prefix, pass everything after it."""
 
-    def __init__(self):
-        self.buf = b""
-        self.envelope = False
-        self.done = False
-
-    def feed(self, data):
-        if self.done:
-            return data
-        self.buf += data
-        while not self.done:
-            if not self.envelope:
-                if len(self.buf) < 10:
-                    break
-                if self.buf[:8] != MAGIC:
-                    log("stream does not start with a Ghostty snapshot — passing through")
-                    self.done = True
-                    break
-                self.buf = self.buf[10:]
-                self.envelope = True
-                continue
-            if len(self.buf) < 10:
-                break
-            tag, length, _crc = struct.unpack("<HII", self.buf[:10])
-            if tag == FINISH_TAG:
-                self.buf = self.buf[10:]
-                self.done = True
-                break
-            if len(self.buf) < 10 + length:
-                break
-            self.buf = self.buf[10 + length :]
-        if self.done:
-            out, self.buf = self.buf, b""
-            return out
-        return b""
+CLEAR = b"\x1b[H\x1b[2J\x1b[3J"
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
     ap.add_argument("--block", required=True)
-    ap.add_argument("--capture", default="1")
+    ap.add_argument("--readonly", action="store_true")
+    ap.add_argument("--interval", type=float, default=0.08)
     args = ap.parse_args()
 
-    if args.capture == "1":
-        try:
-            cap = subprocess.run(
-                ["rex", "capture", "-s", args.session, "-b", args.block, "--format=vt"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-            if cap.returncode == 0 and cap.stdout:
-                sys.stdout.buffer.write(cap.stdout)
-                sys.stdout.buffer.flush()
-        except Exception as e:  # a failed capture still leaves the live stream
-            log(f"capture failed: {e}")
-
     ctl = WS("/api/control", "rex.control.v1")
-    rev = 10
     ctl.send(
         1,
         json.dumps(
             {
                 "type": "hello",
-                "api_revision": rev,
+                "api_revision": 10,
                 "client": {"kind": "cli", "name": "ask-agent.nvim", "version": "view"},
             }
         ).encode(),
     )
     while True:
         op, payload = ctl.recv()
-        if op not in (1, 0):  # text, or a continuation of a fragmented text message
+        if op not in (1, 0):
             continue
         msg = json.loads(payload)
         if msg.get("type") == "welcome":
-            rev = msg.get("api_revision", rev)
             break
 
-    queue = []
+    seq = 0
 
     def call(method, body):
-        req_id = str(len(queue) + 1) + "-" + str(int(time.time() * 1000))
+        nonlocal seq
+        seq += 1
+        req_id = str(seq)
         ctl.send(1, json.dumps({"type": "request", "id": req_id, "method": method, "payload": body}).encode())
-        queue.append(req_id)
         while True:
             op, payload = ctl.recv()
             if op not in (1, 0):
@@ -232,7 +172,6 @@ def main():
             msg = json.loads(payload)
             if msg.get("type") != "response" or msg.get("id") != req_id:
                 continue
-            queue.remove(req_id)
             if "error" in msg:
                 err = msg["error"]
                 return None, f"{err.get('code', 'error')}: {err.get('message', '')}"
@@ -241,60 +180,72 @@ def main():
     _, err = call("session.attach", {"session_id": args.session})
     if err:
         raise SystemExit("session.attach: " + err)
-    ticket, err = call(
-        "data.connect",
-        {
-            "session_id": args.session,
-            "block_id": args.block,
-            "data_ref_id": "terminal",
-            "subprotocol": "rex.data.terminal.v1",
-        },
-    )
-    if err:
-        raise SystemExit("data.connect: " + err)
 
-    data = WS("/api/data", "rex.data.terminal.v1")
-    data.send(2, b"\x01" + base64.urlsafe_b64decode(ticket["ticket"] + "=" * (-len(ticket["ticket"]) % 4)))
+    block_args = {"session_id": args.session, "block_id": args.block}
 
-    op, hello = data.recv()
-    if not hello or hello[0] != 0x81:
-        raise SystemExit("data connection rejected: " + (hello[1:].decode(errors="replace") or "unknown reason"))
+    def write(data):
+        if not data:
+            return
+        text = data.decode("utf-8", "replace")
+        _, err = call(
+            "com.superlogical.terminal.write",
+            {"session_id": args.session, "block_id": args.block, "args": {"data": text}},
+        )
+        if err:
+            print("[ask-agent rex view] write: " + err, file=sys.stderr, flush=True)
 
-    skip = SnapshotSkipper()
     out = sys.stdout.buffer
-    while True:
-        # The control connection must stay healthy (pings, events) for as long
-        # as the data stream lives, so both sockets are serviced here.
-        if len(data.buf) < 2:
-            ready, _, _ = select.select([data.sock, ctl.sock], [], [], 1.0)
-            if ctl.sock in ready:
-                try:
-                    ctl.recv()
-                except (OSError, EOFError):
-                    pass
-            if data.sock not in ready:
-                continue
-        op, payload = data.recv()
-        if op == 0x8:  # close
-            break
-        if op not in (0x0, 0x2):  # binary, or a continuation of a fragmented message
-            continue
-        live = skip.feed(payload)
-        if os.environ.get("REXVIEW_DEBUG"):
-            log(f"frame op={op} len={len(payload)} live={len(live)}")
-        if live:
-            out.write(live)
-            out.flush()
+    painted = None
+
+    def paint():
+        nonlocal painted
+        payload, err = call(
+            "com.superlogical.terminal.format",
+            {"session_id": args.session, "block_id": args.block, "args": {"format": "vt"}},
+        )
+        if err or not payload:
+            return
+        content = payload.get("content") or ""
+        if content == painted:
+            return
+        painted = content
+        frame = CLEAR + content.rstrip("\r\n").replace("\r\n", "\r\n").encode("utf-8", "replace")
+        out.write(frame + b"\x1b[?25h")
+        out.flush()
+
+    paint()
+
+    stdin = sys.stdin.fileno()
+    interactive = not args.readonly and os.isatty(stdin)
+    if interactive:
+        saved = termios.tcgetattr(stdin)
+        tty.setraw(stdin)
+
+    try:
+        next_paint = time.monotonic() + args.interval
+        while True:
+            timeout = max(0.0, next_paint - time.monotonic())
+            ready, _, _ = select.select([stdin], [], [], timeout)
+            if ready:
+                data = os.read(stdin, 4096)
+                if not data:
+                    break
+                write(data)
+                next_paint = time.monotonic() + args.interval
+            if time.monotonic() >= next_paint:
+                paint()
+                next_paint = time.monotonic() + args.interval
+    finally:
+        if interactive:
+            termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (BrokenPipeError, KeyboardInterrupt):
-        pass
-    except EOFError:
+    except (BrokenPipeError, KeyboardInterrupt, EOFError):
         pass
     except SystemExit as e:
         if e.code not in (0, None):
-            log(str(e))
+            print("[ask-agent rex view] " + str(e), file=sys.stderr, flush=True)
             sys.exit(1)

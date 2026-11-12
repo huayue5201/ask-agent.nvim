@@ -50,9 +50,9 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 - **View an agent without leaving Neovim** — `<CR>` on an agent in the sidebar opens
   a float that shows the *same* agent, live, in the terminal you already run it in
   (rex, tmux, herdr). A second display, not a copy: the agent keeps its session,
-  pane and process, and closing the float only detaches. The float opens in normal
-  mode, so nothing you type reaches the agent until you press `i`; rex viewers are
-  read-only by design (type in Rex).
+  pane and process, and closing the float only detaches. The float opens in
+  terminal mode, so you type into the agent immediately; `<C-q>` closes it and
+  `<Esc>` still goes to the agent (that is how you interrupt a turn).
 - **Status another plugin can act on** — `ask.agents()`, `ask.on("done"|"blocked")`,
   `ask.wait()` and a `correlation` tag that travels with a send and comes back with the
   event, so a task list can own the work and the agent only owns the conversation.
@@ -243,8 +243,8 @@ require("ask_agent").setup({
   review = { backend = "auto", include_unsaved = true },
 
   -- `:AskAgentDashboard` <CR> opens the agent in a float; readonly refuses input
-  -- even after `i` (tmux -r; rex viewers are always read-only), width/height are
-  -- fractions of the editor.
+  -- (tmux -r, the rex mirror drops stdin), width/height are fractions of the
+  -- editor and are ignored when the viewer knows the agent's own grid.
   view = { readonly = false, width = 0.8, height = 0.75 },
 
   -- delivered questions, newest 200, with their anchors; `false` records nothing.
@@ -807,21 +807,25 @@ A target matches the first provider (by `priority`) whose `can(target)` returns
 true: `target.rex = { session, block }`, `target.pane`, and `target.herdr = { id }`
 are what the built-ins look for.
 
-Read-only has three layers. The float opens in normal mode, so keys (including
-`q`) do nothing until you press `i` — that is the real safety, since an agent TUI
-reacts to stray keys. `view.readonly = true` refuses `i` and passes `-r` to tmux.
-And rex viewers are read-only no matter what: the Rex data stream has no input
-path, so the float says "read only" and you type in Rex itself.
+The float opens in terminal mode, exactly like `:terminal`: open it and type.
+`<C-q>` closes the float (the agent keeps running), `<Esc>` goes to the agent,
+and `<C-\><C-n>` drops into normal mode if you want to copy text. Set
+`view.readonly = true` when you only want to watch: tmux gets `-r`, the rex
+mirror ignores stdin, and herdr keeps only its non-takeover display.
 
 tmux is attached with `-f ignore-size` and the float is sized to the session's
 own grid (window rows plus the status line), so viewing an agent never reflows
 the panes somebody else is looking at. Limits worth knowing: this is a second
 client, not a mirror, so a full-screen TUI may still repaint when the float is
 clamped to a smaller screen than the session; a multiplexer can be configured
-(`destroy-unattached`) to end a session when its last client leaves; and the rex
-viewer paints the current screen with `rex capture` and then streams live VT
-bytes, so output produced during the few milliseconds between those two calls can
-be missed until the agent redraws.
+(`destroy-unattached`) to end a session when its last client leaves.
+
+Rex has no attach at all, so that viewer is a mirror: `bin/rex-view.py` asks rex
+for the block's screen as VT text about twelve times a second, repaints whole
+frames, and forwards what you type with `com.superlogical.terminal.write`. Frames
+rather than a spliced byte stream, so the picture stays right even if the float
+and the block disagree about size; the trade-off is up to ~80 ms of latency
+between a keypress and its echo.
 
 ## Batch questions
 
