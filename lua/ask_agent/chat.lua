@@ -408,11 +408,38 @@ function M.names()
 					names[#names + 1] = mod.label
 				end
 				for _, n in ipairs(names) do
-					if type(n) == "string" and n ~= "" then
+					-- only mention-safe names: `@pid 30832` cannot be typed
+					if type(n) == "string" and n ~= "" and n:find("^[%w_%-%.]+$") then
 						local name = n:lower()
 						out[name] = out[name] or {}
 						out[name][#out[name] + 1] = { target = t, backend = mod, key = key }
 					end
+				end
+			end
+		end
+	end
+	-- Several agents can share a name (three pi processes in the same directory).
+	-- One name reaching several agents is "ambiguous" — useless advice. Give the
+	-- extras a stable suffix instead, so `@data_pulse-2` addresses one of them.
+	for name, hits in pairs(out) do
+		local seen, uniq = {}, {}
+		for _, h in ipairs(hits) do
+			if not seen[h.key] then
+				seen[h.key] = true
+				uniq[#uniq + 1] = h
+			end
+		end
+		table.sort(uniq, function(a, b)
+			return a.key < b.key
+		end)
+		out[name] = uniq
+		if #uniq > 1 then
+			-- `@dup` stays ambiguous (routing to a guess would be worse), but every
+			-- agent gets a name of its own: dup-1, dup-2, …
+			for i = 1, #uniq do
+				local alias = ("%s-%d"):format(name, i)
+				if not out[alias] then
+					out[alias] = { uniq[i] }
 				end
 			end
 		end
@@ -441,9 +468,12 @@ function M.resolve(name)
 	if #uniq == 1 then
 		return uniq[1], {}
 	end
+	table.sort(uniq, function(a, b)
+		return a.key < b.key
+	end)
 	local candidates = {}
-	for _, h in ipairs(uniq) do
-		candidates[#candidates + 1] = h.key
+	for i = 1, #uniq do
+		candidates[#candidates + 1] = ("%s-%d"):format(wanted, i)
 	end
 	return nil, candidates
 end
@@ -452,29 +482,42 @@ end
 ---input can complete `@` from it). Busy means "has a chat task in flight".
 ---@return { name: string, key: string, backend: string, label: string, busy: boolean, state: string }[]
 function M.roster()
-	local seen, out = {}, {}
-	for _, info in ipairs(backends.list()) do
-		local mod = backends.get(info.id)
-		if mod and info.available then
-			local ok, targets = pcall(mod.targets)
-			targets = ok and targets or {}
-			for _, t in ipairs(targets) do
-				local key = key_of(mod.id, t.id)
-				if not seen[key] then
-					seen[key] = true
-					target_cache[key] = t
-					local rec = state.get(key)
-					out[#out + 1] = {
-						name = aliases.get(t, mod.id) or aliases.default_name(t),
-						key = key,
-						backend = mod.id,
-						label = t.label or mod.label or mod.id,
-						busy = running[key] ~= nil,
-						state = rec and rec.state or "unknown",
-					}
+	local by_key = {}
+	for name, hits in pairs(M.names()) do
+		if #hits == 1 then
+			local h = hits[1]
+			-- the readable name wins: an alias or label over the raw id, and the
+			-- plain name over a "-2" suffix
+			local function rank(n)
+				local score = #n * 0.01
+				if n:find("%-%d+$") then
+					score = score + 10
 				end
+				if n == tostring(h.target.id):lower() then
+					score = score + 100
+				end
+				if n == h.backend.id:lower() then
+					score = score + 5
+				end
+				return score
+			end
+			local cur = by_key[h.key]
+			if cur == nil or rank(name) < rank(cur.name) then
+				local rec = state.get(h.key)
+				by_key[h.key] = {
+					name = name,
+					key = h.key,
+					backend = h.backend.id,
+					label = h.target.label or h.backend.label or h.backend.id,
+					busy = running[h.key] ~= nil,
+					state = rec and rec.state or "unknown",
+				}
 			end
 		end
+	end
+	local out = {}
+	for _, a in pairs(by_key) do
+		out[#out + 1] = a
 	end
 	table.sort(out, function(a, b)
 		return a.name:lower() < b.name:lower()
@@ -664,6 +707,18 @@ local finish
 ---@param entry table
 local function dispatch(thread, match, text, entry)
 	local key = match.key
+	-- an agent that exited is still in the registry for a moment; saying so beats
+	-- spinning a "running" bubble that will never get an answer
+	local probe = match.backend.probe and match.backend.probe(match.target)
+	if probe and probe.running == false then
+		append(thread, {
+			kind = "system",
+			author = "system",
+			text = ("could not send to %s: the agent is gone (%s)"):format(key, probe.detail or "not running"),
+			status = "error",
+		})
+		return
+	end
 	if running[key] then
 		pending[key] = pending[key] or {}
 		pending[key][#pending[key] + 1] = { thread = thread, text = text, entry = entry.id, target = match.target }
@@ -728,7 +783,9 @@ function M.post(text, opts)
 	end
 	for _, m in ipairs(mentions) do
 		if not m.match then
-			local hint = #m.candidates > 0 and ("ambiguous: " .. table.concat(m.candidates, ", ")) or "unknown"
+			local hint = #m.candidates > 0
+					and ("that name reaches several agents — use " .. table.concat(m.candidates, " or "))
+				or "no agent answers to that name"
 			append(thread, {
 				kind = "system",
 				author = "system",
@@ -806,6 +863,39 @@ function finish(key, status, text)
 end
 
 M.finish = finish
+
+---Give up on the tasks in flight (an agent that stopped answering): the running
+---table and the queue are cleared so the next mention goes out immediately.
+---@param thread string|nil only this thread's tasks (nil = all)
+---@return integer count
+function M.cancel(thread)
+	load()
+	if thread then
+		local t = M.get(thread)
+		thread = t and t.id or thread
+	end
+	local n = 0
+	for key, rec in pairs(running) do
+		if not thread or rec.thread == thread then
+			running[key] = nil
+			pending[key] = nil
+			n = n + 1
+		end
+	end
+	if n > 0 then
+		local t = M.get(thread or current_id)
+		if t then
+			append(t.id, {
+				kind = "system",
+				author = "system",
+				text = ("cancelled %d task(s)"):format(n),
+				status = "error",
+			})
+		end
+		changed()
+	end
+	return n
+end
 
 ---Follow the state layer: a target that finished its turn ends the chat task.
 function M.attach()

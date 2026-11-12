@@ -65,7 +65,7 @@ assert(e2.text == "@claude 把映射改成 J", "the log keeps what the human wro
 -- unknown and ambiguous mentions are reported, not silently dropped
 chat.post("@ghost hello")
 local last = chat.entries(tid)[#chat.entries(tid)]
-assert(last.kind == "system" and last.text:find("unknown", 1, true), "unknown target is reported")
+assert(last.kind == "system" and last.text:find("no agent answers", 1, true), "unknown target is reported")
 
 -- a busy target queues: same target twice is one running task plus a note
 local e3 = chat.post("@claude 顺便看看测试")
@@ -142,5 +142,67 @@ chat.post("first", { thread = tid })
 chat.post("second", { thread = "by-name" })
 assert(#chat.get(tid).entries == 2, "an id posts into the thread it names, got " .. #chat.get(tid).entries)
 assert(#chat.list() == 2, "no duplicate thread was created under the id, got " .. #chat.list())
+
+-- several agents sharing a name get stable suffixes instead of "ambiguous"
+backends.register({
+	id = "twin",
+	label = "Twin",
+	available = function()
+		return true
+	end,
+	targets = function()
+		return {
+			{ id = "a1", cwd = "/repo", label = "dup" },
+			{ id = "a2", cwd = "/repo", label = "dup" },
+		}
+	end,
+	probe = function()
+		return { running = false, state = "idle" }
+	end,
+	send = function()
+		return true
+	end,
+})
+local names = chat.names()
+assert(names["dup"] and #names["dup"] == 2, "a shared name stays ambiguous")
+assert(names["dup-2"] and #names["dup-2"] == 1, "the second agent is addressable as dup-2")
+local seen, roster = {}, chat.roster()
+for _, a in ipairs(roster) do
+	assert(not seen[a.name], "roster names are unique: " .. a.name)
+	seen[a.name] = true
+end
+assert(seen["dup-1"] and seen["dup-2"], "both twins are addressable in the roster")
+local _, cands = chat.resolve("dup")
+assert(
+	#cands == 2 and cands[1] == "dup-1" and cands[2] == "dup-2",
+	"the hint names both aliases, got " .. vim.inspect(cands)
+)
+
+-- an agent that exited is reported, not queued behind a bubble that never fills
+backends.register({
+	id = "ghostly",
+	label = "Ghostly",
+	available = function()
+		return true
+	end,
+	targets = function()
+		return { { id = "g1", cwd = "/repo", label = "gone-agent" } }
+	end,
+	probe = function()
+		return { running = false, detail = "process exited" }
+	end,
+	send = function()
+		error("must not send to a gone agent")
+	end,
+})
+chat.post("@gone-agent hello", { thread = "main" })
+local gone_last = chat.entries(chat.thread("main"))
+gone_last = gone_last[#gone_last]
+assert(gone_last.status == "error" and gone_last.text:find("the agent is gone", 1, true), "gone agent is reported")
+assert(chat.running()["ghostly:g1"] == nil, "nothing is left running")
+
+-- cancel gives up on tasks that never settle
+chat.cancel("main")
+assert(vim.tbl_count(chat.running()) == 0, "cancel clears the running table")
 
 print("CHAT OK")

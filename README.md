@@ -908,7 +908,9 @@ said.
 The window is a float, not a split: bubbles on top, an input bar at the bottom
 (the panel starts with the cursor in it), and the member list — who you can
 address — in the footer next to the running counters. Typing `@` completes from
-that list, so you never have to remember which agents are up.
+that list, so you never have to remember which agents are up; when two agents
+share a name, they are listed as `name-1`, `name-2` and `@name` alone is refused
+rather than delivered to a guess.
 
 | key | where | does |
 | --- | --- | --- |
@@ -918,7 +920,10 @@ that list, so you never have to remember which agents are up.
 | `<C-j>` | input | newline in the message |
 | `<Esc>` | input | back to the transcript, nothing sent |
 | `gp` / `gu` | transcript | pin / unpin a fact every agent sees |
+| `gt` | transcript | switch thread |
+| `gc` | transcript | give up on the tasks in flight |
 | `gr` | transcript | repaint |
+| `?` | transcript | the keys, in one line |
 | `q` / `<Esc>` | transcript | close |
 
 Three rules keep a group chat from turning into a token fire hose:

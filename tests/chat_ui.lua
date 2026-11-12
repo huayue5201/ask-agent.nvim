@@ -27,6 +27,7 @@ backends.register({
 	end,
 })
 
+-- an empty thread says what to do instead of showing a blank box
 local win = ui.open({ thread = "ui", width = 44 })
 local buf = vim.api.nvim_win_get_buf(win)
 assert(vim.bo[buf].filetype == "ask-agent-chat", "filetype is set")
@@ -36,6 +37,13 @@ assert(vim.api.nvim_win_get_width(win) == 44, "requested width")
 local iw = ui.input_win()
 assert(iw and vim.api.nvim_win_is_valid(iw) and iw ~= win, "the input bar is its own float")
 assert(vim.api.nvim_win_get_config(iw).row > vim.api.nvim_win_get_config(win).row, "input bar sits below")
+
+local function text0()
+	return table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false), "\n")
+end
+assert(text0():find("no messages yet", 1, true), "empty state explains itself: " .. text0())
+local flat = text0():gsub("%s+", " ")
+assert(flat:find("@ addresses an agent", 1, true), "empty state mentions mentions: " .. flat)
 
 chat.post("hello there", { thread = "ui" })
 vim.wait(220)
@@ -96,5 +104,12 @@ assert(ikeys["<C-S>"] or ikeys["<C-s>"], "the input bar sends with <C-s>")
 ui.close()
 assert(not vim.api.nvim_win_is_valid(win), "closes")
 assert(not vim.api.nvim_win_is_valid(iw), "closes the input bar too")
+
+-- a wide panel keeps the member list and the key hint side by side
+ui.close()
+local wide = ui.open({ thread = "ui", width = 100 })
+local wf = vim.inspect(vim.api.nvim_win_get_config(wide).footer)
+assert(wf:find("⏎ send", 1, true) and wf:find("claude", 1, true), "wide footer: " .. wf)
+ui.close()
 
 print("CHATUI OK")

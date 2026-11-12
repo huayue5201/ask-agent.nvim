@@ -157,6 +157,18 @@ local function build()
 	end
 
 	local pins = t.pins or {}
+	if #pins == 0 and #t.entries == 0 then
+		push(" no messages yet", HL.system)
+		push("", nil)
+		for _, l in
+			ipairs(
+				fit("type in the bar below — @ addresses an agent, " .. "gp pins a fact every agent sees", width, " ")
+			)
+		do
+			push(l, "Comment")
+		end
+		return { lines = lines, marks = marks }
+	end
 	if #pins > 0 then
 		push(" facts", HL.pin)
 		for _, p in ipairs(pins) do
@@ -211,15 +223,56 @@ local function at_bottom()
 	return vim.api.nvim_win_get_cursor(msg_win)[1] >= last - 1
 end
 
----The member list: who can be addressed, and who is busy right now.
+---A footer has one line and the members can be many: say who is addressable,
+---then trade names away (never the counters) until it fits the panel.
+---@param counts string[]
 ---@return string
-local function members()
-	local roster = chat.roster()
-	local bits = {}
-	for _, a in ipairs(roster) do
-		bits[#bits + 1] = a.name
+local function footer_text(counts)
+	local budget = math.max(20, panel_width() - 4)
+	local names = {}
+	for _, a in ipairs(chat.roster()) do
+		names[#names + 1] = a.name
 	end
-	return table.concat(bits, " ")
+	local keys = "⏎ send · q close"
+	local function compose(shown, extra, with_keys)
+		local bits = vim.deepcopy(counts)
+		local who = table.concat(shown, " ")
+		if extra > 0 then
+			who = (who == "" and "" or who .. " ") .. ("+%d"):format(extra)
+		end
+		if who ~= "" then
+			bits[#bits + 1] = who
+		end
+		if with_keys then
+			bits[#bits + 1] = keys
+		end
+		return table.concat(bits, " · ")
+	end
+	local function fits(text)
+		return vim.fn.strdisplaywidth(text) <= budget
+	end
+	-- names and the key hint, then names only, then just how many there are
+	for _, with_keys in ipairs({ true, false }) do
+		-- always keep one name: "+4" alone says nothing
+		for shown = #names, math.min(1, #names), -1 do
+			local cut = {}
+			for i = 1, shown do
+				cut[i] = names[i]
+			end
+			local text = compose(cut, #names - shown, with_keys)
+			if fits(text) then
+				return text
+			end
+		end
+	end
+	local many = ("%d agents"):format(#names)
+	local bits = vim.deepcopy(counts)
+	bits[#bits + 1] = many
+	local short = table.concat(bits, " · ")
+	if fits(short .. " · " .. keys) then
+		return short .. " · " .. keys
+	end
+	return short
 end
 
 local function render()
@@ -238,19 +291,14 @@ local function render()
 	if msg_win and vim.api.nvim_win_is_valid(msg_win) then
 		local running = vim.tbl_count(chat.running())
 		local pending = #chat.pending()
-		local bits = {}
+		local counts = {}
 		if running > 0 then
-			bits[#bits + 1] = ("◐ %d"):format(running)
+			counts[#counts + 1] = ("◐ %d"):format(running)
 		end
 		if pending > 0 then
-			bits[#bits + 1] = ("⏳ %d"):format(pending)
+			counts[#counts + 1] = ("⏳ %d"):format(pending)
 		end
-		local who = members()
-		if who ~= "" then
-			bits[#bits + 1] = "· " .. who
-		end
-		bits[#bits + 1] = "· <C-S> send · q close"
-		local footer = table.concat(bits, " ")
+		local footer = footer_text(counts)
 		local cfg = vim.api.nvim_win_get_config(msg_win)
 		cfg.relative, cfg.border, cfg.footer, cfg.footer_pos = "editor", "rounded", " " .. footer .. " ", "right"
 		vim.api.nvim_win_set_config(msg_win, cfg)
@@ -280,7 +328,8 @@ local function layout()
 	end
 	local w = panel_width()
 	local h = math.max(10, math.min(vim.o.lines - 6, math.floor(vim.o.lines * 0.72)))
-	local body = math.max(4, h - 4) -- transcript rows (input bar = 1 row + its borders, sharing one)
+	local input_rows = math.min(3, math.max(1, math.floor(h / 6)))
+	local body = math.max(4, h - input_rows - 4) -- transcript rows; both borders stay inside h
 	local row = math.max(0, math.floor((vim.o.lines - h) / 2))
 	local col = math.max(0, math.floor((vim.o.columns - w) / 2))
 	vim.api.nvim_win_set_config(msg_win, {
@@ -299,7 +348,7 @@ local function layout()
 		style = "minimal",
 		border = "rounded",
 		width = w,
-		height = 1,
+		height = input_rows,
 		row = row + body + 2,
 		col = col,
 		title = " message · @ to address ",
@@ -418,6 +467,40 @@ local function attach_transcript(b)
 			end
 		end)
 	end, o)
+	vim.keymap.set("n", "gt", function()
+		local items = {}
+		for _, t in ipairs(chat.list()) do
+			items[#items + 1] = { id = t.id, name = t.name, count = t.entries }
+		end
+		vim.ui.select(items, {
+			prompt = "Thread",
+			format_item = function(i)
+				return ("%s (%d)"):format(i.name, i.count)
+			end,
+		}, function(choice)
+			if not choice then
+				return
+			end
+			chat.select(choice.id)
+			thread_id = choice.id
+			layout()
+			render()
+		end)
+	end, vim.tbl_extend("force", o, { desc = "Chat: switch thread" }))
+	vim.keymap.set("n", "gc", function()
+		local n = chat.cancel(thread_id)
+		require("ask_agent.notify").notify(
+			("cancelled %d task(s)"):format(n),
+			n > 0 and vim.log.levels.WARN or vim.log.levels.INFO
+		)
+	end, vim.tbl_extend("force", o, { desc = "Chat: cancel the running tasks" }))
+	vim.keymap.set("n", "?", function()
+		require("ask_agent.notify").notify(
+			"⏎ write · @name address · gp/gu pin · gt thread · gc cancel · q close",
+			vim.log.levels.INFO,
+			{ title = "ask-agent chat" }
+		)
+	end, vim.tbl_extend("force", o, { desc = "Chat: keys" }))
 	vim.keymap.set("n", "gr", render, o)
 	vim.keymap.set("n", "q", M.close, o)
 	vim.keymap.set("n", "<Esc>", M.close, o)
@@ -505,6 +588,7 @@ function M.open(o)
 	})
 	vim.wo[msg_win].wrap, vim.wo[msg_win].number, vim.wo[msg_win].relativenumber = false, false, false
 	vim.wo[msg_win].signcolumn, vim.wo[msg_win].foldcolumn = "no", "0"
+	vim.wo[msg_win].cursorline = true
 	vim.wo[msg_win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder"
 
 	in_buf = vim.api.nvim_create_buf(false, true)
@@ -520,7 +604,9 @@ function M.open(o)
 		col = 0,
 	})
 	vim.wo[in_win].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder"
-	vim.wo[in_win].wrap = false
+	vim.wo[in_win].wrap = true
+	vim.wo[in_win].linebreak = true
+	vim.wo[in_win].list = false
 
 	attach_transcript(msg_buf)
 	attach_input(in_buf)

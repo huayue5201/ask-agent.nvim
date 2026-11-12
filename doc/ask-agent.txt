@@ -595,8 +595,15 @@ the input completes from that list.
   <C-j>          newline in the message
   <Esc>          input bar: back to the transcript, nothing is sent
   gp             pin a fact every agent sees; gu unpins            |gp| |gu|
+  gt             switch thread
+  gc             give up on the tasks in flight
   gr             repaint
+  ?              the keys, in one line
   q / <Esc>      close the panel
+
+Two agents in the same directory share a name, so they are listed as "name-1",
+"name-2"; a bare "name" that reaches several agents is refused (the error entry
+names the aliases to use) rather than delivered to a guess.
 
 One agent runs one chat task at a time: a second mention is queued and starts when
 the turn ends. Agents cannot mention each other, so routing only ever follows a
