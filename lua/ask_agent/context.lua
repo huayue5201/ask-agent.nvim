@@ -11,6 +11,27 @@
 
 local M = {}
 
+-- Directories review.lua extracts a git tree into (git.tempdir("ask-agent-tree")
+-- is `<tempname>-ask-agent-tree`). A file under one of them is real text, but it
+-- is a *copy at that revision*: writing to it changes nothing, and the file may
+-- not exist in the project at all.
+local COPY_DIR = { "%-ask%-agent%-tree$", "%-ask%-agent%-view$" }
+
+---@param path string
+---@return string|nil rel path inside the extracted tree, when `path` is a copy
+local function extracted(path)
+	local dir = vim.fn.fnamemodify(path, ":h"):gsub("/+$", "")
+	while dir ~= "" and dir ~= "/" do
+		for _, pattern in ipairs(COPY_DIR) do
+			if dir:match(pattern) then
+				return path:sub(#dir + 2)
+			end
+		end
+		dir = vim.fn.fnamemodify(dir, ":h"):gsub("/+$", "")
+	end
+	return nil
+end
+
 ---Capture the anchor. With visual=true it uses the current visual selection
 ---(reading getpos("v")/(".") live rather than relying on '< '>).
 ---@param visual boolean|nil
@@ -22,7 +43,11 @@ function M.capture(visual)
 	end
 	local cursor = vim.api.nvim_win_get_cursor(0)
 	local name = vim.api.nvim_buf_get_name(buf)
-	local path = name ~= "" and vim.fn.fnamemodify(name, ":p") or nil
+	-- A plugin buffer (`codediff://…`, `fugitive://…`) is not a path: feeding it
+	-- through fnamemodify turns it into a plausible-looking file that never
+	-- existed, so it travels as a name only.
+	local scheme = name:match("^(%a[%w+.-]*)://")
+	local path = scheme == nil and name ~= "" and vim.fn.fnamemodify(name, ":p") or nil
 	local a = {
 		cwd = vim.fn.getcwd(),
 		tab = vim.fn.tabpagenr(),
@@ -34,6 +59,13 @@ function M.capture(visual)
 		filetype = vim.bo[buf].filetype,
 		modified = vim.bo[buf].modified,
 	}
+	if scheme then
+		a.virtual = scheme
+	elseif path then
+		-- `snapshot` = the relative path inside the extracted tree, so a jump can
+		-- find the same file in the project instead of the throwaway copy.
+		a.snapshot = extracted(path)
+	end
 	if visual then
 		local s, e = vim.fn.getpos("v"), vim.fn.getpos(".")
 		local sl, el = math.min(s[2], e[2]), math.max(s[2], e[2])
@@ -53,7 +85,14 @@ end
 ---@param a table
 ---@return string
 function M.describe(a)
-	local bits = { a.path and ("%s:%d"):format(a.path, a.line) or "<no filename>" }
+	local bits = {
+		a.path and ("%s:%d"):format(a.path, a.line)
+			or (a.virtual and (a.bufname or (a.virtual .. "://")))
+			or "<no filename>",
+	}
+	if a.snapshot then
+		table.insert(bits, "diff snapshot")
+	end
 	if a.visual then
 		table.insert(bits, ("selection %d-%d"):format(a.visual.start_line, a.visual.end_line))
 	end
@@ -254,11 +293,24 @@ end
 ---@param a table anchor (needs `path` for the fallback)
 ---@return boolean ok, string|nil err
 function M.open(a)
+	if a and a.virtual then
+		return false, ("this anchor lives in a plugin buffer (%s://), which has no file to open"):format(a.virtual)
+	end
 	local ok, err = M.jump_to(a)
 	if ok then
 		return true, nil
 	end
 	local file = anchor_file(a)
+	-- A diff snapshot is a copy of the project at that revision. The copy is the
+	-- right thing to *read*, but the file the user means is in the project.
+	if a and a.snapshot then
+		local real = vim.fs.joinpath(project_root(), a.snapshot)
+		if vim.fn.filereadable(real) == 1 then
+			file = vim.fn.fnamemodify(real, ":p")
+		else
+			return false, ("this anchor is a diff snapshot of %s, and the project has no such file"):format(a.snapshot)
+		end
+	end
 	if not file then
 		return false, err
 	end

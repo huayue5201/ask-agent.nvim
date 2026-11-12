@@ -17,7 +17,10 @@ function M.render(anchor, prompt)
 	local out = { question ~= "" and question or "(empty question)" }
 
 	local where = {
-		a.path and ("%s:%d"):format(a.path, a.line or 1) or "<no filename>",
+		a.path and ("%s:%d"):format(a.path, a.line or 1)
+			or (a.virtual and (a.bufname or "<no filename>"))
+			or "<no filename>",
+		a.snapshot and ("a diff snapshot of %s"):format(a.snapshot) or nil,
 		a.tab and ("tab %d"):format(a.tab) or nil,
 		a.modified and "unsaved" or nil,
 	}
@@ -42,6 +45,12 @@ function M.render(anchor, prompt)
 	table.insert(out, ("<nvim-context %s>"):format(table.concat(bits, " · ")))
 	if a.cwd then
 		table.insert(out, "cwd: " .. a.cwd)
+	end
+	if a.snapshot then
+		table.insert(
+			out,
+			"note: that path is a copy extracted for a diff, not the file in the project — read it, don't edit it"
+		)
 	end
 	if a.visual then
 		table.insert(out, ("selection %d-%d:"):format(a.visual.start_line, a.visual.end_line))

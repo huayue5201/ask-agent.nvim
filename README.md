@@ -876,7 +876,18 @@ backend appears on the
 right too when more than one backend is running. A jump into another project — a
 file outside this tab's working directory and outside its repository — opens in a
 tab of its own, that tab taking the anchor's working directory, so it never
-replaces what you were looking at. Tree connectors are colored by
+replaces what you were looking at.
+
+An anchor taken inside a diff is not an anchor to a project file, and is treated as
+such. A viewer's own buffer (`codediff://…`, `fugitive://…`, this plugin's
+`ask-agent-diff://…`) has no path at all — it travels as a name, so the agent is
+never handed a path that only looks real, and jumping to it answers "this anchor
+lives in a codediff:// buffer, which has no file to open". A file inside a tree
+extracted for `v` *is* readable, but it is a copy of the project at that revision: the
+anchor keeps the copy as its path (that is the text the question is about) and the
+message tells the agent to read it and not edit it; jumping resolves the recorded
+relative path back to the project's own file, and says so when the project no longer
+has one. Tree connectors are colored by
 `AskAgentTree` (links to `Comment`); the running path uses the `AskAgentRun*`
 groups so both can be restyled from a colorscheme. Rows are truncated to the window
 width, narrow windows included, and re-flow when the sidebar is resized. The buffer

@@ -602,7 +602,13 @@ anchor whose buffer was wiped or whose buffer number now belongs to another file
 is reopened from its path). An anchor that lies outside the current project — the
 file is not under this tab's working directory, or under the same repository root
 as it — opens in a tab of its own, that tab taking the anchor's working directory,
-so jumping to another project never replaces what you were looking at. `J` goes the
+so jumping to another project never replaces what you were looking at. An anchor taken
+inside a diff is treated as what it is: a viewer's plugin buffer (a `codediff://…` or
+this plugin's own `ask-agent-diff://…` name) has no path, so the anchor carries only
+its name and jumping to it says why it cannot; a file inside a tree extracted for `v`
+stays the path (the agent is told it is a copy of the project at that revision and
+should read it, not edit it) and jumping resolves its relative path back to the
+project's own file. `J` goes the
 other way — out to the terminal window the agent really runs in, through a jump
 adapter (see |ask-agent-jump|). `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
