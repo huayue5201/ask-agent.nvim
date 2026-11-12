@@ -93,6 +93,29 @@ local function ring()
 	end)
 end
 
+---Keep a notification to a single screen line.
+--
+-- `nvim_echo(..., true, {})` is a pager: a message that wraps or spans lines
+-- raises "Press ENTER or type command to continue", which blocks whatever the
+-- user was doing (very visible when it happens while a float is open). Newlines
+-- are folded and overlong text is cut with an ellipsis, so a notification can
+-- never steal the keyboard.
+---@param msg string
+---@return string
+local function fit(msg)
+	local one = msg:gsub("%s*\n%s*", " "):gsub("\t", " ")
+	local width = math.max(20, vim.o.columns - 1)
+	if vim.api.nvim_strwidth(one) <= width then
+		return one
+	end
+	local cut = vim.fn.strcharpart(one, 0, width - 1)
+	-- do not cut a double-width character in half
+	while cut ~= "" and vim.api.nvim_strwidth(cut) > width - 1 do
+		cut = vim.fn.strcharpart(cut, 0, vim.fn.strchars(cut) - 1)
+	end
+	return cut .. "…"
+end
+
 ---@param opts { style?: boolean, sound?: boolean }|nil
 function M.setup(opts)
 	opts = opts or {}
@@ -118,7 +141,7 @@ function M.notify(msg, level, opts)
 		return
 	end
 	ensure_groups()
-	vim.api.nvim_echo({ { msg, HL[level] or HL[vim.log.levels.INFO] } }, true, {})
+	vim.api.nvim_echo({ { fit(msg), HL[level] or HL[vim.log.levels.INFO] } }, true, {})
 end
 
 return M

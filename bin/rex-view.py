@@ -7,6 +7,10 @@ repaints, and it forwards whatever you type with `com.superlogical.terminal.writ
 Repainting whole frames (instead of splicing a live byte stream) keeps the
 picture honest even when the window and the block disagree about size.
 
+The mirror also watches the block: when the block disappears, or the program
+that owned it exits (the block will close), the helper exits, which closes the
+viewer float instead of leaving a frozen picture behind.
+
 Only Python's standard library is used.
 """
 
@@ -16,6 +20,7 @@ import hashlib
 import json
 import os
 import select
+import shutil
 import socket
 import struct
 import subprocess
@@ -23,7 +28,28 @@ import sys
 import termios
 import time
 import tty
+import unicodedata
 import urllib.parse
+
+ALIVE_EVERY = 1.0
+
+# A block's foreground turning into one of these means the agent is gone but the
+# block's shell is still around (the block only closes when the shell exits).
+SHELLS = {
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "dash",
+    "ksh",
+    "mksh",
+    "tcsh",
+    "csh",
+    "nu",
+    "elvish",
+    "pwsh",
+    "login",
+}
 
 
 def rex_server():
@@ -127,8 +153,74 @@ class WS:
             return opcode, payload
 
 
+def cell_width(ch):
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
-CLEAR = b"\x1b[H\x1b[2J\x1b[3J"
+
+def crop_line(line, cols):
+    """Cut a VT line at `cols` printable cells, keeping escape sequences intact.
+
+    Without this, a block wider than the float wraps inside the terminal and
+    every TUI line turns into two broken ones.
+    """
+    out = []
+    width = 0
+    i = 0
+    n = len(line)
+    cut = False
+    while i < n:
+        ch = line[i]
+        if ch == "\x1b":
+            j = i + 1
+            if j < n and line[j] == "[":
+                # CSI: parameters, then a final byte in @..~
+                j += 1
+                while j < n and not ("@" <= line[j] <= "~"):
+                    j += 1
+                j += 1
+            elif j < n and line[j] in "]P_^":
+                # OSC/DCS/APC/PM: ends with BEL or ST
+                j += 1
+                while j < n:
+                    if line[j] == "\x07":
+                        j += 1
+                        break
+                    if line[j] == "\x1b" and j + 1 < n and line[j + 1] == "\\":
+                        j += 2
+                        break
+                    j += 1
+            else:
+                j += 1
+            out.append(line[i:j])
+            i = j
+            continue
+        w = cell_width(ch)
+        if width + w > cols:
+            cut = True
+            break
+        out.append(ch)
+        width += w
+        i += 1
+    text = "".join(out)
+    if cut:
+        text += "\x1b[0m"
+    return text
+
+
+def screen(lines, rows, cols):
+    """The visible screen: the last `rows` lines, each cropped to `cols` cells.
+
+    `format` returns the screen plus scrollback; a mirror must show the screen
+    only, or the top of the frame scrolls away every repaint.
+    """
+    body = [ln for ln in lines.split("\r\n")]
+    while body and body[-1] == "":
+        body.pop()
+    if rows and len(body) > rows:
+        body = body[-rows:]
+    return [crop_line(ln, cols) for ln in body]
 
 
 def main():
@@ -183,37 +275,122 @@ def main():
 
     block_args = {"session_id": args.session, "block_id": args.block}
 
+    def cli_json(method):
+        """`rex block call ... <method>` as JSON.
+
+        Grid size and process state are not methods on the block socket (the
+        socket exposes format/resize/process... but not `size`), while the CLI
+        routes `size` to the block's layout record. Going through the CLI keeps
+        the helper from hardcoding a server-internal route; it runs once a second,
+        so the cost is a few milliseconds.
+        """
+        try:
+            res = subprocess.run(
+                ["rex", "block", "call", "-b", args.block, "-s", args.session, method],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return None, str(exc)
+        if res.returncode != 0:
+            return None, (res.stderr or b"").decode("utf-8", "replace").strip() or "call failed"
+        try:
+            return json.loads(res.stdout or b"{}"), None
+        except json.JSONDecodeError:
+            return None, "bad json"
+
+    def block_size():
+        payload, berr = cli_json("size")
+        if berr or not payload:
+            return None, berr or "no answer"
+        cols = payload.get("columns")
+        rows = payload.get("rows")
+        if not isinstance(cols, int) or not isinstance(rows, int):
+            return None, "bad size"
+        return (cols, rows), None
+
+    size, _ = block_size()
+    if size:
+        block_cols, block_rows = size
+    else:
+        # the viewer still works with a guessed grid; cropping just cannot help
+        block_cols, block_rows = shutil.get_terminal_size((80, 24))
+
+    def tty_size():
+        try:
+            ts = shutil.get_terminal_size((block_cols, block_rows))
+            return ts.columns, ts.lines
+        except OSError:
+            return block_cols, block_rows
+
     def write(data):
         if not data:
             return
         text = data.decode("utf-8", "replace")
-        _, err = call(
+        _, werr = call(
             "com.superlogical.terminal.write",
             {"session_id": args.session, "block_id": args.block, "args": {"data": text}},
         )
-        if err:
-            print("[ask-agent rex view] write: " + err, file=sys.stderr, flush=True)
+        if werr:
+            print("[ask-agent rex view] write: " + werr, file=sys.stderr, flush=True)
 
     out = sys.stdout.buffer
     painted = None
 
     def paint():
-        nonlocal painted
-        payload, err = call(
+        nonlocal painted, block_cols, block_rows
+        payload, perr = call(
             "com.superlogical.terminal.format",
             {"session_id": args.session, "block_id": args.block, "args": {"format": "vt"}},
         )
-        if err or not payload:
-            return
+        if perr:
+            return perr
+        if not payload:
+            return None
         content = payload.get("content") or ""
         if content == painted:
-            return
+            return None
         painted = content
-        frame = CLEAR + content.rstrip("\r\n").replace("\r\n", "\r\n").encode("utf-8", "replace")
-        out.write(frame + b"\x1b[?25h")
+        # never paint a line wider/taller than the pty: the terminal would wrap it
+        cols, rows = tty_size()
+        cols = min(cols, block_cols)
+        rows = min(rows, block_rows)
+        body = screen(content, rows, cols)
+        frame = b"\x1b[H\x1b[J" + b"".join(ln.encode("utf-8", "replace") + b"\x1b[K\r\n" for ln in body)
+        frame += b"\x1b[?25h"
+        out.write(frame)
         out.flush()
+        return None
+
+    def gone():
+        """Why the viewer should close, or None. Keeps a dead block from hanging."""
+        nonlocal initial_fg
+        payload, perr = cli_json("process")
+        if perr:
+            return "the block is gone"
+        payload = payload or {}
+        last_exit = payload.get("last_exit")
+        if last_exit:
+            code = last_exit.get("exit_code")
+            return "the program in the block exited (exit %s)" % code
+        fg = payload.get("foreground") or {}
+        name = (fg.get("name") or "").lstrip("-")
+        if initial_fg is None:
+            initial_fg = name
+        elif initial_fg not in SHELLS and name in SHELLS:
+            # The agent exited but the block's shell survived: the mirror would
+            # sit there showing a prompt nobody asked for. This is exactly what
+            # `Ctrl-C` in the viewer does, so close the viewer with it.
+            return "the agent exited — the block is back to a shell"
+        payload, perr = cli_json("size")
+        if perr:
+            return "the block is gone"
+        return None
 
     paint()
+
+    initial_fg = None  # foreground command when the viewer opened
 
     stdin = sys.stdin.fileno()
     interactive = not args.readonly and os.isatty(stdin)
@@ -221,19 +398,37 @@ def main():
         saved = termios.tcgetattr(stdin)
         tty.setraw(stdin)
 
+    def farewell(reason):
+        out.write(("\r\n\x1b[0m[ask-agent] %s — closing the viewer\r\n" % reason).encode())
+        out.flush()
+
     try:
         next_paint = time.monotonic() + args.interval
+        next_alive = time.monotonic() + ALIVE_EVERY
         while True:
-            timeout = max(0.0, next_paint - time.monotonic())
+            timeout = max(0.0, min(next_paint, next_alive) - time.monotonic())
             ready, _, _ = select.select([stdin], [], [], timeout)
             if ready:
                 data = os.read(stdin, 4096)
                 if not data:
                     break
-                write(data)
+                if interactive:
+                    write(data)
                 next_paint = time.monotonic() + args.interval
+            if time.monotonic() >= next_alive:
+                reason = gone()
+                if reason:
+                    farewell(reason)
+                    break
+                fresh, _ = block_size()
+                if fresh:
+                    block_cols, block_rows = fresh
+                next_alive = time.monotonic() + ALIVE_EVERY
             if time.monotonic() >= next_paint:
-                paint()
+                err = paint()
+                if err:
+                    farewell("the block is gone")
+                    break
                 next_paint = time.monotonic() + args.interval
     finally:
         if interactive:

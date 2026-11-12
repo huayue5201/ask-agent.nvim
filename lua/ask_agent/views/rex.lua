@@ -56,10 +56,18 @@ registry.register({
 		if opts and opts.readonly then
 			vim.list_extend(cmd, { "--readonly" })
 		end
-		local spec = { cmd = cmd, note = "Rex mirror — keys go to the agent" }
+		local spec = { cmd = cmd, note = "rex mirror — keys go to the agent" }
 
-		-- match the float to the block so VT coordinates line up
-		local size = first_line({ "rex", "block", "call", "-b", tostring(block), "size" }, 800)
+		-- Match the float to the block so VT coordinates line up. The session is
+		-- required: without it `block call` only resolves the block when the shell
+		-- that runs Neovim happens to sit in the same rex session (otherwise the
+		-- lookup fails and the float falls back to a guessed size, which wraps).
+		local size_cmd = { "rex", "block", "call", "-b", tostring(block) }
+		if session then
+			vim.list_extend(size_cmd, { "-s", tostring(session) })
+		end
+		size_cmd[#size_cmd + 1] = "size"
+		local size = first_line(size_cmd, 1500)
 		if size then
 			local ok, data = pcall(vim.json.decode, size)
 			if ok and type(data) == "table" and tonumber(data.columns) and tonumber(data.rows) then

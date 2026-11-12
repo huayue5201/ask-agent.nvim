@@ -564,11 +564,30 @@ first matching provider (highest `priority`) handles the target. rex
 (`target.rex = { session, block }`), tmux (`target.pane`) and herdr
 (`target.herdr = { id }`) ship built in, and |health| lists them.
 
-The float opens in terminal mode, like |:terminal|: open it and type. `<C-q>`
-closes the float and leaves the agent running, `<Esc>` belongs to the agent, and
-`<C-\><C-n>` drops into normal mode to copy text. `view.readonly = true` makes a
-watch-only float: tmux gets `-r`, the rex mirror drops stdin, herdr keeps its
-non-takeover display.
+The float opens in terminal mode, like |:terminal|: open it and type. The float
+adds only these keys, and its footer always shows them:
+
+  `<C-q>`    normal and terminal mode: close the float, agent keeps running
+  `q`        normal mode: same as `<C-q>`
+  `i`        normal mode: start typing into the agent (writable viewers only)
+
+`<Esc>` is left to the agent on purpose (there it means "interrupt"); use
+`<C-q>` to leave, or `<C-\><C-n>` then `q` to copy text first. The title shows
+`agent · provider · state` (dropping parts when narrow) and the footer shows the
+keys plus `read only`, the provider's `note`, and `clipped WxH→WxH` when the
+agent's grid does not fit the screen.
+
+`view.readonly = true` makes a watch-only float: tmux gets `-r`, the rex mirror
+drops stdin, herdr keeps its non-takeover display.
+
+One agent has one float: opening it again focuses the open float. The float is
+tied to the agent's lifecycle: when the state layer reports the agent gone, or
+the host client exits, the float closes itself. The rex mirror also notices a
+block whose shell outlives the agent (`Ctrl-C` in the float) and closes.
+
+The float is clipped, never wrapped, when the agent's terminal is larger than
+the screen: the top of a taller grid is cropped and long lines are cut at the
+right, and the footer says so.
 
 tmux is attached with `-f ignore-size` and the float is sized to the session's
 grid (window rows plus the status line), so viewing never reflows the panes
@@ -577,11 +596,14 @@ full-screen TUI may still repaint when the screen is too small for the session,
 and `destroy-unattached` can end a tmux session when its last client leaves.
 
 Rex has no attach, so that viewer mirrors instead: |bin/rex-view.py| asks rex for
-the block's screen as VT text about twelve times a second, repaints whole frames
-and forwards typed keys with `com.superlogical.terminal.write`. Whole frames keep
-the picture correct even when the float and the block disagree about size; the
-trade-off is up to ~80 ms between a keypress and its echo. tmux and herdr need
-only their own binary; the rex mirror runs `bin/rex-view.py` with `python3`
+the block's screen (visible rows only, not scrollback) as VT text about twelve
+times a second, repaints whole frames and forwards typed keys with
+`com.superlogical.terminal.write`. Whole frames keep the picture correct even
+when the float and the block disagree about size; the trade-off is up to ~80 ms
+between a keypress and its echo. The helper polls the block's process once a
+second and exits (closing the float) when the block closes, when its program
+exits, or when the agent exited but the block's shell survived. tmux and herdr
+need only their own binary; the rex mirror runs `bin/rex-view.py` with `python3`
 (override with `vim.g.ask_agent_python`).
 
 ==============================================================================

@@ -117,6 +117,86 @@ assert(ok, "short-lived viewer opens")
 vim.wait(300)
 assert(#vim.api.nvim_list_wins() == before, "TermClose closes the float")
 
+-- a grid larger than the screen: crop (never wrap) and say so in the footer
+view.register({
+	id = "big",
+	priority = 100,
+	can = function(t)
+		return t.id == "big"
+	end,
+	cmd = function()
+		return { cmd = { "sh", "-c", "sleep 5" }, width = 200, height = 40 }
+	end,
+})
+ok = view.open({ id = "big", label = "wide agent" })
+assert(ok, "clipped viewer opens")
+local cfg = vim.api.nvim_win_get_config(0)
+local function chunk_text(chunks)
+	local out = {}
+	for _, c in ipairs(chunks or {}) do
+		out[#out + 1] = c[1]
+	end
+	return table.concat(out)
+end
+local title = chunk_text(cfg.title)
+local footer = chunk_text(cfg.footer)
+assert(vim.wo[0].wrap == false, "a clipped grid is cropped, not wrapped")
+assert(title:match("wide agent"), "the title names the agent: " .. title)
+assert(footer:match("<C%-q> close"), "the footer lists the close key: " .. footer)
+assert(footer:match("clipped 200"), "the footer reports the crop: " .. footer)
+view.close()
+vim.wait(30)
+assert(#vim.api.nvim_list_wins() == before, "closing the clipped viewer")
+
+-- one viewer per agent: opening again focuses the existing float
+local count
+ok = view.open({ id = "big", label = "wide agent" }, { key = "dup" })
+count = #vim.api.nvim_list_wins()
+assert(ok, "re-opening focuses instead of failing")
+ok = view.open({ id = "big", label = "wide agent" }, { key = "dup" })
+assert(ok, "re-opening focuses instead of failing")
+vim.wait(30)
+assert(#vim.api.nvim_list_wins() == count, "no duplicate float for the same agent")
+view.close()
+vim.wait(30)
+assert(#vim.api.nvim_list_wins() == before, "the duplicate check left one float behind?")
+
+-- the float follows the agent's lifecycle: gone means closed
+local backends = require("ask_agent.backends")
+local alive = true
+backends.register({
+	id = "fakeview",
+	label = "fake",
+	targets = function()
+		return { { id = "a1", label = "tiny agent", cwd = "/tmp", backend = "fakeview" } }
+	end,
+	send = function()
+		return true
+	end,
+	probe = function()
+		return { running = alive, state = "idle" }
+	end,
+})
+local state = require("ask_agent.state")
+state.notify = false
+state.refresh()
+view.register({
+	id = "tiny",
+	priority = 100,
+	can = function(t)
+		return t.id == "a1"
+	end,
+	cmd = function()
+		return { cmd = { "sh", "-c", "sleep 5" } }
+	end,
+})
+ok = view.open({ id = "a1", backend = "fakeview", label = "tiny agent" })
+assert(ok, "a viewer for a tracked agent opens")
+alive = false
+state.refresh()
+vim.wait(300)
+assert(#vim.api.nvim_list_wins() == before, "a viewer closes when its agent is gone")
+
 -- tmux provider: attach to the pane's session, read-only with -r, no nested TMUX
 local systems = {}
 local real_system = vim.system
@@ -199,6 +279,40 @@ local rspec = rex_provider.cmd({ rex = { block = "b", session = "s" } }, {})
 assert(rspec and rspec.cmd[#rspec.cmd] == "s", "rex argv carries the session: " .. vim.inspect(rspec and rspec.cmd))
 local rro = rex_provider.cmd({ rex = { block = "b", session = "s" } }, { readonly = true })
 assert(rro and rro.cmd[#rro.cmd] == "--readonly", "readonly reaches the helper")
+
+-- the size lookup must carry the session: without it `block call` cannot resolve
+-- the block from outside the session and the float falls back to a guessed grid
+local rex_cmds = {}
+vim.system = function(cmd, _, cb)
+	rex_cmds[#rex_cmds + 1] = cmd
+	local out = { code = 0, stdout = "" }
+	if cmd[#cmd] == "size" then
+		out.stdout = '{"columns":120,"rows":40}\n'
+	end
+	if cb then
+		cb(out)
+		return { pid = 1 }
+	end
+	return {
+		pid = 1,
+		wait = function()
+			return out
+		end,
+	}
+end
+local sized = rex_provider.cmd({ rex = { block = "b", session = "s" } }, {})
+vim.system = real_system
+local size_cmd
+for _, c in ipairs(rex_cmds) do
+	if c[#c] == "size" then
+		size_cmd = c
+	end
+end
+assert(
+	size_cmd and vim.deep_equal(size_cmd, { "rex", "block", "call", "-b", "b", "-s", "s", "size" }),
+	"size query carries the session: " .. vim.inspect(size_cmd)
+)
+assert(sized.width == 120 and sized.height == 40, "the float follows the block grid: " .. vim.inspect(sized))
 local rok, rerr = rex_provider.cmd({ rex = { block = "b" } }, {})
 assert(not rok and rerr:match("no session"), "rex needs a session: " .. tostring(rerr))
 

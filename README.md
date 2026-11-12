@@ -808,10 +808,35 @@ true: `target.rex = { session, block }`, `target.pane`, and `target.herdr = { id
 are what the built-ins look for.
 
 The float opens in terminal mode, exactly like `:terminal`: open it and type.
-`<C-q>` closes the float (the agent keeps running), `<Esc>` goes to the agent,
-and `<C-\><C-n>` drops into normal mode if you want to copy text. Set
-`view.readonly = true` when you only want to watch: tmux gets `-r`, the rex
+The float only adds these keys, and its footer always shows them:
+
+| key | mode | what it does |
+| --- | --- | --- |
+| `<C-q>` | normal + terminal | close the float (the agent keeps running) |
+| `q` | normal | same as `<C-q>` |
+| `i` | normal | start typing into the agent (writable viewers only) |
+
+`<Esc>` is deliberately not mapped: it belongs to the agent, where it means
+"interrupt". Use `<C-q>` to leave (or `<C-\><C-n>` then `q` to copy text
+first). The title shows `agent · provider · state` and drops the less important
+parts when the float is narrow; the footer shows the keys plus `read only`,
+the provider's `note`, and `clipped WxH→WxH` when the agent's grid does not fit
+the screen.
+
+Set `view.readonly = true` when you only want to watch: tmux gets `-r`, the rex
 mirror ignores stdin, and herdr keeps only its non-takeover display.
+
+One agent has one float: opening the same agent again focuses the open float
+instead of stacking another. The float is also tied to the agent: when the
+state layer reports it gone, or the host client exits (the rex block closed, the
+program in it exited, tmux/herdr detached), the float closes itself — a viewer
+never stays behind as a picture of a dead process. For the rex mirror, a block
+whose shell outlives the agent (`Ctrl-C` in the float) counts as gone too.
+
+The float is clipped, never wrapped, when the agent's terminal is larger than
+the screen: the top of a taller grid is cropped and long lines are cut at the
+right, so no agent line can reflow inside the float. The footer reports the
+crop.
 
 tmux is attached with `-f ignore-size` and the float is sized to the session's
 own grid (window rows plus the status line), so viewing an agent never reflows
@@ -821,11 +846,14 @@ clamped to a smaller screen than the session; a multiplexer can be configured
 (`destroy-unattached`) to end a session when its last client leaves.
 
 Rex has no attach at all, so that viewer is a mirror: `bin/rex-view.py` asks rex
-for the block's screen as VT text about twelve times a second, repaints whole
-frames, and forwards what you type with `com.superlogical.terminal.write`. Frames
-rather than a spliced byte stream, so the picture stays right even if the float
-and the block disagree about size; the trade-off is up to ~80 ms of latency
-between a keypress and its echo.
+for the block's screen (the visible rows only, not scrollback) as VT text about
+twelve times a second, repaints whole frames, and forwards what you type with
+`com.superlogical.terminal.write`. Frames rather than a spliced byte stream, so
+the picture stays right even if the float and the block disagree about size; the
+trade-off is up to ~80 ms of latency between a keypress and its echo. The helper
+polls the block's process once a second and exits (closing the float) when the
+block closes, when its program exits, or when the agent exited but the block's
+shell survived.
 
 ## Batch questions
 
