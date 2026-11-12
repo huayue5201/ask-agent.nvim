@@ -29,6 +29,7 @@ local view = require("ask_agent.view")
 local jump = require("ask_agent.jump")
 local ui = require("ask_agent.ui")
 local icons = require("ask_agent.icons")
+local context = require("ask_agent.context")
 
 local M = {}
 
@@ -978,6 +979,9 @@ function M.open(callbacks, o)
 	vim.bo[buf].filetype = "ask-agent-dashboard"
 	vim.bo[buf].modifiable = false
 	vim.api.nvim_buf_set_name(buf, "ask-agent://dashboard")
+	-- The sidebar overrides number/signcolumn/winbar window-locally, and a jump
+	-- into a fresh tab would inherit them; remember how a file window looks first.
+	context.remember_look()
 	vim.cmd((opts.pos == "right" and "botright " or "topleft ") .. "vsplit")
 	win = vim.api.nvim_get_current_win()
 	vim.api.nvim_win_set_buf(win, buf)

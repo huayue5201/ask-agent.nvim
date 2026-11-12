@@ -108,6 +108,10 @@ assert(vim.api.nvim_win_get_cursor(0)[1] == 2, "…at the anchor line")
 assert(vim.api.nvim_get_current_win() == file_win, "the loaded buffer jumped in the same window")
 
 -- with no editing window at all the jump opens a tab instead of eating the panel
+vim.api.nvim_set_current_win(file_win)
+vim.wo[file_win].number, vim.wo[file_win].relativenumber = true, true
+vim.wo[file_win].signcolumn = "auto"
+local look = context.remember_look(file_win)
 vim.cmd("tabnew")
 local only = vim.api.nvim_get_current_win()
 vim.api.nvim_win_set_buf(only, sbuf)
@@ -126,6 +130,10 @@ assert(ok, "jumping out of a tab that is all sidebar works")
 assert(vim.fn.tabpagenr("$") == lonely + 1, "…by opening a tab")
 assert(vim.api.nvim_win_get_buf(only) == sbuf, "…and leaving the panel alone")
 assert(vim.api.nvim_win_get_buf(0) == hidden_buf, "…with the file in the new one")
+assert(vim.wo.number == look.number, "…that looks like a file window, not the panel (numbers)")
+assert(vim.wo.relativenumber == look.relativenumber, "…(relativenumbers)")
+assert(vim.wo.signcolumn == look.signcolumn, "…(sign column)")
+assert(vim.wo.winbar == look.winbar, "…and the editor winbar, not the panel title")
 
 vim.fn.delete(other)
 vim.fn.delete(lonely_file)

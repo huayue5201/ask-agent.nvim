@@ -17,6 +17,9 @@ local M = {}
 ---@return table anchor
 function M.capture(visual)
 	local buf = vim.api.nvim_get_current_buf()
+	if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
+		M.remember_look() -- an anchor comes from a real file window
+	end
 	local cursor = vim.api.nvim_win_get_cursor(0)
 	local name = vim.api.nvim_buf_get_name(buf)
 	local path = name ~= "" and vim.fn.fnamemodify(name, ":p") or nil
@@ -97,17 +100,6 @@ local function project_root()
 	return cwd
 end
 
----Open a file in a tab of its own — another project belongs in its own tab, not
----in the window of the one on screen. The tab takes the anchor's working
----directory, so project-scoped tools keep working there.
----@param cwd string|nil
-local function new_tab(cwd)
-	vim.cmd("tabnew")
-	if cwd and cwd ~= "" and vim.fn.isdirectory(cwd) == 1 then
-		pcall(vim.cmd, "tcd " .. vim.fn.fnameescape(cwd))
-	end
-end
-
 ---A window that could show a file rather than the sidebar: a plain editing window
 ---(no special buffer, no float).
 ---@param win integer
@@ -115,6 +107,80 @@ end
 local function plain(win)
 	local buf = vim.api.nvim_win_get_buf(win)
 	return vim.bo[buf].buftype == "" and vim.api.nvim_win_get_config(win).relative == ""
+end
+
+local LOOK = { "number", "relativenumber", "signcolumn", "foldcolumn", "wrap", "list", "cursorline", "winbar" }
+
+---How an editing window looks. A panel overrides `number`, `signcolumn`,
+---`winbar` … window-locally, and a tab opened from it copies those overrides —
+---so remember the look while a real editing window is still around.
+local look
+
+---Remember the look of an editing window (call before a panel takes the window).
+---@param win integer|nil
+---@return table|nil
+function M.remember_look(win)
+	win = win and vim.api.nvim_win_is_valid(win) and win or vim.api.nvim_get_current_win()
+	local rec = {}
+	for _, name in ipairs(LOOK) do
+		local ok, value = pcall(vim.api.nvim_get_option_value, name, { win = win })
+		if not ok then
+			return nil
+		end
+		rec[name] = value
+	end
+	look = rec
+	return rec
+end
+
+---The look a file wants: the nearest editing window's, else the remembered one,
+---else whatever the option means globally.
+---@param win integer
+---@return table<string, any>
+local function editor_look(win)
+	local cur = vim.api.nvim_get_current_win()
+	for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+		for _, w in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+			if w ~= win and w ~= cur and plain(w) then
+				local buf = vim.api.nvim_win_get_buf(w)
+				if vim.api.nvim_buf_get_name(buf) ~= "" then
+					local rec = {}
+					for _, name in ipairs(LOOK) do
+						local ok, value = pcall(vim.api.nvim_get_option_value, name, { win = w })
+						if not ok then
+							return look or {}
+						end
+						rec[name] = value
+					end
+					return rec
+				end
+			end
+		end
+	end
+	return look or {}
+end
+
+---A tab opened from a panel inherits the panel's look — no numbers, no sign
+---column, its own winbar. Give it a file's look instead.
+---@param win integer
+local function dress(win)
+	local opts = editor_look(win)
+	for name, value in pairs(opts) do
+		pcall(vim.api.nvim_set_option_value, name, value, { win = win })
+	end
+	pcall(vim.api.nvim_set_option_value, "winfixwidth", false, { win = win })
+end
+
+---Open a file in a tab of its own — another project belongs in its own tab, not
+---in the window of the one on screen. The tab takes the anchor's working
+---directory, so project-scoped tools keep working there.
+---@param cwd string|nil
+local function new_tab(cwd)
+	vim.cmd("tabnew")
+	dress(vim.api.nvim_get_current_win())
+	if cwd and cwd ~= "" and vim.fn.isdirectory(cwd) == 1 then
+		pcall(vim.cmd, "tcd " .. vim.fn.fnameescape(cwd))
+	end
 end
 
 ---The window a jump should land in: the current one when it is a plain editing
@@ -133,7 +199,9 @@ local function editing_window()
 		end
 	end
 	vim.cmd("tabnew")
-	return vim.api.nvim_get_current_win()
+	local fresh = vim.api.nvim_get_current_win()
+	dress(fresh)
+	return fresh
 end
 
 ---Jump to the buffer/line an anchor points at. Returns false + reason when the
