@@ -137,7 +137,8 @@ Only the keys you pass change; everything else keeps its default. A top-level
 :AskAgentDashboard      Open the sidebar: agents as a tree, each agent's queued
                         and sent tasks below it. `<CR>` views the agent in a float (or jumps
                         to the anchor of a task another tool dispatched), `o` jumps to
-                        a row's anchor, `s` send, `S` flush its queued questions,
+                        a row's anchor, `J` jumps out to the agent's own window
+                        (rex/tmux), `s` send, `S` flush its queued questions,
                         `a` acknowledge, `d` delete a queued task or dismiss a
                         dead agent, `<Tab>` fold,
                         `?` key help, `r` poll now, `q` close.
@@ -533,7 +534,9 @@ whose buffer was wiped or whose buffer number now belongs to another file is
 reopened from its path). An anchor that lies outside the current project — the
 file is not under this tab's working directory, or under the same repository root
 as it — opens in a tab of its own, that tab taking the anchor's working directory,
-so jumping to another project never replaces what you were looking at. `s` sends, `S` flushes every queued question
+so jumping to another project never replaces what you were looking at. `J` goes the
+other way — out to the terminal window the agent really runs in, through a jump
+adapter (see |ask-agent-jump|). `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
 the whole worktree for an agent), `y` copies the task text, `f` toggles "only
@@ -553,6 +556,28 @@ shows that tool's key dim in brackets on the row — `[t42]` — so several sour
 can share one agent and still be told apart. The view is event-driven (state + queue notifications) and keeps the
 cursor where it was; the spinner is the only timer and only runs while a turn is
 in progress.
+
+                                                          *ask-agent-jump*
+Jumping out to the agent: a float is a second display, `J` brings the original
+one to the front. A jump adapter is the whole interface:
+
+>lua
+  require("ask_agent").register_jump({
+    id = "herdr",
+    priority = 10,                 -- higher wins when several adapters match
+    can = function(target) return target.herdr ~= nil end,
+    focus = function(target) vim.system({ "herdr", "focus", target.herdr.id }) end,
+  })
+<
+
+rex (`target.rex`) and tmux (`target.pane`) ship built in. The first matching
+adapter (highest `priority`) handles the jump. The rex adapter runs three steps,
+because a Rex app shows one session and one window (tab) at a time: `rex block
+inspect` finds the block's `window_id`, `rex window focus <window> -s <session>`
+switches tabs, `rex block focus <block> -s <session>` puts the cursor in the pane,
+and finally `rex do session.select session_id=...` (the app-side action;
+`REX_CLIENT` picks the app when set) makes the session visible. Failures become
+warnings. |ask.jump()| does the same from Lua, |ask.jumps()| lists the adapters.
 
                                                           *ask-agent-viewer*
 Which terminal or multiplexer shows an agent is user-specific, so the sidebar
@@ -755,6 +780,8 @@ ask.register(backend)
 ask.register_layout(adapter) / ask.layout(id)
 ask.view(target, opts)                  -- show an agent in a viewer float
 ask.register_view(provider) / ask.views() -- viewer providers
+ask.jump(target)                        -- bring the agent's own window to the front
+ask.register_jump(adapter) / ask.jumps() -- jump adapters (rex/tmux built in)
 ask.generic  -- tmux backend factory; also tmux_panes(match),
              -- tmux_panes_by_cmd(pat), state_file(dir, opts), slug(s)
 <

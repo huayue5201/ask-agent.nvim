@@ -16,7 +16,8 @@
 --
 -- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register/
 --             layout/register_layout/batch_ask/batch_send/batch_route/batch_list/batch_delete
---             /batch_undo/batch_clear/batch_count/agents/on/statusline/wait/dashboard/goto_anchor/register_view/view.
+--             /batch_undo/batch_clear/batch_count/agents/on/statusline/wait/dashboard/goto_anchor/register_view/view/
+--             register_jump/jump.
 -- UI: :AskAgentDashboard (sidebar tree: agents + their tasks), ask_agent.statusline().
 
 local backends = require("ask_agent.backends")
@@ -29,6 +30,7 @@ local aliases = require("ask_agent.aliases")
 local queue = require("ask_agent.queue")
 local state = require("ask_agent.state")
 local view = require("ask_agent.view")
+local jump = require("ask_agent.jump")
 
 local NS_LIST = vim.api.nvim_create_namespace("ask_agent.list")
 
@@ -809,8 +811,32 @@ function M.views()
 	return view.list()
 end
 
+---Bring the window an agent lives in to the front: the terminal app or
+---multiplexer that owns it (rex, tmux, or a jump adapter you registered). `<CR>`
+---in the sidebar shows the agent inside Neovim; this goes out to it instead.
+---@param target table an instance descriptor (rec.target)
+---@return boolean ok, string|nil err
+function M.jump(target)
+	return jump.focus(target)
+end
+
+---Register a jump adapter: the thing that brings an agent's window to the front.
+---`{ id, can(target), focus(target), priority? }` — rex and tmux are built in;
+---see ask_agent/jump.lua for the contract.
+---@param mod table
+function M.register_jump(mod)
+	jump.register(mod)
+end
+
+---The registered jump adapters, in priority order.
+---@return table[]
+function M.jumps()
+	return jump.list()
+end
+
 ---Open the sidebar: agents as the top level of a tree, their tasks below.
 ---<CR> opens an agent in a viewer float (a task jumps to its code anchor),
+---`o` jumps to a row's code anchor, `J` jumps out to the agent's own window,
 ---`s` sends, `S` flushes the queue routed to that agent, `a` acks, `d` deletes a
 ---queued task or dismisses a dead agent, `q` closes.
 ---@param opts { pos?: "left"|"right", width?: integer }|nil

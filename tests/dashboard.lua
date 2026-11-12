@@ -211,6 +211,109 @@ vim.wait(20)
 assert(#jumps == 2 and jumps[2].line == 3, "o jumps to the anchor of a turn")
 view.open = real_view
 
+-- <J> jumps out to the agent's own window through the jump adapters
+local jump = require("ask_agent.jump")
+local real_focus = jump.focus
+local focused
+jump.focus = function(target)
+	focused = target
+	return true
+end
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_feedkeys("J", "x", false)
+vim.wait(20)
+assert(focused and focused.id == "a", "J jumps to the agent on the cursor row")
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+focused = nil
+vim.api.nvim_feedkeys("J", "x", false)
+vim.wait(20)
+assert(focused and focused.id ~= nil, "J on a task row jumps to its agent")
+jump.focus = real_focus
+
+-- the adapter registry: highest priority that can handle the target wins
+jump.register({
+	id = "low",
+	priority = 1,
+	can = function(t)
+		return t.x ~= nil
+	end,
+	focus = function() end,
+})
+jump.register({
+	id = "high",
+	priority = 99,
+	can = function(t)
+		return t.x ~= nil
+	end,
+	focus = function() end,
+})
+assert(jump.find({ x = 1 }).id == "high", "priority decides between adapters")
+assert(jump.find({ y = 1 }) == nil, "no adapter claims an unknown target")
+local ok, err = jump.focus({ y = 1 })
+assert(not ok and err:match("no jump adapter"), "an unknown target explains itself: " .. tostring(err))
+jump.register({
+	id = "high",
+	priority = 99,
+	can = function(t)
+		return t.x ~= nil
+	end,
+	focus = function() end,
+})
+local highs = 0
+for _, a in ipairs(jump.list()) do
+	if a.id == "high" then
+		highs = highs + 1
+	end
+end
+assert(highs == 1, "registering an id twice replaces it")
+
+-- the rex adapter must use the CLI shape we verified (`focus` takes a positional
+-- block); a -b on focus exits 2 and silently does nothing. Jumping off the
+-- current tab/session needs three server/app actions in order: focus the block's
+-- window (rex's term for a tab), focus the block, then make the session visible
+-- in the app (a client action).
+local systems = {}
+local real_system = vim.system
+vim.system = function(cmd, _, cb)
+	systems[#systems + 1] = cmd
+	local function out()
+		if cmd[2] == "block" and cmd[3] == "inspect" then
+			return { code = 0, stdout = '{"block":{"window_id":"w"}}' }
+		elseif cmd[2] == "client" then
+			return {
+				code = 0,
+				stdout = '{"clients":[{"client_id":"c","connection_state":"connected","info":{"kind":"app"},"session_ids":["s"]}]}',
+			}
+		end
+		return { code = 0, stdout = "screen" }
+	end
+	if cb then
+		cb(out())
+		return { pid = 1 }
+	end
+	return { pid = 1, wait = out }
+end
+jump.focus({ rex = { session = "s", block = "b" } })
+vim.wait(50)
+vim.system = real_system
+vim.wait(20)
+assert(
+	vim.deep_equal(systems[1], { "rex", "block", "inspect", "b", "-s", "s" }),
+	"block inspect argv: " .. vim.inspect(systems[1])
+)
+assert(
+	vim.deep_equal(systems[3], { "rex", "window", "focus", "w", "-s", "s" }),
+	"window focus argv: " .. vim.inspect(systems[3])
+)
+assert(
+	vim.deep_equal(systems[4], { "rex", "block", "focus", "b", "-s", "s" }),
+	"focus argv: " .. vim.inspect(systems[4])
+)
+assert(
+	vim.deep_equal(systems[5], { "rex", "-C", "c", "do", "session.select", "session_id=s" }),
+	"session.select argv: " .. vim.inspect(systems[5])
+)
+
 -- long task lists collapse to a slice: five rows plus "… N older tasks" (9 here)
 for i = 1, 7 do
 	state.dispatch("fake", "b", "old job " .. i, {})

@@ -627,6 +627,9 @@ ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(
 ask.statusline()              -- "⚠1 ✓2 ◐3", empty when nothing needs attention
 ask.dashboard(opts)           -- open the sidebar ({ pos = "right", width = 40 }; pos = "left" moves it)
 ask.goto_anchor(a)            -- jump to a captured anchor (false + reason if gone)
+ask.jump(target)              -- bring the agent's own window to the front (false + reason)
+ask.register_jump(adapter)    -- { id, can(target), focus(target), priority? } — rex/tmux built in
+ask.jumps()                   -- the registered jump adapters
 ask.diff(opts)                -- review changes ({ id = turn, head = true, backend, cwd })
 ask.snapshot(id)              -- start (nil) or close ("last", an id) a manual interval
 ask.turns(cwd)                -- recorded turns, newest first ({ id, start, finish, ... })
@@ -762,6 +765,7 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | --- | --- | --- |
 | `<CR>` | show it in a viewer float | jump to the anchor of a task another tool dispatched; open the agent for a turn of your own |
 | `o` | jump to the row's code anchor, when it has one | |
+| `J` | jump out to the agent's own window (rex/tmux) | jump out to its agent's window |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `n` | rename (empty restores the directory name) | |
@@ -863,6 +867,32 @@ a keypress echoes in ~25 ms instead of waiting for a poll tick. The helper still
 repaints once a second as a safety net, and polls the block's process to exit
 (closing the float) when the block closes, when its program exits, or when the
 agent exited but the block's shell survived.
+
+### Jumping out to the agent
+
+A float is a second display; sometimes you want the original window. `J` in the
+sidebar brings the terminal app or multiplexer that owns the agent to the front,
+through a jump adapter — the same contract idea one level down:
+
+```lua
+require("ask_agent").register_jump({
+  id = "herdr",
+  priority = 10,                          -- higher wins when several adapters match
+  can = function(target) return target.herdr ~= nil end,
+  focus = function(target) vim.system({ "herdr", "focus", target.herdr.id }) end,
+})
+```
+
+rex (`target.rex`) and tmux (`target.pane`) ship built in. The first matching
+adapter (highest `priority`) handles the jump. The rex adapter runs three steps,
+because a Rex app shows one session and one window (tab) at a time: `rex block
+inspect` finds the block's `window_id`, `rex window focus <window> -s <session>`
+switches tabs, `rex block focus <block> -s <session>` puts the cursor in the
+pane, and finally `rex do session.select session_id=...` (the app-side action;
+`REX_CLIENT` picks the app when set, otherwise the connected Rex app is used)
+makes the session visible. Failures become warnings.
+
+`ask.jump(target)` does the same from Lua, and `ask.jumps()` lists the adapters.
 
 ## Batch questions
 

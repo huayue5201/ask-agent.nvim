@@ -26,6 +26,7 @@ local state = require("ask_agent.state")
 local notify = require("ask_agent.notify")
 local queue = require("ask_agent.queue")
 local view = require("ask_agent.view")
+local jump = require("ask_agent.jump")
 local ui = require("ask_agent.ui")
 local icons = require("ask_agent.icons")
 
@@ -528,7 +529,7 @@ local function render()
 		if only_needs then
 			title = title .. "  needs you"
 		end
-		local help = width >= 56 and "  ⏎ open · o jump · ? keys" or ""
+		local help = width >= 56 and "  ⏎ open · o code · J host · ? keys" or ""
 		vim.wo[win].winbar = title .. help
 		-- A fresh sidebar that had to truncate grows once; the content decides the
 		-- width instead of the width cutting the content.
@@ -578,6 +579,26 @@ local function view_agent(rec)
 	if not ok then
 		notify.notify("[ask_agent] " .. err, vim.log.levels.INFO)
 	end
+end
+
+---Bring the terminal window the agent lives in to the front: `<CR>` shows it
+---inside Neovim, this goes out to where it actually runs (a jump adapter — rex,
+---tmux, or whatever ask.register_jump added).
+---@param rec table
+local function jump_to_host(rec)
+	local ok, err = jump.focus(rec.target)
+	if not ok then
+		notify.notify("[ask_agent] " .. tostring(err), vim.log.levels.INFO)
+	end
+end
+
+---@param node table
+local function jump_host_node(node)
+	if not node.rec then
+		notify.notify("[ask_agent] This row has no agent to jump to", vim.log.levels.INFO)
+		return
+	end
+	jump_to_host(node.rec)
 end
 
 ---@param node table
@@ -677,6 +698,7 @@ local HELP = {
 	{ "?", "Show these keys" },
 	{ "<CR>", "Agent: show it in a viewer float · Task: jump to its anchor (dispatched tasks) or show the agent" },
 	{ "o", "Jump to the code anchor of that row, when it has one" },
+	{ "J", "Jump to the agent's own window (rex/tmux), where it really runs" },
 	{ "s", "Send a question to that agent" },
 	{ "S", "Send every queued question routed to it" },
 	{ "a", "Acknowledge a done/blocked agent" },
@@ -787,6 +809,7 @@ local function attach(bufnr)
 	end
 	vim.keymap.set("n", "<CR>", with(nil, open_node), opts_buf)
 	vim.keymap.set("n", "o", with(nil, jump_node), opts_buf)
+	vim.keymap.set("n", "J", with(nil, jump_host_node), opts_buf)
 	vim.keymap.set(
 		"n",
 		"s",

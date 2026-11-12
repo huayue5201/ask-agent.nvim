@@ -142,6 +142,14 @@ function M.check()
 	local review = require("ask_agent.review")
 	info("review viewers: " .. table.concat(review.viewers(), " → "))
 
+	-- jump adapters: which host can bring an agent's own window to the front
+	local jump = require("ask_agent.jump")
+	local jids = {}
+	for _, a in ipairs(jump.list()) do
+		jids[#jids + 1] = a.id
+	end
+	info("jump adapters: " .. table.concat(jids, ", "))
+
 	-- viewer floats: which host can show an agent's terminal in a second display
 	local view = require("ask_agent.view")
 	local vids = {}
