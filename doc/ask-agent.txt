@@ -837,12 +837,14 @@ ask.ask({ visual = true })
 ask.batch_ask({ visual = true })
 ask.batch_send({ ids = "3,5-7" }) / ask.batch_route(ids, opts)
 ask.batch_list() / ask.batch_clear() / ask.batch_count()
-ask.send(text, opts)                    -- { backend, target, correlation, anchor }
+ask.send(text, opts)                    -- { backend, target, correlation, anchor,
+                                        --   pick, on_sent }
 ask.agents({ state = "blocked" })       -- instances, most urgent first
 ask.on(event, fn)                       -- state | update | done | blocked | error
 ask.wait(key, want, ms, cb)             -- one-shot wait; cb(nil) on timeout
 ask.statusline() / ask.dashboard(opts)  -- sidebar; { pos = "right", width = 40 }
 ask.goto_anchor(a)                      -- jump to a captured anchor
+                                        -- (pick = true in send: ask which instance)
 ask.diff({ id = "..." })                -- review a turn / { head = true }
 ask.snapshot(id)                        -- start (nil) / close ("last") an interval
 ask.turns(cwd)                          -- recorded turns, newest first

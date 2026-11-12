@@ -657,6 +657,7 @@ ask.batch_route(ids, opts)    -- route queued entries to an agent ({ clear = tru
 ask.batch_list()              -- list queued questions (send/route/jump/edit/delete)
 ask.batch_clear() / ask.batch_count()
 ask.send(text, opts)          -- send without the ask window ({ correlation = { plugin, key }, anchor = a })
+                              -- pick = true asks which instance first (a sole one goes straight out)
 ask.task(key)                 -- newest task handed to that agent
 ask.agents(opts)              -- every instance, most urgent first ({ state, backend, correlation })
 ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
@@ -750,6 +751,11 @@ require("lua-line").add(ask.statusline)
 Correlation is opaque: `ask.send(text, { correlation = { plugin, key } })`
 stores it on the instance's record, `:AskAgent` and batch sends do not set one, and
 `rec.dispatch = { text, ts, correlation, anchor }` is handed back with every event.
+
+Pass `pick = true` when a plugin asks on the user's behalf and you do not want to
+guess the instance: a sole candidate in the current project is sent to directly,
+anything ambiguous opens the picker, and `on_sent(ok, err)` tells you what
+happened (`err == "no target chosen"` when the picker was cancelled).
 
 Every send is also appended to `rec.tasks` (newest first, last 20): `{ text, ts,
 status = "running" | "done" | "error", correlation, anchor }` — that is what the

@@ -381,6 +381,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 	local chosen, decorated = nil, false
 	local function commit(c)
 		if not c then
+			cb(nil) -- cancelled: callers with a question to answer need to hear "no"
 			return
 		end
 		local st = candidate_status(mod, c)
@@ -570,7 +571,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		cursor_pane = layout.cursor and layout.cursor() or nil,
 		on_choose = function(item)
 			if not item then
-				return -- cancelled: do nothing
+				return cb(nil) -- cancelled: callers with a question to answer need to hear "no"
 			end
 			if item.status and not item.status.running then
 				local _, detail = status_mark(item.status)
@@ -595,7 +596,9 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 	return true
 end
 
-local function choose_target(mod, cb, target_id)
+---@param o { single_direct?: boolean }|nil single_direct: a sole same-cwd candidate
+---  goes out without opening the picker, even when a picker would normally open
+local function choose_target(mod, cb, target_id, o)
 	local function note_avoid(t)
 		if t and t.avoid then
 			notify.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
@@ -650,7 +653,7 @@ local function choose_target(mod, cb, target_id)
 		local layout = require("ask_agent.layouts").active(layout_id)
 		map_ready = layout ~= nil and (type(layout.available) ~= "function" or layout.available() == true)
 	end
-	if not map_ready and #live == 1 and live[1].tier == 1 and not live[1].target.avoid then
+	if (not map_ready or (o and o.single_direct)) and #live == 1 and live[1].tier == 1 and not live[1].target.avoid then
 		local st = candidate_status(mod, live[1])
 		if st.running then
 			note_busy(mod, live[1].target, st)
@@ -735,15 +738,46 @@ M.batch_delete, M.batch_undo, M.batch_clear, M.batch_count = batch.delete_query,
 
 --- Send text directly to the current backend (for reuse by other commands/plugins; skips the floating window)
 ---@param text string
----@param opts { backend?: string, target?: string, correlation?: table, anchor?: table }|nil
+---@param opts { backend?: string, target?: string, correlation?: table, anchor?: table,
+---  pick?: boolean, on_sent?: fun(ok: boolean, err: string|nil) }|nil
 ---@return boolean ok, string? err
 function M.send(text, opts)
 	opts = opts or {}
+	-- pick = the caller wants the human in the loop: an explicit target and a pin
+	-- still win, a sole candidate still goes straight out (no pointless prompt),
+	-- anything ambiguous opens the picker. The send happens in its callback, so
+	-- this returns as soon as the question is on screen.
+	if opts.pick and opts.target == nil then
+		local mod = backends.get(opts.backend or current)
+		if not mod then
+			return false, ("No backend registered with id %s"):format(opts.backend or current)
+		end
+		choose_target(mod, function(target)
+			if not target then
+				if opts.on_sent then
+					opts.on_sent(false, "no target chosen")
+				end
+				return
+			end
+			local ok, err = deliver_text(mod, target, text, opts)
+			if not ok then
+				notify.notify(("[%s] %s"):format(mod.label or mod.id, tostring(err)), vim.log.levels.WARN)
+			end
+			if opts.on_sent then
+				opts.on_sent(ok, err)
+			end
+		end, nil, { single_direct = true })
+		return true
+	end
 	local mod, target, err = resolve(opts.backend, opts.target)
 	if not mod then
 		return false, err
 	end
-	return deliver_text(mod, target, text, { correlation = opts.correlation, anchor = opts.anchor })
+	local ok, send_err = deliver_text(mod, target, text, { correlation = opts.correlation, anchor = opts.anchor })
+	if opts.on_sent then
+		opts.on_sent(ok, send_err)
+	end
+	return ok, send_err
 end
 
 ---The newest task handed to an agent: { text, ts, status, correlation, anchor }.
