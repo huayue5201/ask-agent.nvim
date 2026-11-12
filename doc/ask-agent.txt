@@ -703,6 +703,13 @@ exits, or when the agent exited but the block's shell survived. tmux and herdr
 need only their own binary; the rex mirror runs `bin/rex-view.py` with `python3`
 (override with `vim.g.ask_agent_python`).
 
+The rex CLI itself is found even when it is not on `$PATH` (Neovim started from
+a herdr pane or a launcher that does not source Rex's shell setup): the plugin
+uses `vim.g.ask_agent_rex`, then `$ASK_AGENT_REX`, then `$PATH`, then the newest
+installation under `~/Library/Application Support/com.superlogical.rex/RexServer/
+Versions/*/Rex Server.app/Contents/MacOS/rex`. |:AskAgentHealth| reports which
+one it picked.
+
 ==============================================================================
 12. BATCH QUESTIONS                                         *ask-agent-batch*
 
