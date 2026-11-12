@@ -42,7 +42,7 @@ backends.register(mod)
 ---@param st table
 ---@return table|nil
 local function move(st)
-	probe = vim.tbl_extend("force", { running = true }, st)
+	probe = vim.tbl_extend("force", { running = st.running ~= false }, st)
 	local before = #sent
 	state.refresh()
 	return #sent > before and sent[#sent] or nil
@@ -129,7 +129,8 @@ state.configure({
 		done = "✅ {name} 完成{msg}",
 		error = false,
 		question = { text = "❓ {backend}:{name} {kind}{msg}", level = "ERROR", sound = false },
-		gone = false,
+		gone = "○ {name} 走了（{was}）",
+		was = { blocked = "在等你", working = "在干活" },
 	},
 })
 
@@ -152,6 +153,14 @@ assert(asked, "a per-kind override still notifies")
 assert(asked.msg == "❓ fake:A question: pick", "per-kind text: " .. asked.msg)
 assert(asked.level == vim.log.levels.ERROR, "per-kind level")
 assert(asked.sound == false, "per-kind bell off")
+
+probe = { running = true, state = "working" }
+state.refresh()
+probe = { running = true, state = "blocked", kind = "permission" }
+state.refresh()
+local left = move({ state = "gone", running = false })
+assert(left, "gone still notifies when only its text is replaced")
+assert(left.msg == "○ A 走了（在等你）", "translated was: " .. left.msg)
 
 ----------------------------------------------------------------------
 -- the bell itself

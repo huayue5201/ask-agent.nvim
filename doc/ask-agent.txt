@@ -491,7 +491,9 @@ Four state changes reach the user: `done`, `blocked` (with its kinds
 while it still owed you something). `working`/`idle`/`unknown` stay silent.
 
 Each state's copy is a template with `{backend}`, `{name}`, `{msg}` (already
-prefixed with ": "), `{state}`, `{kind}` and `{was}`; `level` is a key of
+prefixed with ": "), `{state}`, `{kind}` and `{was}` (what a vanished agent was
+doing; translate it with `was = { blocked = "在等你", working = "在干活" }` in the
+same table); `level` is a key of
 `vim.log.levels` as a string, and `sound = true` rings the terminal bell for that
 message (unless `belloff` contains "all"). Set a state to `false` to silence it,
 or give just a string to replace only its text:

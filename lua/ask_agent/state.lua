@@ -157,6 +157,10 @@ M.messages = {
 	gone = { text = "[{backend}] {name} exited while {was}", level = "WARN", sound = true },
 }
 
+---What a vanished agent was doing, as it reads in the `{was}` placeholder.
+---Configurable so the copy can be translated: `notify = { was = { blocked = "在等你" } }`.
+M.was = { blocked = "waiting for you", working = "working" }
+
 ---Minimum milliseconds between two notifications of the same kind for one agent
 ---(`done`/`error`/`gone` bursts are throttled, a blocked transition is not).
 M.notify_gap = 30000
@@ -224,7 +228,12 @@ end
 ---@return table messages
 function M.configure(o)
 	o = o or {}
-	for key, cfg in pairs(o.messages or {}) do
+	local messages = vim.deepcopy(o.messages or {})
+	if type(messages.was) == "table" then
+		M.was = vim.tbl_extend("force", M.was, messages.was)
+		messages.was = nil
+	end
+	for key, cfg in pairs(messages) do
 		if cfg == false then
 			M.messages[key] = false
 		elseif type(cfg) == "string" then
@@ -311,7 +320,7 @@ local function notify_gone(rec, prev)
 	end
 	announce(rec, "gone", {
 		state = rec.state,
-		was = prev == "blocked" and "waiting for you" or "working",
+		was = M.was[prev] or M.was.working,
 	})
 end
 

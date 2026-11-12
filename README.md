@@ -757,7 +757,8 @@ require("ask_agent.state").configure({ messages = { done = "…" } })  -- or at 
 
 Placeholders: `{backend}`, `{name}` (the instance name), `{msg}` (already prefixed
 with `": "`, or empty), `{state}`, `{kind}`, `{was}` (what a vanished agent was
-doing). `level` is a `vim.log.levels` key as a string (`"INFO"`, `"WARN"`,
+doing — translate it with `was = { blocked = "在等你", working = "在干活" }` inside
+the same `notify` table). `level` is a `vim.log.levels` key as a string (`"INFO"`, `"WARN"`,
 `"ERROR"`, …). `sound = true` rings the terminal bell for that message alone —
 unless `:set belloff` contains `all` — and it works whether the plugin paints the
 message itself or a notification UI (nvim-notify, noice, snacks, fidget) owns it.
