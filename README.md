@@ -915,6 +915,16 @@ the screen: the top of a taller grid is cropped and long lines are cut at the
 right, so no agent line can reflow inside the float. The footer reports the
 crop.
 
+`rex` is invoked through a resolved path, not the bare name: its CLI ships inside
+the app bundle and is on `$PATH` only in a shell Rex itself started, so a Neovim
+launched elsewhere (herdr, tmux, an IDE terminal) would otherwise claim "rex is
+not installed" while the app runs fine. Resolution order is `vim.g.ask_agent_rex`,
+`$ASK_AGENT_REX`, `$PATH`, then the newest bundle under `~/Library/Application
+Support/com.superlogical.rex/RexServer/Versions/*/Rex Server.app/Contents/MacOS/
+rex`; `:AskAgentHealth` prints the path in use. A viewer provider that cannot run
+is skipped rather than fatal, so an agent visible through two hosts (started in a
+rex block, now running under herdr) keeps a working float.
+
 tmux is attached with `-f ignore-size` and the float is sized to the session's
 own grid (window rows plus the status line), so viewing an agent never reflows
 the panes somebody else is looking at. Limits worth knowing: this is a second
