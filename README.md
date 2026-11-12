@@ -651,6 +651,9 @@ ask.register_layout(mod)      -- register a layout adapter at runtime
 ask.view(target, opts)        -- show an agent in a viewer float ({ readonly })
 ask.register_view(mod)        -- register a viewer provider (rex/tmux/herdr built in)
 ask.views()                   -- registered providers, highest priority first
+ask.chat(opts)                -- open the group chat ({ thread, name, pos, width })
+ask.chat_post(text, opts)     -- post into the chat log; `@name` routes a task
+ask.chats()                   -- the chat log (threads, entries, pins, context_text)
 ```
 
 ## Agent status
@@ -893,6 +896,46 @@ pane, and finally `rex do session.select session_id=...` (the app-side action;
 makes the session visible. Failures become warnings.
 
 `ask.jump(target)` does the same from Lua, and `ask.jumps()` lists the adapters.
+
+## Group chat
+
+Several agents, one transcript. `:AskAgentChat` opens a window where a message is
+a message and `@name` is routing: the named agent gets a task, and its answer comes
+back into the same log. The log is the truth — the window, the dashboard and the
+API all read it (`lua/ask_agent/chat.lua`), so nothing can disagree about what was
+said.
+
+| key | does |
+| --- | --- |
+| `i` / `a` / `<CR>` | write a message (`@claude` addresses that agent) |
+| `gp` | pin a fact every agent sees (`gu` unpins) |
+| `gr` | repaint |
+| `q` | close |
+
+Three rules keep a group chat from turning into a token fire hose:
+
+* **cursor** — every agent remembers the last entry it has seen, and only entries
+  after it are injected, at most `chat.window` (24) of them;
+* **pin** — facts a human pinned travel with every task, instead of the whole
+  history;
+* **gate** — one agent runs one chat task at a time; a second mention is queued
+  (`⏳ n` in the winbar) and starts when the first turn ends.
+
+Agents cannot mention each other: only messages a human posts are routed, so
+coordination happens through the shared transcript and its artifacts, never
+through agents answering each other in a loop.
+
+What comes back is scraped from the agent's screen — rex via
+`block call format`, tmux via `capture-pane`; anything else gets
+`(no output captured)`. That is a mirror of the tail, not a structured reply: an
+agent that wants to hand back something precise should write it in its own turn
+(a diff, a file), because the log stores the last ~60 lines of the screen.
+
+```lua
+ask.chat(opts)             -- open the window ({ thread, name, pos, width })
+ask.chat_post(text, opts)  -- post without a window; mentions become tasks
+ask.chats()                -- the log: threads, entries, pins, context_text(thread, key)
+```
 
 ## Batch questions
 

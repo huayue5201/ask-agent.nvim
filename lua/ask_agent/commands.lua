@@ -56,6 +56,15 @@ function M.install(deps)
 		api.dashboard()
 	end, { desc = "Ask agent: sidebar - agents with their queued and sent tasks" })
 	-- Legacy name
+	vim.api.nvim_create_user_command("AskAgentChat", function(args)
+		local a = args.args ~= "" and args.args or nil
+		if a == "close" then
+			require("ask_agent.chat_ui").close()
+			return
+		end
+		api.chat({ thread = a })
+	end, { desc = "ask-agent: group chat (@name routes a task)", nargs = "?" })
+
 	vim.api.nvim_create_user_command("AskAgentPi", function()
 		api.ask()
 	end, { desc = "Ask agent: same as :AskAgent (legacy name)" })

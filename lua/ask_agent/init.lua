@@ -850,6 +850,27 @@ function M.dashboard(opts)
 	}, opts)
 end
 
+---Open the group chat: one transcript, several agents, `@name` routes the task.
+---`i` writes (mentions address agents), `gp` pins a fact every agent sees.
+---@param opts { thread?: string, name?: string, pos?: "left"|"right", width?: integer }|nil
+function M.chat(opts)
+	return require("ask_agent.chat_ui").open(opts)
+end
+
+---Post into the chat log without opening a window; mentions become tasks.
+---@param text string
+---@param opts { thread?: string }|nil
+---@return table entry
+function M.chat_post(text, opts)
+	return require("ask_agent.chat").post(text, opts)
+end
+
+---The chat log itself (threads, entries, pins, the projection an agent gets).
+---@return table
+function M.chats()
+	return require("ask_agent.chat")
+end
+
 ---Call `cb(rec)` once the instance reaches `want` (`cb(nil)` on timeout).
 ---@param key string agent key (rec.key)
 ---@param want string "done" | "blocked" | ...
@@ -1316,6 +1337,9 @@ function M.setup(opts)
 		width = vopts.width,
 		height = vopts.height,
 	}
+	pcall(function()
+		require("ask_agent.chat").attach()
+	end)
 	state.start(opts.state_interval or 2000)
 	local grp = vim.api.nvim_create_augroup("AskAgentState", { clear = true })
 	vim.api.nvim_create_autocmd("VimLeavePre", {
@@ -1323,6 +1347,9 @@ function M.setup(opts)
 		callback = function()
 			view.stop_all()
 			state.flush()
+			pcall(function()
+				require("ask_agent.chat").flush()
+			end)
 			state.stop()
 		end,
 	})
