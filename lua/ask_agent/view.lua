@@ -99,6 +99,25 @@ function M.close(win)
 	end
 end
 
+---Keep the title inside the window: a narrow float only has room for the name.
+---@param name string
+---@param id string
+---@param width integer
+---@param readonly boolean
+---@return string
+local function title_text(name, id, width, readonly)
+	local close = readonly and "read only · <C-q>" or "<C-q> closes"
+	local full = ("%s · %s — %s"):format(name, id, close)
+	if vim.api.nvim_strwidth(full) <= width - 2 then
+		return full
+	end
+	local short = ("%s · %s"):format(name, close)
+	if vim.api.nvim_strwidth(short) <= width - 2 then
+		return short
+	end
+	return close
+end
+
 local function label(target)
 	return (target.label and target.label ~= "") and target.label or tostring(target.id or "agent")
 end
@@ -138,11 +157,7 @@ function M.open(target, opts)
 		height = height,
 		row = math.max(0, math.floor((vim.o.lines - height) / 2) - 2),
 		col = math.max(0, math.floor((vim.o.columns - width) / 2)),
-		title = (" %s · %s — %s "):format(
-			label(target),
-			p.id,
-			readonly and "read only · <C-q> closes" or "<C-q> closes · <Esc> goes to the agent"
-		),
+		title = (" %s "):format(title_text(label(target), p.id, width, readonly)),
 		title_pos = "center",
 		zindex = 60,
 	})
