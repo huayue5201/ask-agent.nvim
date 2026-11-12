@@ -651,9 +651,6 @@ ask.register_layout(mod)      -- register a layout adapter at runtime
 ask.view(target, opts)        -- show an agent in a viewer float ({ readonly })
 ask.register_view(mod)        -- register a viewer provider (rex/tmux/herdr built in)
 ask.views()                   -- registered providers, highest priority first
-ask.chat(opts)                -- open the group chat ({ thread, name, pos, width })
-ask.chat_post(text, opts)     -- post into the chat log; `@name` routes a task
-ask.chats()                   -- the chat log (threads, entries, pins, context_text)
 ```
 
 ## Agent status
@@ -896,61 +893,6 @@ pane, and finally `rex do session.select session_id=...` (the app-side action;
 makes the session visible. Failures become warnings.
 
 `ask.jump(target)` does the same from Lua, and `ask.jumps()` lists the adapters.
-
-## Group chat
-
-Several agents, one transcript. `:AskAgentChat` opens a window where a message is
-a message and `@name` is routing: the named agent gets a task, and its answer comes
-back into the same log. The log is the truth — the window, the dashboard and the
-API all read it (`lua/ask_agent/chat.lua`), so nothing can disagree about what was
-said.
-
-The window is a float, not a split: bubbles on top, an input bar at the bottom
-(the panel starts with the cursor in it), and the member list — who you can
-address — in the footer next to the running counters. Typing `@` completes from
-that list, so you never have to remember which agents are up; when two agents
-share a name, they are listed as `name-1`, `name-2` and `@name` alone is refused
-rather than delivered to a guess.
-
-| key | where | does |
-| --- | --- | --- |
-| `i` / `a` / `<CR>` | transcript | go to the input bar |
-| `@` | input | complete an agent name |
-| `<CR>` | input | send |
-| `<C-j>` | input | newline in the message |
-| `<Esc>` | input | back to the transcript, nothing sent |
-| `gp` / `gu` | transcript | pin / unpin a fact every agent sees |
-| `gt` | transcript | switch thread |
-| `gc` | transcript | give up on the tasks in flight |
-| `gr` | transcript | repaint |
-| `?` | transcript | the keys, in one line |
-| `q` / `<Esc>` | transcript | close |
-
-Three rules keep a group chat from turning into a token fire hose:
-
-* **cursor** — every agent remembers the last entry it has seen, and only entries
-  after it are injected, at most `chat.window` (24) of them;
-* **pin** — facts a human pinned travel with every task, instead of the whole
-  history;
-* **gate** — one agent runs one chat task at a time; a second mention is queued
-  (`⏳ n` in the footer) and starts when the first turn ends.
-
-Agents cannot mention each other: only messages a human posts are routed, so
-coordination happens through the shared transcript and its artifacts, never
-through agents answering each other in a loop.
-
-What comes back is the agent's state, not its screen: the entry reads like the
-sidebar row — `done · 2m31s`, `done · turn — running the tests`, `error · …` —
-built from the state layer (message, kind, elapsed). The output stays where it
-was produced, in the agent's own window (`J` jumps there). Screen scraping is
-opt-in (`chat.scrape = true` plus `chat.capture`), and even then it is a tail of
-the pane, not a structured reply.
-
-```lua
-ask.chat(opts)             -- open the window ({ thread, name, pos, width })
-ask.chat_post(text, opts)  -- post without a window; mentions become tasks
-ask.chats()                -- the log: threads, entries, pins, context_text(thread, key)
-```
 
 ## Batch questions
 
