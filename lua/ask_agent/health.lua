@@ -142,6 +142,26 @@ function M.check()
 	local review = require("ask_agent.review")
 	info("review viewers: " .. table.concat(review.viewers(), " → "))
 
+	-- viewer floats: which host can show an agent's terminal in a second display
+	local view = require("ask_agent.view")
+	local vids = {}
+	for _, p in ipairs(view.list()) do
+		vids[#vids + 1] = p.id .. (p.readonly_only and " (read only)" or "")
+	end
+	if #vids > 0 then
+		info("view providers: " .. table.concat(vids, ", "))
+	else
+		info("view providers: none — <CR> in the dashboard opens no float")
+	end
+	for _, name in ipairs({ "rex", "tmux", "herdr" }) do
+		if vim.fn.executable(name) ~= 1 then
+			info(("view provider %s: %s is not on PATH"):format(name, name))
+		end
+	end
+	if vim.fn.executable("rex") == 1 and vim.fn.executable(vim.g.ask_agent_python or "python3") ~= 1 then
+		warn("rex viewer: python3 is not on PATH — the rex viewer float cannot start")
+	end
+
 	-- question history and the prompt library are plain local files
 	local hist = require("ask_agent.history")
 	if hist.enabled then

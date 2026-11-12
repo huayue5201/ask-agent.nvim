@@ -42,11 +42,17 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 - **A sidebar for every agent** — `:AskAgentDashboard` opens a tree: agents on top
   (most urgent first: permission > question > finished > error > working > idle), their
   tasks below — the questions still queued for that agent (`◐`) and the turns already
-  sent (`spinner` running, `✓` done, `✗` failed). `<CR>` on an agent brings its window to
-  the front (rex, tmux, or any adapter you register) and on a task jumps to the code
-  anchor it was written at. Blocked prompts, finished turns, failures and an agent
-  exiting mid-turn are reported through `vim.notify`; `ask_agent.statusline()` puts
-  the counts (`⚠1 ✓2 ◐3`) where you want them.
+  sent (`spinner` running, `✓` done, `✗` failed). `<CR>` on an agent opens it in a
+  viewer float (rex, tmux, herdr, or any viewer you register) and on a task jumps to
+  the code anchor it was written at. Blocked prompts, finished turns, failures and
+  an agent exiting mid-turn are reported through `vim.notify`; `ask_agent.statusline()`
+  puts the counts (`⚠1 ✓2 ◐3`) where you want them.
+- **View an agent without leaving Neovim** — `<CR>` on an agent in the sidebar opens
+  a float that shows the *same* agent, live, in the terminal you already run it in
+  (rex, tmux, herdr). A second display, not a copy: the agent keeps its session,
+  pane and process, and closing the float only detaches. The float opens in normal
+  mode, so nothing you type reaches the agent until you press `i`; rex viewers are
+  read-only by design (type in Rex).
 - **Status another plugin can act on** — `ask.agents()`, `ask.on("done"|"blocked")`,
   `ask.wait()` and a `correlation` tag that travels with a send and comes back with the
   event, so a task list can own the work and the agent only owns the conversation.
@@ -235,6 +241,11 @@ require("ask_agent").setup({
   -- (diffbandit → nvim.difftool → codediff → builtin). include_unsaved folds
   -- modified buffers into the end side, so an in-flight edit is reviewable too.
   review = { backend = "auto", include_unsaved = true },
+
+  -- `:AskAgentDashboard` <CR> opens the agent in a float; readonly refuses input
+  -- even after `i` (tmux -r; rex viewers are always read-only), width/height are
+  -- fractions of the editor.
+  view = { readonly = false, width = 0.8, height = 0.75 },
 
   -- delivered questions, newest 200, with their anchors; `false` records nothing.
   -- path moves the journal; max_text caps one record (a huge paste is truncated).
@@ -633,7 +644,9 @@ ask.generic                   -- tmux backend factory; also
                               -- generic.state_file(dir, opts), generic.slug(s)
 ask.register(mod)             -- register a backend at runtime
 ask.register_layout(mod)      -- register a layout adapter at runtime
-ask.register_jump(mod)        -- register a "bring that agent's window to the front" adapter
+ask.view(target, opts)        -- show an agent in a viewer float ({ readonly })
+ask.register_view(mod)        -- register a viewer provider (rex/tmux/herdr built in)
+ask.views()                   -- registered providers, highest priority first
 ```
 
 ## Agent status
@@ -746,7 +759,7 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 
 | Key | On an agent | On a task |
 | --- | --- | --- |
-| `<CR>` | bring its window to the front | jump to the task's code anchor |
+| `<CR>` | show it in a viewer float | jump to the task's code anchor |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `n` | rename (empty restores the directory name) | |
@@ -767,32 +780,45 @@ updates itself from state and queue events (no polling of its own; the spinner i
 only timer, and it only runs while a turn is actually in progress) and keeps your
 cursor where it was.
 
-### Jumping to an agent's window
+### Viewing an agent
 
-Which terminal or multiplexer shows an agent is user-specific, so the sidebar only
-knows an adapter contract — rex and tmux ship built in, and anything else plugs in:
+`<CR>` on an agent in the sidebar opens a float showing that agent — the same
+session, the same process, not a copy. The float is a terminal attached to the
+host's own second-display command, so the agent keeps running where it was and
+closing the float only detaches.
+
+Which terminal or multiplexer shows an agent is user-specific, so the sidebar knows
+a provider contract — rex, tmux and herdr ship built in:
 
 ```lua
-require("ask_agent").register_jump({
+require("ask_agent").register_view({
   id = "herdr",
-  priority = 10,                     -- higher wins when several adapters match
-  can = function(target) return target.pane ~= nil end,
-  focus = function(target) vim.system({ "herdr", "focus", target.pane }) end,
+  priority = 10,                          -- higher wins when several providers match
+  can = function(target) return target.herdr ~= nil end,
+  cmd = function(target, opts)
+    return { cmd = { "herdr", "agent", "attach", target.herdr.id } }
+  end,
 })
 ```
 
-A target matches the first adapter (by `priority`) whose `can(target)` returns
-true; `target.rex = { session, block }` is what the built-in rex adapter looks for,
-`target.pane` what tmux uses.
+`cmd` returns `{ cmd, env, width, height, note }` (everything but `cmd` optional;
+`env` removes inherited variables, `note` is a one-line hint shown on the float).
+A target matches the first provider (by `priority`) whose `can(target)` returns
+true: `target.rex = { session, block }`, `target.pane`, and `target.herdr = { id }`
+are what the built-ins look for.
 
-The rex adapter runs three steps, because a Rex app shows one session and one window
-(tab) at a time, and neither `block focus` nor `session.select` alone can reach an
-agent in another tab or session: `rex block inspect` finds the block's `window_id`,
-`rex window focus <window> -s <session>` switches tabs, `rex block focus <block> -s
-<session>` puts the cursor in the pane, and `rex do session.select session_id=…`
-(the app-side action) makes the session visible — `REX_CLIENT` picks the app when
-set, otherwise the connected Rex app is used. Failures surface as warnings instead
-of failing silently.
+Read-only has three layers. The float opens in normal mode, so keys (including
+`q`) do nothing until you press `i` — that is the real safety, since an agent TUI
+reacts to stray keys. `view.readonly = true` refuses `i` and passes `-r` to tmux.
+And rex viewers are read-only no matter what: the Rex data stream has no input
+path, so the float says "read only" and you type in Rex itself.
+
+Limits worth knowing: this is a second client, not a mirror, so a full-screen TUI
+may repaint when the float's size differs; a multiplexer can be configured
+(`destroy-unattached`) to end a session when its last client leaves; and the rex
+viewer paints the current screen with `rex capture` and then streams live VT
+bytes, so output produced during the few milliseconds between those two calls can
+be missed until the agent redraws.
 
 ## Batch questions
 

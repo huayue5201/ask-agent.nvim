@@ -16,7 +16,7 @@
 --
 -- Public API: setup/ask/send/use/current/list/targets/pin/pinned/alias/alias_of/picker/generic/register/
 --             layout/register_layout/batch_ask/batch_send/batch_route/batch_list/batch_delete
---             /batch_undo/batch_clear/batch_count/agents/on/statusline/wait/dashboard/goto_anchor/register_jump.
+--             /batch_undo/batch_clear/batch_count/agents/on/statusline/wait/dashboard/goto_anchor/register_view/view.
 -- UI: :AskAgentDashboard (sidebar tree: agents + their tasks), ask_agent.statusline().
 
 local backends = require("ask_agent.backends")
@@ -28,7 +28,7 @@ local ui = require("ask_agent.ui")
 local aliases = require("ask_agent.aliases")
 local queue = require("ask_agent.queue")
 local state = require("ask_agent.state")
-local jump = require("ask_agent.jump")
+local view = require("ask_agent.view")
 
 local NS_LIST = vim.api.nvim_create_namespace("ask_agent.list")
 
@@ -68,6 +68,9 @@ local layout_id = nil
 
 --- Dashboard appearance (setup-level; per-call dashboard opts still win)
 local dashboard_opts = {}
+
+--- Viewer float defaults (setup-level; per-call view opts still win)
+local view_opts = {}
 
 --- Icon: the instance's own icon wins, then the icons table by instance id / backend id, finally the generic robot glyph.
 --- Pickers use a consistent "icon name" layout so the agent is obvious at a glance
@@ -780,16 +783,34 @@ function M.goto_anchor(anchor)
 	return context.jump_to(anchor)
 end
 
----Register a jump adapter: the thing that brings an agent's window to the front.
----`{ id, can(target), focus(target), priority? }` — rex and tmux
----are built in; see ask_agent/jump.lua for the contract.
+---Open an agent in a viewer float: a second display attached to the terminal the
+---agent already runs in (tmux / herdr / rex, or a provider you registered). The
+---agent is not restarted and closing the float just detaches. Read-only viewers
+---(rex) never forward input; `view.readonly = true` asks the host for a read-only
+---client where it supports one (tmux `-r`).
+---@param target table an instance descriptor (rec.target)
+---@param opts { readonly?: boolean, width?: number, height?: number }|nil
+---@return boolean ok, string|nil err
+function M.view(target, opts)
+	return view.open(target, vim.tbl_extend("force", view_opts, opts or {}))
+end
+
+---Register a view provider: the thing that shows an agent's terminal in a float.
+---`{ id, can(target), cmd(target, opts), priority?, readonly_only? }` — rex, tmux
+---and herdr are built in; see ask_agent/view.lua for the contract.
 ---@param mod table
-function M.register_jump(mod)
-	jump.register(mod)
+function M.register_view(mod)
+	view.register(mod)
+end
+
+---The registered view providers, in priority order.
+---@return table[]
+function M.views()
+	return view.list()
 end
 
 ---Open the sidebar: agents as the top level of a tree, their tasks below.
----<CR> jumps (agent window through a jump adapter, task through its anchor),
+---<CR> opens an agent in a viewer float (a task jumps to its code anchor),
 ---`s` sends, `S` flushes the queue routed to that agent, `a` acks, `d` deletes a
 ---queued task or dismisses a dead agent, `q` closes.
 ---@param opts { pos?: "left"|"right", width?: integer }|nil
@@ -799,6 +820,7 @@ function M.dashboard(opts)
 		send = M.send,
 		batch_send = M.batch_send,
 		goto_anchor = M.goto_anchor,
+		view = M.view,
 	}, opts)
 end
 
@@ -1261,11 +1283,19 @@ function M.setup(opts)
 	if ropts.include_unsaved ~= nil then
 		review.include_unsaved = ropts.include_unsaved
 	end
+	-- Viewer floats: a second display for an agent that lives in tmux/herdr/rex.
+	local vopts = type(opts.view) == "table" and opts.view or {}
+	view_opts = {
+		readonly = vopts.readonly == true,
+		width = vopts.width,
+		height = vopts.height,
+	}
 	state.start(opts.state_interval or 2000)
 	local grp = vim.api.nvim_create_augroup("AskAgentState", { clear = true })
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = grp,
 		callback = function()
+			view.stop_all()
 			state.flush()
 			state.stop()
 		end,

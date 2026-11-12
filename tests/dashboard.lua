@@ -5,7 +5,7 @@ vim.opt.runtimepath:prepend(".")
 local backends = require("ask_agent.backends")
 local state = require("ask_agent.state")
 local queue = require("ask_agent.queue")
-local store = require("ask_agent.jump")
+local view = require("ask_agent.view")
 local dashboard = require("ask_agent.dashboard")
 local aliases = require("ask_agent.aliases")
 
@@ -210,56 +210,24 @@ vim.api.nvim_win_set_width(0, 50)
 
 -- <CR> on a task jumps to its anchor instead of the agent window
 vim.api.nvim_win_set_cursor(0, { 2, 0 })
-vim.api.nvim_feedkeys("\\r", "x", false)
+vim.api.nvim_feedkeys("\r", "x", false)
 vim.wait(50)
 assert(queue.count() == 1, "jumping does not consume the queued question")
 
--- the rex adapter must use the CLI shape we verified (`focus` takes a positional
--- block); a -b on focus exits 2 and silently does nothing. Jumping off the
--- current tab/session needs three server/app actions in order: focus the block's
--- window (rex's term for a tab), focus the block, then make the session visible
--- in the app (a client action).
-local systems = {}
-local real_system = vim.system
-vim.system = function(cmd, _, cb)
-	systems[#systems + 1] = cmd
-	local function out()
-		if cmd[2] == "block" and cmd[3] == "inspect" then
-			return { code = 0, stdout = '{"block":{"window_id":"w"}}' }
-		elseif cmd[2] == "client" then
-			return {
-				code = 0,
-				stdout = '{"clients":[{"client_id":"c","connection_state":"connected","info":{"kind":"app"},"session_ids":["s"]}]}',
-			}
-		end
-		return { code = 0, stdout = "screen" }
-	end
-	if cb then
-		cb(out())
-		return { pid = 1 }
-	end
-	return { pid = 1, wait = out }
+-- <CR> on an agent opens a viewer float through the view providers; the queued
+-- question routed to that agent is untouched
+local viewed
+local real_view = view.open
+view.open = function(target)
+	viewed = target
+	return true
 end
-store.focus({ rex = { session = "s", block = "b" } })
-vim.wait(50)
-vim.system = real_system
-vim.wait(20)
-assert(
-	vim.deep_equal(systems[1], { "rex", "block", "inspect", "b", "-s", "s" }),
-	"block inspect argv: " .. vim.inspect(systems[1])
-)
-assert(
-	vim.deep_equal(systems[3], { "rex", "window", "focus", "w", "-s", "s" }),
-	"window focus argv: " .. vim.inspect(systems[3])
-)
-assert(
-	vim.deep_equal(systems[4], { "rex", "block", "focus", "b", "-s", "s" }),
-	"focus argv: " .. vim.inspect(systems[4])
-)
-assert(
-	vim.deep_equal(systems[5], { "rex", "-C", "c", "do", "session.select", "session_id=s" }),
-	"session.select argv: " .. vim.inspect(systems[5])
-)
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_feedkeys("\r", "x", false)
+vim.wait(30)
+view.open = real_view
+assert(viewed and viewed.id == "a", "view opened for the agent on the cursor row")
+assert(queue.count() == 1, "viewing does not consume the queued question")
 
 -- an anchor captured in another tab switches to that tab instead of opening a
 -- second copy of the buffer in the current one
@@ -306,28 +274,10 @@ assert(vim.api.nvim_win_get_buf(panel_win) == panel_buf, "the panel kept its own
 vim.api.nvim_set_current_win(panel_win)
 vim.cmd("bwipeout! " .. file)
 
--- adapters: rex and tmux both claim their targets, custom ones can win
-assert(store.find({ rex = { session = "s", block = "b" } }).id == "rex", "rex adapter")
-assert(store.find({ pane = "%1" }).id == "tmux", "tmux adapter")
-store.register({
-	id = "custom",
-	priority = 100,
-	can = function()
-		return true
-	end,
-	focus = function() end,
-})
-assert(store.find({ pane = "%1" }).id == "custom", "priority wins")
-assert(select(1, store.focus({ pane = "%1" })), "focus routes through the adapter")
-store.register({
-	id = "custom",
-	priority = 100,
-	can = function()
-		return false
-	end,
-	focus = function() end,
-})
-assert(store.find({ pane = "%1" }).id == "tmux", "re-registering replaces by id")
+-- view providers: rex, tmux and herdr claim their own targets
+assert(view.find({ rex = { session = "s", block = "b" } }).id == "rex", "rex provider")
+assert(view.find({ pane = "%1" }).id == "tmux", "tmux provider")
+assert(view.find({ herdr = { agent = "x" } }).id == "herdr", "herdr provider")
 
 -- opening again focuses the same sidebar instead of stacking another one
 local first = vim.api.nvim_get_current_win()

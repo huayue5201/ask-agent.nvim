@@ -28,7 +28,6 @@ local backends = require("ask_agent.backends")
 local notify = require("ask_agent.notify")
 local aliases = require("ask_agent.aliases")
 local rex = require("ask_agent.status.rex")
-local jump = require("ask_agent.jump")
 
 local M = {}
 

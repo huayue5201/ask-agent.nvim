@@ -59,6 +59,10 @@ require("ask_agent").setup({
     backend = "auto",            -- auto | diffbandit | difftool | codediff | builtin
     include_unsaved = true,      -- fold modified buffers into the end side
   },
+  view = {                       -- <CR> viewer float (see |ask-agent-viewer|)
+    readonly = false,            -- refuse input even after `i` (tmux -r)
+    width = 0.8, height = 0.75,  -- fractions of the editor
+  },
   history = {                    -- delivered questions; false disables
     enabled = true,
     keep = 200,                  -- newest records retained
@@ -130,8 +134,8 @@ Only the keys you pass change; everything else keeps its default. A top-level
 
                                                   *:AskAgentDashboard*
 :AskAgentDashboard      Open the sidebar: agents as a tree, each agent's queued
-                        and sent tasks below it. `<CR>` jumps (agent window /
-                        task anchor), `s` send, `S` flush its queued questions,
+                        and sent tasks below it. `<CR>` views the agent in a float (or jumps
+                        to a task's anchor), `s` send, `S` flush its queued questions,
                         `a` acknowledge, `d` delete a queued task or dismiss a
                         dead agent, `<Tab>` fold,
                         `?` key help, `r` poll now, `q` close.
@@ -517,8 +521,8 @@ without 'termguicolors' the path is one flat green. The connectors use the
 `AskAgentTree` highlight group (linked to `Comment`) and the path the
 `AskAgentRunDim` / `AskAgentRunMid` / `AskAgentRunBright` groups.
 
-`<CR>` on an agent brings its window to the front; on a task it jumps to the code
-anchor the task was written at. `s` sends, `S` flushes every queued question
+`<CR>` on an agent opens it in a viewer float (see |ask-agent-viewer|); on a task it
+jumps to the code anchor the task was written at. `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
 the whole worktree for an agent), `y` copies the task text, `f` toggles "only
@@ -539,27 +543,39 @@ can share one agent and still be told apart. The view is event-driven (state + q
 cursor where it was; the spinner is the only timer and only runs while a turn is
 in progress.
 
-Which terminal or multiplexer shows an agent is user-specific, so jumping goes
-through an adapter:
+                                                          *ask-agent-viewer*
+Which terminal or multiplexer shows an agent is user-specific, so the sidebar
+knows a provider contract: a "viewer" is the host's own second-display command.
 
 >lua
-ask.register_jump({
+ask.register_view({
   id = "herdr",
-  priority = 10,                  -- higher wins when several adapters match
-  can = function(target) return target.pane ~= nil end,
-  focus = function(target) vim.system({ "herdr", "focus", target.pane }) end,
+  priority = 10,                          -- higher wins when several match
+  can = function(target) return target.herdr ~= nil end,
+  cmd = function(target, opts)
+    return { cmd = { "herdr", "agent", "attach", target.herdr.id } }
+  end,
 })
 <
 
-rex (`target.rex`) and tmux (`target.pane`) ship built in. The first matching
-adapter (highest `priority`) handles the jump. The rex adapter runs three steps,
-because a Rex app shows one session and one window (tab) at a time: `rex block
-inspect` finds the block's `window_id`, `rex window focus <window> -s <session>`
-switches tabs, `rex block focus <block> -s <session>` puts the cursor in the
-pane, and finally `rex do session.select session_id=...` (the app-side action;
-`REX_CLIENT` picks the app when set, otherwise the connected Rex app is used)
-makes the session visible. Failures become warnings.
+`cmd` returns `{ cmd, env, width, height, note }`; everything but `cmd` is
+optional (`env` unsets inherited variables, `note` is shown on the float). The
+first matching provider (highest `priority`) handles the target. rex
+(`target.rex = { session, block }`), tmux (`target.pane`) and herdr
+(`target.herdr = { id }`) ship built in, and |health| lists them.
 
+Read-only has three layers. The float opens in normal mode, so no key — `q`
+included — reaches the agent until you press `i`. `view.readonly = true` refuses
+`i` and passes `-r` to tmux. Rex viewers are read-only regardless, because the
+Rex data stream has no input path; the float says so and you type in Rex.
+
+A viewer is a second client, not a mirror: a full-screen TUI may repaint when
+the float's size differs, and `destroy-unattached` can end a tmux session when
+its last client leaves. The rex viewer paints `rex capture` first and then
+streams live VT bytes, so output in the few milliseconds between those calls can
+be missed until the agent redraws. tmux and herdr need only their own binary;
+the rex viewer runs `bin/rex-view.py` with `python3` (override with
+`vim.g.ask_agent_python`).
 
 ==============================================================================
 12. BATCH QUESTIONS                                         *ask-agent-batch*
@@ -693,7 +709,8 @@ ask.alias(target, name) / ask.alias_of(target)
 ask.picker("map"|"list")
 ask.register(backend)
 ask.register_layout(adapter) / ask.layout(id)
-ask.register_jump(adapter)              -- bring an agent's window to the front
+ask.view(target, opts)                  -- show an agent in a viewer float
+ask.register_view(provider) / ask.views() -- viewer providers
 ask.generic  -- tmux backend factory; also tmux_panes(match),
              -- tmux_panes_by_cmd(pat), state_file(dir, opts), slug(s)
 <

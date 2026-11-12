@@ -9,9 +9,9 @@
 --       ⠹ port the parser      sent     12s
 --
 -- A row is either an agent (top level) or one of its tasks, and <CR> does the
--- obvious thing for that row: an agent's window comes to the front (through a
--- jump adapter — rex, tmux, or whatever you registered with
--- ask.register_jump), a task jumps to the code anchor it was written at.
+-- obvious thing for that row: an agent opens in a viewer float (through a view
+-- provider — rex, tmux, herdr, or whatever you registered with
+-- ask.register_view), a task jumps to the code anchor it was written at.
 --
 -- Two task sources: the queue (questions not sent yet — `queued`) and the state
 -- layer's dispatch log (sent work — `sent`, `done`, `error`).
@@ -22,7 +22,7 @@
 local state = require("ask_agent.state")
 local notify = require("ask_agent.notify")
 local queue = require("ask_agent.queue")
-local jump = require("ask_agent.jump")
+local view = require("ask_agent.view")
 local ui = require("ask_agent.ui")
 local icons = require("ask_agent.icons")
 
@@ -506,7 +506,7 @@ local function render()
 		if only_needs then
 			title = title .. "  needs you"
 		end
-		local help = width >= 56 and "  ⏎ jump · v diff · ? keys" or ""
+		local help = width >= 56 and "  ⏎ view · v diff · ? keys" or ""
 		vim.wo[win].winbar = title .. help
 		-- A fresh sidebar that had to truncate grows once; the content decides the
 		-- width instead of the width cutting the content.
@@ -546,8 +546,13 @@ local function current()
 end
 
 ---@param rec table
-local function focus_agent(rec)
-	local ok, err = jump.focus(rec.target)
+local function view_agent(rec)
+	local ok, err
+	if api.view then
+		ok, err = api.view(rec.target)
+	else
+		ok, err = view.open(rec.target)
+	end
 	if not ok then
 		notify.notify("[ask_agent] " .. err, vim.log.levels.INFO)
 	end
@@ -561,14 +566,14 @@ local function open_node(node)
 		return
 	end
 	if node.kind == "agent" then
-		focus_agent(node.rec)
+		view_agent(node.rec)
 		return
 	end
 	local anchor = node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor)
 	if not anchor then
 		-- a task sent from this very sidebar has no anchor: the agent's window is the best we can do
-		notify.notify("[ask_agent] No anchor for this task — focusing the agent instead", vim.log.levels.INFO)
-		focus_agent(node.rec)
+		notify.notify("[ask_agent] No anchor for this task — opening the agent instead", vim.log.levels.INFO)
+		view_agent(node.rec)
 		return
 	end
 	local ok, err = api.goto_anchor(anchor)
@@ -614,7 +619,7 @@ end
 -- Keys, in the order they appear in the help float.
 local HELP = {
 	{ "?", "Show these keys" },
-	{ "<CR>", "Agent: bring its window to the front · Task: jump to its code anchor" },
+	{ "<CR>", "Agent: show it in a viewer float · Task: jump to its code anchor" },
 	{ "s", "Send a question to that agent" },
 	{ "S", "Send every queued question routed to it" },
 	{ "a", "Acknowledge a done/blocked agent" },
