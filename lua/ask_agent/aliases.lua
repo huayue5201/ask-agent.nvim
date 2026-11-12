@@ -315,7 +315,7 @@ end
 function M.prune(live)
 	local store = load()
 	local removed = 0
-	for key, rec in pairs(store.exact) do
+	for key in pairs(store.exact) do
 		local id = tostring(key):match("|([^|]+)$") or tostring(key)
 		if not live[id] then
 			store.exact[key] = nil

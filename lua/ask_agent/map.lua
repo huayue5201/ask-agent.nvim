@@ -413,7 +413,7 @@ local function paint(panes, by_pane, W, H, sel, frame)
 			local y, x, stop = place_label(t, owner, need)
 			if not y and status then
 				-- Narrow pane: the state badge is the first thing to drop
-				status, status_w, need = nil, 0, (icon and (icon_w + 1) or 0) + letter_w
+				status, need = nil, (icon and (icon_w + 1) or 0) + letter_w
 				y, x, stop = place_label(t, owner, need)
 			end
 			if not y and icon then
