@@ -776,7 +776,10 @@ Row layout: fold marker, state glyph, name (padded to the longest name) with the
 count, then the message; a task that has a code anchor shows it as `file.lua:42`
 flushed right (that is exactly what `<CR>`/`o` jump to), then the age, and the
 backend appears on the
-right too when more than one backend is running. Tree connectors are colored by
+right too when more than one backend is running. A jump into another project — a
+file outside this tab's working directory and outside its repository — opens in a
+tab of its own, that tab taking the anchor's working directory, so it never
+replaces what you were looking at. Tree connectors are colored by
 `AskAgentTree` (links to `Comment`); the running path uses the `AskAgentRun*`
 groups so both can be restyled from a colorscheme. Rows are truncated to the window
 width, narrow windows included, and re-flow when the sidebar is resized. The buffer

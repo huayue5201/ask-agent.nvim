@@ -530,7 +530,10 @@ lives; a turn of your own opens the agent instead, since it lives in the agent's
 transcript and the anchor is only where your cursor happened to be. `o` jumps to
 the anchor of any row that has one (the row shows it as `file.lua:42`; an anchor
 whose buffer was wiped or whose buffer number now belongs to another file is
-reopened from its path). `s` sends, `S` flushes every queued question
+reopened from its path). An anchor that lies outside the current project — the
+file is not under this tab's working directory, or under the same repository root
+as it — opens in a tab of its own, that tab taking the anchor's working directory,
+so jumping to another project never replaces what you were looking at. `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
 the whole worktree for an agent), `y` copies the task text, `f` toggles "only

@@ -414,6 +414,60 @@ assert(
 )
 assert(vim.api.nvim_win_get_cursor(0)[1] == 3, "the fallback goes to the anchor line")
 
+-- a file of another project opens in a tab of its own, with that cwd
+local proj = "/tmp/ask-agent-other-project"
+vim.fn.mkdir(proj, "p")
+local far = proj .. "/far.lua"
+vim.fn.writefile({ "a", "b" }, far)
+local far_buf = vim.fn.bufadd(vim.fn.fnameescape(far))
+vim.fn.bufload(far_buf)
+local far_anchor = {
+	buf = far_buf,
+	bufname = vim.api.nvim_buf_get_name(far_buf),
+	path = far,
+	cwd = proj,
+	line = 2,
+	col = 1,
+}
+local tabs = vim.fn.tabpagenr("$")
+local first_tab = vim.api.nvim_get_current_tabpage()
+local far_ok, far_err = context.jump_to(far_anchor)
+assert(far_ok, "another project's file opens: " .. tostring(far_err))
+assert(vim.fn.tabpagenr("$") == tabs + 1, "another project gets its own tab")
+assert(
+	vim.fn.resolve(vim.fn.getcwd()) == vim.fn.resolve(proj),
+	"the new tab takes the anchor's cwd: " .. vim.fn.getcwd()
+)
+assert(vim.api.nvim_win_get_cursor(0)[1] == 2, "the new tab lands on the anchor line")
+
+-- the same project stays in the tab we are in
+local here = vim.fn.getcwd() .. "/lua/ask_agent/notify.lua"
+local here_buf = vim.fn.bufadd(vim.fn.fnameescape(here))
+vim.fn.bufload(here_buf)
+local same_tabs = vim.fn.tabpagenr("$")
+local here_ok, here_err = context.jump_to({
+	buf = here_buf,
+	bufname = vim.api.nvim_buf_get_name(here_buf),
+	path = here,
+	cwd = vim.fn.getcwd(),
+	line = 1,
+	col = 1,
+})
+assert(here_ok, "a repo file opens: " .. tostring(here_err))
+assert(vim.fn.tabpagenr("$") == same_tabs, "a repo file does not open a new tab")
+
+-- the path fallback obeys the same rule
+vim.api.nvim_set_current_tabpage(first_tab)
+local gone_buf = vim.fn.bufadd(vim.fn.fnameescape(far))
+vim.fn.bufload(gone_buf)
+vim.api.nvim_buf_delete(gone_buf, { force = true })
+local open_tabs = vim.fn.tabpagenr("$")
+local open_ok, open_err = context.open(far_anchor)
+assert(open_ok, "the fallback opens another project's file: " .. tostring(open_err))
+assert(vim.fn.tabpagenr("$") == open_tabs + 1, "the fallback opens a new tab for it")
+assert(vim.fn.resolve(vim.fn.getcwd()) == vim.fn.resolve(proj), "the fallback tab takes the cwd")
+vim.fn.delete(proj, "rf")
+
 -- the same guard catches a buffer number that now belongs to another file
 local other = "/tmp/ask-agent-other-anchor.lua"
 vim.fn.writefile({ "x" }, other)
