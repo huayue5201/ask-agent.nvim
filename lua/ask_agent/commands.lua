@@ -56,8 +56,10 @@ function M.install(deps)
 		api.dashboard()
 	end, { desc = "Ask agent: sidebar - agents with their queued and sent tasks" })
 	vim.api.nvim_create_user_command("AskAgentPi", function()
-		api.ask()
-	end, { desc = "Ask agent: same as :AskAgent (legacy name)" })
+		-- documented as "ask pi explicitly": it must not fall back to the current
+		-- backend, or it is just :AskAgent under another name
+		api.ask({ backend = "pi" })
+	end, { desc = "Ask agent: ask the pi backend explicitly" })
 	vim.api.nvim_create_user_command("AskAgentDiff", function(args)
 		local arg = args.args ~= "" and args.args or nil
 		if arg == "head" then

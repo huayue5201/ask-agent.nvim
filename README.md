@@ -852,7 +852,6 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | Key | On an agent | On a task |
 | --- | --- | --- |
 | `<CR>` | show it in a viewer float | jump to the anchor of a task another tool dispatched; open the agent for a turn of your own |
-| `o` | jump to the row's code anchor, when it has one | |
 | `J` | jump out to the agent's own window (rex/tmux) | jump out to its agent's window |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
@@ -866,7 +865,7 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 
 Row layout: fold marker, state glyph, name (padded to the longest name) with the task
 count, then the message; a task that has a code anchor shows it as `file.lua:42`
-flushed right (that is exactly what `<CR>`/`o` jump to), then the age, and the
+flushed right (that is exactly what `<CR>` jumps to), then the age, and the
 backend appears on the
 right too when more than one backend is running. A jump into another project — a
 file outside this tab's working directory and outside its repository — opens in a

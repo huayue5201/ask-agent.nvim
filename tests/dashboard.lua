@@ -205,10 +205,6 @@ vim.api.nvim_feedkeys("\r", "x", false)
 vim.wait(20)
 assert(#jumps == 1, "a turn of your own does not jump — it lives in the agent")
 assert(shown and shown.id == "b", "…it opens that agent's viewer instead")
-vim.api.nvim_win_set_cursor(0, { turn_row, 0 })
-vim.api.nvim_feedkeys("o", "x", false)
-vim.wait(20)
-assert(#jumps == 2 and jumps[2].line == 3, "o jumps to the anchor of a turn")
 view.open = real_view
 
 -- <J> jumps out to the agent's own window through the jump adapters

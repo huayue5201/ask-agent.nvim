@@ -151,8 +151,8 @@ Only the keys you pass change; everything else keeps its default. A top-level
                                                   *:AskAgentDashboard*
 :AskAgentDashboard      Open the sidebar: agents as a tree, each agent's queued
                         and sent tasks below it. `<CR>` views the agent in a float (or jumps
-                        to the anchor of a task another tool dispatched), `o` jumps to
-                        a row's anchor, `J` jumps out to the agent's own window
+                        to the anchor of a task another tool dispatched),
+                        `J` jumps out to the agent's own window
                         (rex/tmux), `s` send, `S` flush its queued questions,
                         `a` acknowledge, `d` delete a queued task or dismiss a
                         dead agent, `<Tab>` fold,
@@ -596,10 +596,10 @@ without 'termguicolors' the path is one flat green. The connectors use the
 follows the source of that task: work another tool dispatched (todo2, a plugin over
 the bridge) jumps to the code anchor it was filed at, because that is where the task
 lives; a turn of your own opens the agent instead, since it lives in the agent's
-transcript and the anchor is only where your cursor happened to be. `o` jumps to
-the anchor of any row that has one (the row shows it as `file.lua:42`; an anchor
-whose buffer was wiped or whose buffer number now belongs to another file is
-reopened from its path). An anchor that lies outside the current project — the
+transcript and the anchor is only where your cursor happened to be. A dispatched
+task jumps to the anchor it was filed at (the row shows it as `file.lua:42`; an
+anchor whose buffer was wiped or whose buffer number now belongs to another file
+is reopened from its path). An anchor that lies outside the current project — the
 file is not under this tab's working directory, or under the same repository root
 as it — opens in a tab of its own, that tab taking the anchor's working directory,
 so jumping to another project never replaces what you were looking at. `J` goes the

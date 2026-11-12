@@ -83,7 +83,7 @@ local tabs = vim.fn.tabpagenr("$")
 
 vim.api.nvim_set_current_win(sw)
 vim.api.nvim_win_set_cursor(sw, { task_row(), 0 })
-vim.api.nvim_feedkeys("o", "x", false)
+vim.api.nvim_feedkeys("\r", "x", false)
 vim.wait(50)
 
 assert(vim.api.nvim_buf_is_valid(sbuf), "the sidebar buffer survived")
@@ -97,10 +97,10 @@ assert(
 assert(vim.api.nvim_win_get_cursor(0)[1] == 2, "…at its line")
 assert(vim.fn.tabpagenr("$") == tabs, "still the same tab")
 
--- `o` on the same row again (buffer now loaded) takes the other path in jump_to
+-- the same row again (buffer now loaded) takes the other path in jump_to
 vim.api.nvim_set_current_win(sw)
 vim.api.nvim_win_set_cursor(sw, { task_row(), 0 })
-vim.api.nvim_feedkeys("o", "x", false)
+vim.api.nvim_feedkeys("\r", "x", false)
 vim.wait(50)
 assert(vim.api.nvim_win_get_buf(sw) == sbuf, "the sidebar still keeps its buffer")
 assert(vim.api.nvim_get_current_win() == file_win, "…and the jump still lands in the editor")

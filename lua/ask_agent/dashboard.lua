@@ -509,28 +509,16 @@ local function render()
 	if win and vim.api.nvim_win_is_valid(win) then
 		local cur = vim.api.nvim_win_get_cursor(win)
 		vim.api.nvim_win_set_cursor(win, { math.min(cur[1], math.max(1, #map)), cur[2] })
-		local c = state.counts()
-		local flags = {}
-		if c.blocked > 0 then
-			flags[#flags + 1] = "⚠" .. c.blocked
-		end
-		if c.done > 0 then
-			flags[#flags + 1] = "✓" .. c.done
-		end
-		if c.error > 0 then
-			flags[#flags + 1] = "✗" .. c.error
-		end
-		if c.working > 0 then
-			flags[#flags + 1] = "◐" .. c.working
-		end
+		-- the same counts the statusline shows: one implementation, one truth
+		local flags = state.statusline()
 		local title = ("%s ask-agent · %d"):format(icons.header(), #shown)
-		if #flags > 0 then
-			title = title .. "  " .. table.concat(flags, " ")
+		if flags ~= "" then
+			title = title .. "  " .. flags
 		end
 		if only_needs then
 			title = title .. "  needs you"
 		end
-		local help = width >= 56 and "  ⏎ open · o code · J host · ? keys" or ""
+		local help = width >= 56 and "  ⏎ open · J host · ? keys" or ""
 		vim.wo[win].winbar = title .. help
 		-- A fresh sidebar that had to truncate grows once; the content decides the
 		-- width instead of the width cutting the content.
@@ -647,7 +635,7 @@ local function open_node(node)
 	local anchor, dispatched = node_anchor(node)
 	if not dispatched then
 		-- your own turn: it lives in the agent's transcript, not at the cursor
-		-- position it happened to be asked from (`o` still jumps there)
+		-- position it happened to be asked from
 		view_agent(node.rec)
 		return
 	end
@@ -698,7 +686,6 @@ end
 local HELP = {
 	{ "?", "Show these keys" },
 	{ "<CR>", "Agent: show it in a viewer float · Task: jump to its anchor (dispatched tasks) or show the agent" },
-	{ "o", "Jump to the code anchor of that row, when it has one" },
 	{ "J", "Jump to the agent's own window (rex/tmux), where it really runs" },
 	{ "s", "Send a question to that agent" },
 	{ "S", "Send every queued question routed to it" },
@@ -809,7 +796,9 @@ local function attach(bufnr)
 		end
 	end
 	vim.keymap.set("n", "<CR>", with(nil, open_node), opts_buf)
-	vim.keymap.set("n", "o", with(nil, jump_node), opts_buf)
+	-- the sidebar is nomodifiable, so an unmapped `o` would answer "E21: Cannot
+	-- make changes" — a key nobody needs deserves silence, not an error
+	vim.keymap.set("n", "o", "<Nop>", opts_buf)
 	vim.keymap.set("n", "J", with(nil, jump_host_node), opts_buf)
 	vim.keymap.set(
 		"n",
