@@ -61,7 +61,8 @@ require("ask_agent").setup({
   },
   view = {                       -- <CR> viewer float (see |ask-agent-viewer|)
     readonly = false,            -- refuse input even after `i` (tmux -r)
-    width = 0.8, height = 0.75,  -- fractions of the editor
+    width = 0.85,                -- share of the editor a big agent may take
+    height = 0.75,               -- (1 = fill the screen)
   },
   history = {                    -- delivered questions; false disables
     enabled = true,
@@ -587,7 +588,9 @@ block whose shell outlives the agent (`Ctrl-C` in the float) and closes.
 
 The float is clipped, never wrapped, when the agent's terminal is larger than
 the screen: the top of a taller grid is cropped and long lines are cut at the
-right, and the footer says so.
+right, and the footer says so. A float never takes more than 85% of the editor's
+width and 75% of its height even when the agent's grid is bigger (`view.width` /
+`view.height`; 1 fills the screen).
 
 tmux is attached with `-f ignore-size` and the float is sized to the session's
 grid (window rows plus the status line), so viewing never reflows the panes
@@ -596,11 +599,13 @@ full-screen TUI may still repaint when the screen is too small for the session,
 and `destroy-unattached` can end a tmux session when its last client leaves.
 
 Rex has no attach, so that viewer mirrors instead: |bin/rex-view.py| asks rex for
-the block's screen (visible rows only, not scrollback) as VT text about twelve
-times a second, repaints whole frames and forwards typed keys with
-`com.superlogical.terminal.write`. Whole frames keep the picture correct even
-when the float and the block disagree about size; the trade-off is up to ~80 ms
-between a keypress and its echo. The helper polls the block's process once a
+the block's screen (visible rows only, not scrollback) as VT text, repaints whole
+frames and forwards typed keys with `com.superlogical.terminal.write`. Whole
+frames keep the picture correct even when the float and the block disagree about
+size. Repaints are driven by the block's data connection
+(`rex.data.terminal.v1`): new output paints immediately (at most every 20 ms), an
+idle block costs nothing and a keypress echoes in about 25 ms. A once-a-second
+repaint remains as a safety net. The helper polls the block's process once a
 second and exits (closing the float) when the block closes, when its program
 exits, or when the agent exited but the block's shell survived. tmux and herdr
 need only their own binary; the rex mirror runs `bin/rex-view.py` with `python3`

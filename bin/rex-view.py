@@ -2,10 +2,15 @@
 """Mirror a Rex terminal block inside a plain terminal (and type into it).
 
 Rex has no attach command, so this is a mirror rather than a second client: it
-asks rex for the block's screen as VT text every few dozen milliseconds and
-repaints, and it forwards whatever you type with `com.superlogical.terminal.write`.
-Repainting whole frames (instead of splicing a live byte stream) keeps the
-picture honest even when the window and the block disagree about size.
+reads the block's screen as VT text and repaints it, and it forwards whatever you
+type with `com.superlogical.terminal.write`. Repainting whole frames (instead of
+splicing the live byte stream into the terminal) keeps the picture honest even
+when the window and the block disagree about size.
+
+Frames are driven by the block's data connection (`rex.data.terminal.v1`), not by
+a timer: when output arrives the mirror repaints right away (at most once every
+MIN_FRAME_GAP), and an idle block costs nothing. A slow heartbeat still repaints
+a couple of times a second, in case an event was missed.
 
 The mirror also watches the block: when the block disappears, or the program
 that owned it exits (the block will close), the helper exits, which closes the
@@ -31,6 +36,9 @@ import tty
 import unicodedata
 import urllib.parse
 
+# Frames are painted at most this often, and at least this often when idle.
+MIN_FRAME_GAP = 0.02
+IDLE_REPAINT = 1.0
 ALIVE_EVERY = 1.0
 
 # A block's foreground turning into one of these means the agent is gone but the
@@ -335,6 +343,37 @@ def main():
         if werr:
             print("[ask-agent rex view] write: " + werr, file=sys.stderr, flush=True)
 
+    # The data connection only says "there is new output": what gets painted is
+    # still a whole frame, so the picture survives the float and the block
+    # disagreeing about size. Without it (older server, unknown protocol) the
+    # mirror falls back to polling every --interval seconds.
+    live = None
+    ticket, terr = call(
+        "data.connect",
+        {
+            "session_id": args.session,
+            "block_id": args.block,
+            "data_ref_id": "terminal",
+            "subprotocol": "rex.data.terminal.v1",
+        },
+    )
+    if terr or not ticket:
+        log("live updates off (%s); polling every %.2fs" % (terr or "no ticket", args.interval))
+    else:
+        try:
+            live = WS("/api/data", "rex.data.terminal.v1")
+            live.sock.settimeout(5)
+            raw = ticket["ticket"]
+            live.send(2, b"\x01" + base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+            op, hello = live.recv()  # the snapshot follows as binary frames
+            live.sock.settimeout(None)
+            live.buf = b""
+            if not hello:
+                log("live updates: empty hello")
+        except (EOFError, OSError, KeyError, ValueError) as exc:
+            log("live updates off (%s); polling every %.2fs" % (exc or "rejected", args.interval))
+            live = None
+
     out = sys.stdout.buffer
     painted = None
 
@@ -402,19 +441,53 @@ def main():
         out.write(("\r\n\x1b[0m[ask-agent] %s — closing the viewer\r\n" % reason).encode())
         out.flush()
 
+    dirty = True  # the first frame
+    painted_at = 0.0
+    next_alive = time.monotonic() + ALIVE_EVERY
     try:
-        next_paint = time.monotonic() + args.interval
-        next_alive = time.monotonic() + ALIVE_EVERY
         while True:
-            timeout = max(0.0, min(next_paint, next_alive) - time.monotonic())
-            ready, _, _ = select.select([stdin], [], [], timeout)
-            if ready:
-                data = os.read(stdin, 4096)
-                if not data:
+            now = time.monotonic()
+            # Wake up for whichever comes first: a due paint, the health check,
+            # or the fallback poll.
+            wake = min(
+                next_alive,
+                painted_at + (args.interval if live is None else IDLE_REPAINT),
+            )
+            if dirty:
+                wake = min(wake, painted_at + MIN_FRAME_GAP)
+            fds = [stdin] + ([live.sock] if live else [])
+            if live and len(live.buf) >= 2:
+                wake = now  # a frame is already buffered
+            timeout = max(0.0, wake - now)
+            ready, _, _ = select.select(fds, [], [], timeout)
+            if stdin in ready:
+                chunk = os.read(stdin, 4096)
+                if not chunk:
                     break
                 if interactive:
-                    write(data)
-                next_paint = time.monotonic() + args.interval
+                    write(chunk)
+                    dirty = True  # show the echo without waiting for rex to answer
+            if live and live.sock in ready:
+                try:
+                    op, _payload = live.recv()
+                except (EOFError, OSError) as exc:
+                    log("live updates lost (%s); polling every %.2fs" % (exc or "closed", args.interval))
+                    live = None
+                else:
+                    if op == 0x8:  # close
+                        live = None
+                    elif op in (0x0, 0x1, 0x2):
+                        dirty = True
+            now = time.monotonic()
+            if not dirty and now >= painted_at + (args.interval if live is None else IDLE_REPAINT):
+                dirty = True
+            if dirty and now - painted_at >= MIN_FRAME_GAP:
+                err = paint()
+                painted_at = time.monotonic()
+                dirty = False
+                if err:
+                    farewell("the block is gone")
+                    break
             if time.monotonic() >= next_alive:
                 reason = gone()
                 if reason:
@@ -424,12 +497,6 @@ def main():
                 if fresh:
                     block_cols, block_rows = fresh
                 next_alive = time.monotonic() + ALIVE_EVERY
-            if time.monotonic() >= next_paint:
-                err = paint()
-                if err:
-                    farewell("the block is gone")
-                    break
-                next_paint = time.monotonic() + args.interval
     finally:
         if interactive:
             termios.tcsetattr(stdin, termios.TCSADRAIN, saved)

@@ -287,16 +287,21 @@ function M.open(target, opts)
 
 	seq = seq + 1
 	local max_w, max_h = available()
+	-- Ask for the agent's whole grid, but never more than a share of the screen:
+	-- a 175x52 agent on a 80x24 screen would otherwise cover everything.
+	-- `width`/`height` are fractions, so 1 fills the screen.
+	local share_w = math.floor(max_w * (opts.width or 0.85))
+	local share_h = math.floor(max_h * (opts.height or 0.75))
 	local width, height, clipped
 	if spec.width and spec.height then
-		width = math.min(math.max(20, spec.width), max_w)
-		height = math.min(math.max(6, spec.height), max_h)
+		width = math.min(math.max(20, spec.width), math.max(20, share_w))
+		height = math.min(math.max(6, spec.height), math.max(6, share_h))
 		if width ~= spec.width or height ~= spec.height then
 			clipped = ("clipped %d×%d→%d×%d"):format(spec.width, spec.height, width, height)
 		end
 	else
-		width = math.min(max_w, math.max(20, math.floor(vim.o.columns * (opts.width or 0.8))))
-		height = math.min(max_h, math.max(6, math.floor(vim.o.lines * (opts.height or 0.75))))
+		width = math.min(max_w, math.max(20, share_w))
+		height = math.min(max_h, math.max(6, share_h))
 	end
 
 	local prev_win = vim.api.nvim_get_current_win()

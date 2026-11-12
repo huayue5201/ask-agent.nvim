@@ -117,7 +117,8 @@ assert(ok, "short-lived viewer opens")
 vim.wait(300)
 assert(#vim.api.nvim_list_wins() == before, "TermClose closes the float")
 
--- a grid larger than the screen: crop (never wrap) and say so in the footer
+-- A grid larger than the screen: capped to the configured share of the screen,
+-- cropped (never wrapped) and the footer says so.
 view.register({
 	id = "big",
 	priority = 100,
@@ -128,7 +129,7 @@ view.register({
 		return { cmd = { "sh", "-c", "sleep 5" }, width = 200, height = 40 }
 	end,
 })
-ok = view.open({ id = "big", label = "wide agent" })
+ok = view.open({ id = "big", label = "wide agent" }, { width = 1, height = 1 })
 assert(ok, "clipped viewer opens")
 local cfg = vim.api.nvim_win_get_config(0)
 local function chunk_text(chunks)
@@ -147,6 +148,17 @@ assert(footer:match("clipped 200"), "the footer reports the crop: " .. footer)
 view.close()
 vim.wait(30)
 assert(#vim.api.nvim_list_wins() == before, "closing the clipped viewer")
+
+-- by default a huge grid gets 85%x75% of the screen, not the whole screen
+ok = view.open({ id = "big", label = "wide agent" }, { key = "share" })
+assert(ok, "viewer opens with the default share")
+cfg = vim.api.nvim_win_get_config(0)
+assert(
+	cfg.width == math.floor((vim.o.columns - 2) * 0.85) and cfg.height == math.floor((vim.o.lines - 3) * 0.75),
+	("default size is 85%%x75%% of the screen, got %dx%d"):format(cfg.width, cfg.height)
+)
+view.close()
+vim.wait(30)
 
 -- one viewer per agent: opening again focuses the existing float
 local count

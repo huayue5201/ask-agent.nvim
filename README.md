@@ -243,9 +243,10 @@ require("ask_agent").setup({
   review = { backend = "auto", include_unsaved = true },
 
   -- `:AskAgentDashboard` <CR> opens the agent in a float; readonly refuses input
-  -- (tmux -r, the rex mirror drops stdin), width/height are fractions of the
-  -- editor and are ignored when the viewer knows the agent's own grid.
-  view = { readonly = false, width = 0.8, height = 0.75 },
+  -- (tmux -r, the rex mirror drops stdin). width/height are fractions of the
+  -- editor and cap a viewer that knows the agent's own grid (an agent bigger
+  -- than the screen gets this share of it; 1 fills the screen).
+  view = { readonly = false, width = 0.85, height = 0.75 },
 
   -- delivered questions, newest 200, with their anchors; `false` records nothing.
   -- path moves the journal; max_text caps one record (a huge paste is truncated).
@@ -846,14 +847,16 @@ clamped to a smaller screen than the session; a multiplexer can be configured
 (`destroy-unattached`) to end a session when its last client leaves.
 
 Rex has no attach at all, so that viewer is a mirror: `bin/rex-view.py` asks rex
-for the block's screen (the visible rows only, not scrollback) as VT text about
-twelve times a second, repaints whole frames, and forwards what you type with
+for the block's screen (the visible rows only, not scrollback) as VT text,
+repaints whole frames, and forwards what you type with
 `com.superlogical.terminal.write`. Frames rather than a spliced byte stream, so
-the picture stays right even if the float and the block disagree about size; the
-trade-off is up to ~80 ms of latency between a keypress and its echo. The helper
-polls the block's process once a second and exits (closing the float) when the
-block closes, when its program exits, or when the agent exited but the block's
-shell survived.
+the picture stays right even if the float and the block disagree about size.
+Repaints are driven by the block's data connection (`rex.data.terminal.v1`): new
+output paints immediately (at most every 20 ms), an idle block costs nothing, and
+a keypress echoes in ~25 ms instead of waiting for a poll tick. The helper still
+repaints once a second as a safety net, and polls the block's process to exit
+(closing the float) when the block closes, when its program exits, or when the
+agent exited but the block's shell survived.
 
 ## Batch questions
 
