@@ -35,6 +35,10 @@ local M = {}
 
 ---How many entries an agent sees at most (newest first).
 M.window = 24
+---Scrape the agent's screen for its answer (`rex block call format`,
+---`tmux capture-pane`). Off by default: the log carries the state the sidebar
+---shows, and the agent's own window is where its text belongs.
+M.scrape = false
 ---A thread keeps at most this many entries; older ones are dropped from the journal.
 M.max_entries = 600
 ---Persist the log across nvim restarts (tests turn this off).
@@ -730,7 +734,13 @@ local function dispatch(thread, match, text, entry)
 		})
 		return
 	end
-	running[key] = { thread = thread, entry = entry.id, target = match.target, backend = match.backend }
+	running[key] = {
+		thread = thread,
+		entry = entry.id,
+		target = match.target,
+		backend = match.backend,
+		started = now(),
+	}
 	target_cache[key] = match.target
 	entry.task = entry.task or {}
 	entry.status = "running"
@@ -828,6 +838,41 @@ function M.reply(thread, key, text, opts)
 	})
 end
 
+---How long a turn took, in the units a human reads: 9s, 1m12s, 1h04m.
+---@param ms integer
+---@return string
+local function elapsed_text(ms)
+	local secs = math.max(0, math.floor(ms / 1000))
+	if secs < 60 then
+		return ("%ds"):format(secs)
+	elseif secs < 3600 then
+		return ("%dm%02ds"):format(math.floor(secs / 60), secs % 60)
+	end
+	return ("%dh%02dm"):format(math.floor(secs / 3600), math.floor(secs % 3600 / 60))
+end
+
+---What the work looked like, not what the terminal printed: the same state the
+---sidebar shows (message, kind, elapsed). Screen scraping is off by default —
+---the agent's own window is where its output belongs.
+---@param key string
+---@param status string
+---@param job table
+---@return string
+local function status_line(key, status, job)
+	local rec = state.get(key) or {}
+	local bits = { status }
+	if rec.kind and rec.kind ~= "" then
+		bits[1] = ("%s · %s"):format(status, rec.kind)
+	end
+	local took = job and job.started and elapsed_text(now() - job.started)
+	if rec.msg and rec.msg ~= "" then
+		bits[#bits + 1] = took and ("%s — %s"):format(took, rec.msg) or rec.msg
+	elseif took then
+		bits[#bits + 1] = took
+	end
+	return table.concat(bits, " · ")
+end
+
 ---Finish a target's running task: capture what it said, log it, start its queue.
 ---@param key string
 ---@param status string|nil
@@ -841,9 +886,13 @@ function finish(key, status, text)
 	running[key] = nil
 	local body = text
 	if body == nil then
-		local capture = M.capture or default_capture
-		local ok, res = pcall(capture, job.target)
-		body = ok and res or nil
+		if M.scrape then
+			local capture = M.capture or default_capture
+			local ok, res = pcall(capture, job.target)
+			body = ok and res or nil
+		else
+			body = status_line(key, status or "done", job)
+		end
 	end
 	local entry = M.reply(job.thread, key, body or "(no output captured)", { status = status or "done" })
 	local queue = pending[key]

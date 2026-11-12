@@ -130,7 +130,7 @@ local function panel_width()
 	if msg_win and vim.api.nvim_win_is_valid(msg_win) then
 		return vim.api.nvim_win_get_width(msg_win)
 	end
-	return math.max(20, math.min(vim.o.columns - 6, math.floor(vim.o.columns * 0.62)))
+	return math.max(20, math.min(vim.o.columns - 4, math.floor(vim.o.columns * 0.78)))
 end
 
 ---@return { lines: string[], marks: { row: integer, group: string, from: integer, to: integer }[] }
@@ -327,7 +327,7 @@ local function layout()
 		return
 	end
 	local w = panel_width()
-	local h = math.max(10, math.min(vim.o.lines - 6, math.floor(vim.o.lines * 0.72)))
+	local h = math.max(10, math.min(vim.o.lines - 4, math.floor(vim.o.lines * 0.86)))
 	local input_rows = math.min(3, math.max(1, math.floor(h / 6)))
 	local body = math.max(4, h - input_rows - 4) -- transcript rows; both borders stay inside h
 	local row = math.max(0, math.floor((vim.o.lines - h) / 2))

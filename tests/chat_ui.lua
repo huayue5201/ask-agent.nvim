@@ -64,6 +64,7 @@ assert(#sent == 1, "the mention was routed")
 assert(sent[1]:find("the mapping is J", 1, true), "the agent's prompt carries the pin")
 assert(text():find("look at the tests", 1, true), "the question is in the log")
 
+chat.scrape = true
 chat.capture = function()
 	return "the tests are fine"
 end

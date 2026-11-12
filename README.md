@@ -939,11 +939,12 @@ Agents cannot mention each other: only messages a human posts are routed, so
 coordination happens through the shared transcript and its artifacts, never
 through agents answering each other in a loop.
 
-What comes back is scraped from the agent's screen — rex via
-`block call format`, tmux via `capture-pane`; anything else gets
-`(no output captured)`. That is a mirror of the tail, not a structured reply: an
-agent that wants to hand back something precise should write it in its own turn
-(a diff, a file), because the log stores the last ~60 lines of the screen.
+What comes back is the agent's state, not its screen: the entry reads like the
+sidebar row — `done · 2m31s`, `done · turn — running the tests`, `error · …` —
+built from the state layer (message, kind, elapsed). The output stays where it
+was produced, in the agent's own window (`J` jumps there). Screen scraping is
+opt-in (`chat.scrape = true` plus `chat.capture`), and even then it is a tail of
+the pane, not a structured reply.
 
 ```lua
 ask.chat(opts)             -- open the window ({ thread, name, pos, width })

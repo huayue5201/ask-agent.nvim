@@ -609,9 +609,12 @@ One agent runs one chat task at a time: a second mention is queued and starts wh
 the turn ends. Agents cannot mention each other, so routing only ever follows a
 message a human posted.
 
-The answer is scraped from the agent's screen (rex: `block call format`, tmux:
-`capture-pane`); the log keeps roughly its last 60 lines. |ask.chat()| opens the
-window, |ask.chat_post()| posts from Lua, |ask.chats()| is the log.
+What comes back is the agent's state, not its screen: the entry reads like the
+sidebar row ("done · 2m31s", "done · turn — running the tests"), built from the
+message, kind and elapsed time of the state layer. The output stays in the
+agent's own window. Scraping is opt-in: set chat.scrape = true and, if needed,
+chat.capture. |ask.chat()| opens the window, |ask.chat_post()| posts from Lua,
+|ask.chats()| is the log.
 
                                                           *ask-agent-viewer*
 Which terminal or multiplexer shows an agent is user-specific, so the sidebar

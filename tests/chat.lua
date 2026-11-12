@@ -75,7 +75,8 @@ local queued = notes[#notes]
 assert(queued.kind == "system" and queued.text:find("queued", 1, true), "the second mention waits")
 assert(chat.pending()[1]:find("group:c1", 1, true), "the queue is visible")
 
--- finishing captures the answer, logs it, and starts the queued task
+-- scraping is opt-in: ask for it before asserting captured text
+chat.scrape = true
 chat.capture = function()
 	return "\n\n  the mapping reads J now  \n\n"
 end
@@ -204,5 +205,15 @@ assert(chat.running()["ghostly:g1"] == nil, "nothing is left running")
 -- cancel gives up on tasks that never settle
 chat.cancel("main")
 assert(vim.tbl_count(chat.running()) == 0, "cancel clears the running table")
+
+-- by default the result is the state the sidebar shows, not scraped text
+chat.scrape = false
+chat.post("@claude what is it doing", { thread = "main" })
+chat.finish("group:c1", "done")
+local plain = chat.entries(chat.thread("main"))
+plain = plain[#plain]
+assert(plain.kind == "result", "a status entry is logged")
+assert(plain.text:find("done", 1, true), "the status is named: " .. plain.text)
+assert(plain.text:find("%d+s") or plain.text:find("%d+m"), "the elapsed time is there: " .. plain.text)
 
 print("CHAT OK")
