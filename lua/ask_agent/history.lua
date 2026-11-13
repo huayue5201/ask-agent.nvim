@@ -175,21 +175,6 @@ function M.add(rec)
 	return ok and entry or nil
 end
 
----One recorded question by task id.
----@param id string|nil
----@return table|nil
-function M.get(id)
-	if type(id) ~= "string" or id == "" then
-		return nil
-	end
-	for _, rec in ipairs(load()) do
-		if rec.id == id then
-			return rec
-		end
-	end
-	return nil
-end
-
 ---Attach the agent's final answer to a recorded question. Only the newest
 ---`M.keep` records are kept, so an answer for a pruned task is dropped silently.
 ---@param id string|nil task id

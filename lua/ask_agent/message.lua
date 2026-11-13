@@ -64,4 +64,23 @@ function M.render(anchor, prompt)
 	return table.concat(out, "\n")
 end
 
+---The question as it was typed: `M.render` output without the context block.
+---The anchor/overview is metadata about *where* the question was asked; the
+---answer float and a copied task should show the words, not the envelope.
+---@param text string|nil
+---@return string
+function M.question(text)
+	local out = {}
+	for _, line in ipairs(vim.split(text or "", "\n", { plain = true })) do
+		if line:match("^<nvim%-context") or line:match("^<project%-overview>") then
+			break
+		end
+		out[#out + 1] = line
+	end
+	while #out > 0 and vim.trim(out[#out]) == "" do
+		table.remove(out)
+	end
+	return table.concat(out, "\n")
+end
+
 return M

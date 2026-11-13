@@ -57,6 +57,14 @@ assert(ok3 == false and err3:find("no id", 1, true), "a task without an id is re
 local ok4, err4 = results.show("never-sent")
 assert(ok4 == false and err4:find("gone", 1, true), "a pruned record is reported: " .. tostring(err4))
 
+-- the float shows the typed question, not the `<nvim-context>` envelope the agent got
+local message = require("ask_agent.message")
+local rendered = message.render({ path = "f.lua", line = 7, cwd = "/tmp/p" }, "检查冗余\n第二行")
+assert(rendered:find("<nvim%-context f.lua:7>"), "the sent text carries the anchor")
+assert(message.question(rendered) == "检查冗余\n第二行", "the question is what was typed")
+assert(message.question("plain") == "plain", "text without an envelope is untouched")
+assert(message.question(nil) == "", "nil is empty, not an error")
+
 -- resolve() is what the dashboard hands over: a state task or a bare id
 local id, rec = results.resolve({ task_id = "t1" })
 assert(id == "t1" and rec == history.get("t1"), "task table resolves")

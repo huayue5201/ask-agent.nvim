@@ -182,8 +182,13 @@ function M.show(task)
 	if rec.cwd then
 		add("cwd       " .. rec.cwd)
 	end
+	local anchor = rec.anchor or {}
+	if anchor.path then
+		add(("at        %s:%d"):format(anchor.path, anchor.line or 1))
+	end
 	add("")
-	add(rec.text or "")
+	-- what the user typed, without the `<nvim-context>` envelope the agent received
+	add(require("ask_agent.message").question(rec.text))
 	add("")
 	if rec.answer then
 		add(("answer  %s"):format(os.date("%Y-%m-%d %H:%M", math.floor((rec.answer_ts or rec.ts or 0) / 1000))))
