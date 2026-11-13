@@ -945,9 +945,26 @@ plain data, agent-agnostic: every backend is handed the same fields.
                   only, never as a plausible-looking path
   snapshot        a copy inside a tree extracted for `v`: readable, but marked
                   "read it, don't edit it"
+  digest          the project overview (see below)
 
-The message the agent receives is: the question, an optional
-`<project-overview>` digest, then one `<nvim-context …>` block:
+Two things ride along: the *digest* says what this project is, the *anchor* says
+where in it the question was asked. The digest comes from project-overview.nvim
+(structure, size, build entry, conventions — no source); it is fetched when the
+question is *sent*, cached per root, and never fails a question: no plugin, a
+broken collect or `enabled = false` just means the block is absent.
+
+  >lua
+  require("ask_agent").setup({
+    project = {
+      enabled = true,   -- attach the digest when project-overview.nvim is installed
+      wait_ms = 1500,   -- how long a cold first collect may take
+      full = false,     -- also deps / conventions / size detail
+      ttl = 300,        -- seconds a digest is reused
+    },
+  })
+  <
+
+A text-only backend receives the question and this block as one string:
 
     why does this loop skip the last item?
 
@@ -974,10 +991,16 @@ capped with a `(clipped)` marker:
   })
   <
 
-The journal keeps the coordinate, not the source: `context`, `diagnostics` and
-`visual.lines` are dropped before a task is recorded, so journal.json and
-history.json stay small and a jump still lands on the line. `ask.goto_anchor(a)`
-reads the same fields back.
+The journal keeps the coordinate, not the source: `context`, `diagnostics`,
+`digest` and `visual.lines` are dropped before a task is recorded, so journal.json
+and history.json stay small and a jump still lands on the line.
+`ask.goto_anchor(a)` reads the same fields back.
+
+The anchor is a *protocol field*, not prose: pi receives `text` (the question
+alone) plus `anchor` as JSON, and renders the block itself — the same layout as
+message.block in Lua — so the question stays clean in its transcript, in the
+history ledger, in the `o` answer float and in a yanked task. A backend without
+`anchor_payload = true` still gets `message.render` output (question + block).
 
 ==============================================================================
 15. API                                                    *ask-agent-api*

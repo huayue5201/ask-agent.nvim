@@ -4,7 +4,7 @@
 --
 -- Contract (pi side: extensions/nvim-context.ts):
 --   ~/.cache/pi-agent/ask/<pid>.sock   unix socket, receives one JSON line
---                                       {"text": "...", "task_id": "..."}
+--                                       {"text": "...", "task_id": "...", "anchor": {...}}
 --     `task_id` is optional and opaque: the extension quotes it back with the
 --     final answer (`action=result` over the nvim bridge), so the question and
 --     the answer can be paired without parsing a transcript.
@@ -16,8 +16,11 @@
 -- ACP client such as codecompanion): messages sent to it only go back to that
 -- client, never to nvim. Such instances are excluded from cwd matching by
 -- default (see `avoid` in backends/init.lua).
--- The text is rendered on the nvim side; pi only has to sendUserMessage it into
--- its own session.
+-- `anchor` is optional and structured (see context.capture): the extension renders the
+-- <nvim-context> block itself (renderAnchor in nvim-context.ts), so `text` stays the
+-- question as it was typed. Older extensions ignore the field, which is why the text
+-- still carries the same block when `anchor` is absent.
+-- pi only has to sendUserMessage the assembled message into its own session.
 
 local M = { id = "pi", label = "pi" }
 local notify = require("ask_agent.notify")
@@ -150,9 +153,13 @@ function M.available()
 	return false, "no live pi (start `pi` in a terminal; the extension registers its socket automatically)"
 end
 
+--- This backend understands the anchor as a field, so `text` arrives without the
+--- context block and the extension re-assembles the message (see M.anchor_payload).
+M.anchor_payload = true
+
 ---@param target table
 ---@param text string
----@param opts { task_id?: string }|nil
+---@param opts { task_id?: string, anchor?: table }|nil
 ---@return boolean ok, string? err
 function M.send(target, text, opts)
 	local ok, chan = pcall(vim.fn.sockconnect, "pipe", target.sock, {
@@ -171,7 +178,14 @@ function M.send(target, text, opts)
 	if not ok or chan == 0 then
 		return false, ("cannot connect to pi socket: %s (the instance may have exited)"):format(target.sock)
 	end
-	vim.fn.chansend(chan, vim.json.encode({ text = text, task_id = opts and opts.task_id }) .. "\n")
+	local payload = {
+		text = text,
+		task_id = opts and opts.task_id,
+		-- JSON-safe already (context.capture only stores plain values), sent as-is so the
+		-- agent side can format or attach it without reparsing prose.
+		anchor = opts and opts.anchor or nil,
+	}
+	vim.fn.chansend(chan, vim.json.encode(payload) .. "\n")
 	-- keep the channel open long enough for the ack; does not block nvim
 	vim.defer_fn(function()
 		pcall(vim.fn.chanclose, chan)

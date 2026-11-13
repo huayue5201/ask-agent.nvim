@@ -39,8 +39,34 @@ const ASK_REG = path.join(ASK_DIR, `${PID}.json`);
  */
 const EMBEDDED = process.argv.some((a, i, argv) => a === "--mode" && argv[i + 1] === "rpc");
 
+/** nvim 的 context.capture 抓下来的锚点（结构见 lua/ask_agent/context.lua） */
+type AnchorPayload = {
+	cwd?: string;
+	root?: string;
+	/** 相对 root 的路径；有它就不用 cwd 相对路径 */
+	rel?: string;
+	branch?: string;
+	tab?: number;
+	path?: string;
+	/** 非文件 buffer 的 scheme（codediff://、fugitive:// …） */
+	virtual?: string;
+	bufname?: string;
+	/** 从 diff 里抽出来的临时文件 */
+	snapshot?: string;
+	line?: number;
+	col?: number;
+	filetype?: string;
+	modified?: boolean;
+	visual?: { start_line: number; end_line: number; lines?: string[]; clipped?: boolean };
+	selection?: { start_line: number; end_line: number; lines?: string[]; clipped?: boolean };
+	context?: { start_line: number; end_line: number; lines?: string[]; clipped?: boolean };
+	diagnostics?: { line?: number; severity?: string; source?: string; message?: string }[];
+	/** 项目概览摘要（project-overview.nvim 提供），"这是什么项目" */
+	digest?: string;
+};
+
 type AskPayload = {
-	/** nvim 侧已经渲染好的整条消息（新协议，优先使用） */
+	/** 问题正文（新协议里不含上下文块，块由本扩展按 anchor 渲染） */
 	text?: string;
 	/**
 	 * nvim 生成的、不透明的任务 id：结束一轮时原样带回（bridge 的 action=result），
@@ -49,16 +75,7 @@ type AskPayload = {
 	task_id?: string;
 	/** 旧协议：问题正文 + 锚点，由本扩展拼装 */
 	prompt?: string;
-	anchor?: {
-		cwd?: string;
-		tab?: number;
-		path?: string;
-		line?: number;
-		col?: number;
-		filetype?: string;
-		modified?: boolean;
-		visual?: { start_line: number; end_line: number; lines: string[] };
-	};
+	anchor?: AnchorPayload;
 };
 
 /** 一条 assistant 消息里的可见文本（content 可能是字符串或 part 数组） */
@@ -74,29 +91,52 @@ function assistantText(message: any): string | undefined {
 	return text === "" ? undefined : text;
 }
 
-/** nvim 发来的 {问题 + 锚点} 拼成一条用户消息 */
-function renderAsk(payload: AskPayload): string {
-	const a = payload.anchor ?? {};
-	const question = (payload.prompt ?? "").trim();
-	const head: string[] = [question || "(空问题)"];
-
-	const where = [
-		a.path ? `${a.path}:${a.line ?? 1}` : "<无文件名>",
-		a.tab ? `tab ${a.tab}` : null,
-		a.modified ? "未保存" : null,
-	].filter(Boolean);
-
-	head.push("", `<nvim-context ${where.join(" · ")}>`);
-	if (a.cwd) head.push(`cwd: ${a.cwd}`);
-	if (a.visual) {
-		const fence = a.filetype && a.filetype !== "" ? a.filetype : "";
-		head.push(`selection ${a.visual.start_line}-${a.visual.end_line}:`);
-		head.push(`\`\`\`${fence}`);
-		head.push(...(a.visual.lines ?? []));
-		head.push("\`\`\`");
+/**
+ * 把结构化锚点渲染成 <nvim-context> 块（可能带 <project-overview>）。
+ * 与 lua/ask_agent/message.lua 的 M.block 保持同一格式：锚点走协议字段，
+ * 排版只在这里和那里各一份。
+ */
+function renderBlock(a: AnchorPayload): string {
+	const out: string[] = [];
+	if (typeof a.digest === "string" && a.digest.trim() !== "") {
+		out.push("<project-overview>", ...a.digest.replace(/\n+$/, "").split("\n"), "</project-overview>", "");
 	}
-	head.push("</nvim-context>");
-	return head.join("\n");
+	const where: string[] = [];
+	if (a.rel) where.push(`${a.rel}:${a.line ?? 1}`);
+	else if (a.path) where.push(`${a.path}:${a.line ?? 1}`);
+	else if (a.virtual) where.push(a.bufname ?? a.virtual + "://");
+	else where.push("<无文件名>");
+	if (a.snapshot) where.push(`a diff snapshot of ${a.snapshot}`);
+	if (a.branch) where.push(`branch ${a.branch}`);
+	if (a.tab) where.push(`tab ${a.tab}`);
+	if (a.modified) where.push("unsaved");
+
+	out.push(`<nvim-context ${where.join(" · ")}>`);
+	if (a.cwd) out.push(`cwd: ${a.cwd}`);
+	if (a.root) out.push(`root: ${a.root}`);
+	if (a.snapshot) {
+		out.push("note: that path is a copy extracted for a diff, not the file in the project — read it, don't edit it");
+	}
+	if (a.diagnostics && a.diagnostics.length > 0) {
+		out.push("diagnostics:");
+		for (const d of a.diagnostics) {
+			out.push(`  ${d.source ?? "lsp"}:${d.line ?? 0}: ${d.severity ?? "warn"}: ${d.message ?? ""}`);
+		}
+	}
+	const fence = a.filetype && a.filetype !== "" ? a.filetype : "";
+	if (a.context && (a.context.lines?.length ?? 0) > 0) {
+		out.push(
+			`context (lines ${a.context.start_line}-${a.context.end_line}${a.context.clipped ? ", clipped" : ""}):`,
+		);
+		out.push("```" + fence, ...(a.context.lines ?? []), "```");
+	}
+	const sel = a.visual ?? a.selection;
+	if (sel && (sel.lines?.length ?? 0) > 0) {
+		out.push(`selection ${sel.start_line}-${sel.end_line}${sel.clipped ? " (clipped)" : ""}:`);
+		out.push("```" + fence, ...(sel.lines ?? []), "```");
+	}
+	out.push("</nvim-context>");
+	return out.join("\n");
 }
 
 async function instances(): Promise<Instance[]> {
@@ -171,8 +211,12 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 			return;
 		}
 		try {
-			// 新协议：nvim 已渲染好整条消息；旧协议回落 renderAsk
-			const text = typeof payload.text === "string" ? payload.text : renderAsk(payload);
+			// 正文是问题（旧协议是整条渲染好的消息）；上下文块按结构化锚点在这里渲染，
+			// 这样 agent 的 transcript 里问题本身是干净的。
+			const question =
+				typeof payload.text === "string" ? payload.text : (payload.prompt ?? "").trim() || "(空问题)";
+			const block = payload.anchor ? renderBlock(payload.anchor) : "";
+			const text = block ? `${question}\n\n${block}` : question;
 			if (typeof payload.task_id === "string" && payload.task_id !== "") {
 				pending.push({ task_id: payload.task_id, at: Date.now() });
 			}

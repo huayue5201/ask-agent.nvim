@@ -1,20 +1,27 @@
 -- lua/ask_agent/message.lua
 ---@brief Render "question + anchor" into the final text that gets sent.
 --
--- Rendering lives on the nvim side (rather than in each agent adapter) so every backend receives
--- the same message format; switching agents does not require rewriting the assembly logic. The format
--- matches the pi extension's early renderAsk, so older pi extensions can still parse the legacy
--- {prompt, anchor} payload.
+-- Two ways out, one format:
+--
+--   * text-only backends (a TUI you paste into, an email file, tmux send-keys) get `M.render`:
+--     question + block, exactly what a human would have typed.
+--   * backends that understand the protocol (pi) get the question *and* the anchor as JSON, and
+--     render the block themselves; the question stays clean so the agent's transcript, the history
+--     ledger and the answer float all show the words rather than an envelope (see pi.lua).
+--
+-- The block format is shared with extensions/nvim-context.ts (`renderAnchor`), which is why it
+-- lives in one function here and one there, and nowhere else.
 
 local M = {}
 
+---Everything after the question: the project digest (what this is) and the anchor (where it is).
+---Backends that carry a structured anchor render this themselves; every other backend gets
+---`M.render`, which is the two concatenated.
 ---@param anchor table
----@param prompt string
 ---@return string
-function M.render(anchor, prompt)
+function M.block(anchor)
 	local a = anchor or {}
-	local question = vim.trim(prompt or "")
-	local out = { question ~= "" and question or "(empty question)" }
+	local out = {}
 
 	-- Where the question lives. The repository-relative path is what an agent can
 	-- use as-is (`git grep`, an editor, a compiler), so it wins over the cwd one.
@@ -47,7 +54,6 @@ function M.render(anchor, prompt)
 		add("unsaved")
 	end
 
-	table.insert(out, "")
 	-- Project overview digest (optional): placed before the anchor so the model sees "what project this is"
 	-- before "where this question lives"
 	if a.digest and a.digest ~= "" then
@@ -103,6 +109,25 @@ function M.render(anchor, prompt)
 		table.insert(out, "```")
 	end
 	table.insert(out, "</nvim-context>")
+	return table.concat(out, "\n")
+end
+
+---The whole message: the words, then what they are about.
+---
+---The digest is fetched here rather than at capture time because this runs at the moment of
+---sending (a window that is opened and abandoned should not pay for a cold collect).
+---@param anchor table
+---@param prompt string
+---@return string
+function M.render(anchor, prompt)
+	local a = anchor or {}
+	local question = vim.trim(prompt or "")
+	if a.digest == nil and a.root then
+		a.digest = require("ask_agent.project").digest(a.root)
+	end
+	local out = { question ~= "" and question or "(empty question)" }
+	table.insert(out, "")
+	table.insert(out, M.block(a))
 	return table.concat(out, "\n")
 end
 

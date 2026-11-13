@@ -238,7 +238,7 @@ function M.lean(a)
 		return a
 	end
 	local out = vim.deepcopy(a)
-	out.context, out.diagnostics = nil, nil
+	out.context, out.diagnostics, out.digest = nil, nil, nil
 	if type(out.visual) == "table" then
 		out.visual.lines = nil
 	end

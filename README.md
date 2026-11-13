@@ -191,9 +191,30 @@ window), so it is the thing you were looking at when you pressed the key:
 | `context` | the source around the cursor, **only** for buffers whose content the agent cannot read from disk: unsaved (`modified`) or pathless (a diff buffer) |
 | `visual` | in visual mode: the line range plus the selected text |
 | `virtual`, `snapshot` | a plugin buffer (`codediff://…`) travels as a name only; a copy inside an extracted diff tree is marked "read it, don't edit it" |
+| `digest` | the project overview, see below |
 
-The rendered message is the question, an optional `<project-overview>` digest, then
-one `<nvim-context …>` block:
+Two things ride along, and they answer different questions: the **digest** says *what
+this project is*, the **anchor** says *where in it the question was asked*.
+
+The digest comes from [project-overview.nvim](https://github.com/huayue5201/project-overview.nvim)
+(structure, size, build entry, conventions — no source). It is fetched when the question
+is **sent**, cached per root for five minutes, and never fails a question: no plugin, a
+broken collect or `enabled = false` simply means the block is absent. It buys the agent
+a round of `find`/`grep` — a few hundred tokens instead of a few thousand.
+
+```lua
+require("ask_agent").setup({
+  project = {
+    enabled = true,     -- attach the digest when project-overview.nvim is installed
+    wait_ms = 1500,     -- how long a cold first collect may take; after that it is cached
+    full = false,       -- also include deps / conventions / size detail
+    ttl = 300,          -- seconds a digest is reused
+  },
+})
+```
+
+A text-only backend (a TUI you paste into, tmux `send-keys`, the Claude email file) gets
+the question and this block as one string — exactly what a human would have typed:
 
     why does this loop skip the last item?
 
@@ -223,8 +244,29 @@ require("ask_agent").setup({
 ```
 
 The journal keeps the coordinate, not the source: `anchor` fields `context`,
-`diagnostics` and `visual.lines` are dropped before a task is recorded, so
+`diagnostics`, `digest` and `visual.lines` are dropped before a task is recorded, so
 `journal.json` and `history.json` stay small and a jump still lands on the line.
+
+### The anchor is a protocol field, not prose
+
+`pi` receives the question in `text` and the anchor as JSON:
+
+```json
+{"text": "why does this loop skip the last item?",
+ "task_id": "1763031057113-42",
+ "anchor": {"cwd": "/home/me/proj", "root": "/home/me/proj", "rel": "src/parser.rs",
+            "line": 42, "branch": "main", "tab": 1, "modified": true,
+            "diagnostics": [{"line": 42, "severity": "error", "source": "rust-analyzer",
+                             "message": "mismatched types"}],
+            "context": {"start_line": 22, "end_line": 62, "lines": ["…"]}}}
+```
+
+The extension renders the `<nvim-context>` block itself (`renderBlock` in
+`extensions/nvim-context.ts`, the same layout as `message.block` in Lua), so the
+question stays clean everywhere it is shown: the agent's transcript, the history
+ledger, the `o` answer float, a yanked task. Backends without `anchor_payload = true`
+keep receiving `message.render` output, block included — nothing breaks, and an older
+pi extension still parses the legacy `{prompt, anchor}` payload.
 
 ## Setup
 

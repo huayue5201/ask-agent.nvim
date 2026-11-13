@@ -699,7 +699,20 @@ end
 local function deliver_text(mod, target, text, opts)
 	-- What the journal keeps is the coordinate, not the source the question inlined
 	-- (that is for the agent, and a task only needs somewhere to jump to).
-	local anchor = require("ask_agent.context").lean(opts and opts.anchor)
+	local full = opts and opts.anchor
+	-- The digest is usually attached by message.render(); a caller that built the text
+	-- elsewhere (the batch queue keeps its own copy of the anchor) still gets one here.
+	-- Cached per root, so this is free after the first question in a project.
+	if type(full) == "table" and full.digest == nil and full.root then
+		full.digest = require("ask_agent.project").digest(full.root)
+	end
+	local anchor = require("ask_agent.context").lean(full)
+	-- Backends that understand a structured anchor get the question alone plus the fields;
+	-- everyone else gets the already-rendered text (question + block) untouched.
+	local send_text = text
+	if mod.anchor_payload and type(full) == "table" then
+		send_text = require("ask_agent.message").question(text)
+	end
 	-- Turn boundary before the send: the agent may start writing the moment the text
 	-- lands, so the tree has to be taken first. A failed send drops the record again.
 	local snap = require("ask_agent.snapshot")
@@ -708,7 +721,7 @@ local function deliver_text(mod, target, text, opts)
 	-- (the protocol has no message ids of its own). Generated before the send, since
 	-- the answer may arrive before the bookkeeping below runs.
 	local task_id = require("ask_agent.history").new_id()
-	local ok, send_err = mod.send(target, text, { task_id = task_id })
+	local ok, send_err = mod.send(target, send_text, { task_id = task_id, anchor = full })
 	if not ok then
 		if turn_ok and turn then
 			pcall(snap.cancel, turn)
@@ -1290,7 +1303,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, map?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, tree_lines?: boolean, running_line?: string, task_limit?: integer, keys?: table, context_lines?: integer, max_selection?: integer, max_selection_bytes?: integer, task_ttl?: integer }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, map?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, tree_lines?: boolean, running_line?: string, task_limit?: integer, keys?: table, context_lines?: integer, max_selection?: integer, max_selection_bytes?: integer, project?: table, task_ttl?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1325,6 +1338,9 @@ function M.setup(opts)
 		max_selection = opts.max_selection,
 		max_selection_bytes = opts.max_selection_bytes,
 	})
+	-- What a question says about the project it is asked in (the digest; the anchor is
+	-- captured with the question itself). See README "What a question carries".
+	require("ask_agent.project").setup(opts.project)
 	-- Notification house style: bold + level colour, optional terminal bell
 	require("ask_agent.notify").setup({
 		style = opts.notify_style,
