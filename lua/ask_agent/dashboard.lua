@@ -44,7 +44,7 @@ local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 -- agent down to the task that is running right now. Narrow sidebars fall back to
 -- plain indentation so the text keeps its room.
 local TREE_MIN_WIDTH = 20
-local cfg = { tree_lines = true, running_line = "dash", task_limit = 5 }
+local cfg = { tree_lines = true, running_line = "dash", task_limit = 5, keys = {} }
 local RUN_HL = { "AskAgentRunDim", "AskAgentRunMid", "AskAgentRunBright" }
 local RUN_FG = { "#2b6b3e", "#3fb950", "#7ee787" }
 local run_hl_tc -- termguicolors value the groups were built for
@@ -682,24 +682,61 @@ local function dismiss(rec)
 	state.dismiss(rec.key)
 end
 
--- Keys, in the order they appear in the help float.
-local HELP = {
-	{ "?", "Show these keys" },
-	{ "<CR>", "Agent: show it in a viewer float · Task: jump to its anchor (dispatched tasks) or show the agent" },
-	{ "J", "Jump to the agent's own window (rex/tmux), where it really runs" },
-	{ "s", "Send a question to that agent" },
-	{ "S", "Send every queued question routed to it" },
-	{ "a", "Acknowledge a done/blocked agent" },
-	{ "d", "Delete the queued task · dismiss a dead agent" },
-	{ "n", "Rename an agent (empty restores the directory name)" },
-	{ "v", "Diff: the turn behind that task · the whole worktree for an agent" },
-	{ "o", "Answer: the question and what the agent said back (results = true)" },
-	{ "y", "Copy the task text" },
-	{ "f", "Only agents that need you (blocked / error / unread done)" },
-	{ "<Tab>", "Fold or unfold the agent's tasks (and the older-task row)" },
-	{ "r", "Poll every agent now" },
-	{ "q", "Close the sidebar" },
+-- Keys, in the order they appear in the help float. `name` is what
+-- `setup({ dashboard = { keys = { ... } } })` overrides; a name bound to `false`
+-- is not mapped at all. Semantics first: `R` renames (R), `v` views the diff,
+-- `y` yanks, `r` refreshes, `s` sends, `d` deletes/dismisses, `J` jumps.
+local KEYS = {
+	{ "help", "?", "Show these keys" },
+	{
+		"open",
+		"<CR>",
+		"Agent: show it in a viewer float · Task: jump to its anchor (dispatched tasks) or show the agent",
+	},
+	{ "jump", "J", "Jump to the agent's own window (rex/tmux), where it really runs" },
+	{ "send", "s", "Send a question to that agent" },
+	{ "send_queue", "S", "Send every queued question routed to it" },
+	{ "ack", "a", "Acknowledge a done/blocked agent" },
+	{ "dismiss", "d", "Delete the queued task · dismiss a dead agent" },
+	{ "rename", "R", "Rename an agent (empty restores the directory name)" },
+	{ "diff", "v", "Diff: the turn behind that task · the whole worktree for an agent" },
+	{ "answer", "o", "Answer: the question and what the agent said back (results = true)" },
+	{ "copy", "y", "Copy the task text" },
+	{ "filter", "f", "Only agents that need you (blocked / error / unread done)" },
+	{ "fold", { "<Tab>", "za" }, "Fold or unfold the agent's tasks (and the older-task row)" },
+	{ "refresh", "r", "Poll every agent now" },
+	{ "close", { "q", "<Esc>" }, "Close the sidebar" },
 }
+
+---One key for `name`, or nil when the user unbound it.
+---@param name string
+---@return string|string[]|nil
+local function keys_of(name)
+	for _, item in ipairs(KEYS) do
+		if item[1] == name then
+			local key = cfg.keys[name]
+			if key == nil then
+				return item[2]
+			end
+			return key ~= false and key or nil
+		end
+	end
+	return nil
+end
+
+---A key as the help float shows it: `<Tab>` stays, a list is joined with "/".
+---@param key string|string[]
+---@return string
+local function key_label(key)
+	if type(key) == "table" then
+		local out = {}
+		for _, k in ipairs(key) do
+			out[#out + 1] = k
+		end
+		return table.concat(out, "/")
+	end
+	return key
+end
 
 -- Sorting is intentional: whatever waits on a human comes first, then finished
 -- work, then busy agents, then idle ones.
@@ -707,9 +744,14 @@ local ORDER_HINT = "Order: blocked/error · done · working · idle"
 
 ---Help float, bottom-right, `q` / `<Esc>` / `?` closes it.
 local function show_help()
-	local lines = {}
-	for _, item in ipairs(HELP) do
-		lines[#lines + 1] = ("%-10s %s"):format(item[1], item[2])
+	local lines, bound = {}, {}
+	for _, item in ipairs(KEYS) do
+		local key = keys_of(item[1])
+		if key then
+			local label = key_label(key)
+			lines[#lines + 1] = ("%-10s %s"):format(label, item[3])
+			bound[#bound + 1] = { label, item[3] }
+		end
 	end
 	local content = 0
 	for _, line in ipairs(lines) do
@@ -740,7 +782,7 @@ local function show_help()
 		return
 	end
 	local ns = vim.api.nvim_create_namespace("ask_agent.dashboard.help")
-	for i, item in ipairs(HELP) do
+	for i, item in ipairs(bound) do
 		vim.api.nvim_buf_set_extmark(b, ns, i - 1, 0, {
 			end_col = #item[1],
 			hl_group = "AskAgentHelpKey",
@@ -796,165 +838,166 @@ local function attach(bufnr)
 			end
 		end
 	end
-	vim.keymap.set("n", "<CR>", with(nil, open_node), opts_buf)
-	-- `o` shows the exchange: the question plus the answer the agent handed back
-	-- (`results = true`); on an agent row it opens its newest task's answer.
-	vim.keymap.set(
-		"n",
-		"o",
-		with(nil, function(node)
-			if node.kind == "queued" then
-				notify.notify("[ask_agent] That question is still queued: no answer yet", vim.log.levels.INFO)
-				return
-			end
-			local task = node.task or (node.rec and node.rec.tasks and node.rec.tasks[1])
-			if not task or not task.task_id then
-				notify.notify("[ask_agent] No answer recorded for this task", vim.log.levels.INFO)
-				return
-			end
-			local ok, err = require("ask_agent").show_answer(task)
-			if not ok then
-				notify.notify("[ask_agent] " .. (err or "could not show the answer"), vim.log.levels.INFO)
-			end
-		end),
-		opts_buf
-	)
-	vim.keymap.set("n", "J", with(nil, jump_host_node), opts_buf)
-	vim.keymap.set(
-		"n",
-		"s",
-		with("agent", function(node)
-			send_to(node.rec)
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"S",
-		with("agent", function(node)
-			flush_queue(node.rec)
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"a",
-		with("agent", function(node)
-			state.ack(node.rec.key)
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"d",
-		with(nil, function(node)
-			if node.kind == "queued" then
-				queue.remove(node.entry.id)
-			elseif node.kind == "agent" then
-				dismiss(node.rec)
-			end
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"<Tab>",
-		with(nil, function(node)
-			if node.kind == "more" then
-				expanded_tasks[node.rec.key] = true
-				render()
-				return
-			end
-			if node.kind ~= "agent" then
-				return
-			end
-			if collapsed[node.rec.key] then
-				collapsed[node.rec.key] = nil
-			else
-				collapsed[node.rec.key] = true
-				-- folding is also "start over": unfold shows the recent slice again
-				expanded_tasks[node.rec.key] = nil
-			end
-			render()
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"n",
-		with("agent", function(node)
-			rename(node.rec)
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"v",
-		with(nil, function(node)
-			local ask = require("ask_agent")
-			local rec = node.rec
-			local cwd = rec and rec.target and rec.target.cwd or nil
-			if node.kind == "agent" then
-				ask.diff({ cwd = cwd })
-				return
-			end
-			-- the turn this send opened is the precise diff; the correlation is the
-			-- older fallback for tasks recorded before turn ids were kept
-			local turn_id = node.kind ~= "queued" and node.task and node.task.turn_id
-			if turn_id then
-				ask.diff({ cwd = cwd, id = turn_id })
-				return
-			end
-			local correlation = node.kind ~= "queued" and node.task and node.task.correlation
-			if not correlation then
-				notify.notify("[ask_agent] No turn recorded for this question yet", vim.log.levels.INFO)
-				return
-			end
-			ask.diff({ cwd = cwd, correlation = correlation })
-		end),
-		opts_buf
-	)
-	vim.keymap.set(
-		"n",
-		"y",
-		with(nil, function(node)
-			local text
-			if node.kind == "agent" then
-				text = state.name(node.rec)
-			elseif node.kind == "queued" then
-				text = node.entry.prompt
-			else
-				text = node.task and node.task.text
-			end
-			if not text or text == "" then
-				return
-			end
-			pcall(vim.fn.setreg, "+", text)
-			pcall(vim.fn.setreg, '"', text)
-			notify.notify("[ask_agent] Copied", vim.log.levels.INFO)
-		end),
-		opts_buf
-	)
-	vim.keymap.set("n", "f", function()
-		only_needs = not only_needs
-		render()
-	end, opts_buf)
-	vim.keymap.set("n", "?", show_help, opts_buf)
-	vim.keymap.set("n", "r", function()
-		state.refresh()
-		render()
-	end, opts_buf)
+
 	local function close()
 		if win and vim.api.nvim_win_is_valid(win) then
 			pcall(vim.api.nvim_win_close, win, true)
 		end
 	end
-	vim.keymap.set("n", "q", close, opts_buf)
-	vim.keymap.set("n", "<Esc>", close, opts_buf)
+
+	-- One handler per key name in KEYS; `kind` limits a handler to a row type.
+	local function show_answer(node)
+		if node.kind == "queued" then
+			notify.notify("[ask_agent] That question is still queued: no answer yet", vim.log.levels.INFO)
+			return
+		end
+		local task = node.task or (node.rec and node.rec.tasks and node.rec.tasks[1])
+		if not task or not task.task_id then
+			notify.notify("[ask_agent] No answer recorded for this task", vim.log.levels.INFO)
+			return
+		end
+		local ok, err = require("ask_agent").show_answer(task)
+		if not ok then
+			notify.notify("[ask_agent] " .. (err or "could not show the answer"), vim.log.levels.INFO)
+		end
+	end
+
+	local function show_diff(node)
+		local ask = require("ask_agent")
+		local rec = node.rec
+		local cwd = rec and rec.target and rec.target.cwd or nil
+		if node.kind == "agent" then
+			ask.diff({ cwd = cwd })
+			return
+		end
+		-- the turn this send opened is the precise diff; the correlation is the
+		-- older fallback for tasks recorded before turn ids were kept
+		local turn_id = node.kind ~= "queued" and node.task and node.task.turn_id
+		if turn_id then
+			ask.diff({ cwd = cwd, id = turn_id })
+			return
+		end
+		local correlation = node.kind ~= "queued" and node.task and node.task.correlation
+		if not correlation then
+			notify.notify("[ask_agent] No turn recorded for this question yet", vim.log.levels.INFO)
+			return
+		end
+		ask.diff({ cwd = cwd, correlation = correlation })
+	end
+
+	local function copy(node)
+		local text
+		if node.kind == "agent" then
+			text = state.name(node.rec)
+		elseif node.kind == "queued" then
+			text = node.entry.prompt
+		else
+			text = node.task and node.task.text
+		end
+		if not text or text == "" then
+			return
+		end
+		pcall(vim.fn.setreg, "+", text)
+		pcall(vim.fn.setreg, '"', text)
+		notify.notify("[ask_agent] Copied", vim.log.levels.INFO)
+	end
+
+	local function fold(node)
+		if node.kind == "more" then
+			expanded_tasks[node.rec.key] = true
+			render()
+			return
+		end
+		if node.kind ~= "agent" then
+			return
+		end
+		if collapsed[node.rec.key] then
+			collapsed[node.rec.key] = nil
+		else
+			collapsed[node.rec.key] = true
+			-- folding is also "start over": unfold shows the recent slice again
+			expanded_tasks[node.rec.key] = nil
+		end
+		render()
+	end
+
+	-- name -> { kind?, needs_node?, fn }: `kind` limits the mapping to that row
+	-- type, `needs_node = false` keeps a global key working on a row that has no
+	-- node (the "nothing needs you" line, or the blank line under a folded agent).
+	local ACTIONS = {
+		help = { needs_node = false, fn = show_help },
+		open = { fn = open_node },
+		answer = { fn = show_answer },
+		jump = { fn = jump_host_node },
+		send = {
+			kind = "agent",
+			fn = function(node)
+				send_to(node.rec)
+			end,
+		},
+		send_queue = {
+			kind = "agent",
+			fn = function(node)
+				flush_queue(node.rec)
+			end,
+		},
+		ack = {
+			kind = "agent",
+			fn = function(node)
+				state.ack(node.rec.key)
+			end,
+		},
+		dismiss = {
+			fn = function(node)
+				if node.kind == "queued" then
+					queue.remove(node.entry.id)
+				elseif node.kind == "agent" then
+					dismiss(node.rec)
+				end
+			end,
+		},
+		rename = {
+			kind = "agent",
+			fn = function(node)
+				rename(node.rec)
+			end,
+		},
+		diff = { fn = show_diff },
+		copy = { fn = copy },
+		filter = {
+			needs_node = false,
+			fn = function()
+				only_needs = not only_needs
+				render()
+			end,
+		},
+		fold = { fn = fold },
+		refresh = {
+			needs_node = false,
+			fn = function()
+				state.refresh()
+				render()
+			end,
+		},
+		close = { needs_node = false, fn = close },
+	}
+
+	for _, item in ipairs(KEYS) do
+		local action = ACTIONS[item[1]]
+		local key = keys_of(item[1])
+		if action and key then
+			local handler = (action.needs_node == false) and action.fn or with(action.kind, action.fn)
+			local keys = type(key) == "table" and key or { key }
+			for _, k in ipairs(keys) do
+				vim.keymap.set("n", k, handler, opts_buf)
+			end
+		end
+	end
 end
 
 ---Dashboard appearance knobs (setup-level; per-call :AskAgentDashboard opts win).
----@param o { tree_lines?: boolean, running_line?: "dash"|"pulse"|"static"|"off", task_limit?: integer }|nil
+---@param o { tree_lines?: boolean, running_line?: "dash"|"pulse"|"static"|"off", task_limit?: integer,
+---          keys?: table<string, string|string[]|false> }|nil
 function M.configure(o)
 	if type(o) ~= "table" then
 		return
@@ -969,6 +1012,10 @@ function M.configure(o)
 	if o.task_limit ~= nil then
 		local n = math.floor(tonumber(o.task_limit) or 0)
 		cfg.task_limit = (n and n > 0) and n or false
+	end
+	if type(o.keys) == "table" then
+		-- merge, so a per-call :AskAgentDashboard keys = {...} does not wipe setup()
+		cfg.keys = vim.tbl_extend("force", cfg.keys, o.keys)
 	end
 end
 

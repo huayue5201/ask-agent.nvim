@@ -655,8 +655,24 @@ routed to that agent, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
 the whole worktree for an agent), `o` shows the question and the answer the agent
 handed back (|ask-agent-results|), `y` copies the task text, `f` toggles "only
-agents that need you", `<Tab>` folds its tasks, `?` opens the key help float, `r`
-polls now, `q` closes.
+agents that need you", `<Tab>` (or `za`) folds its tasks, `R` renames, `?` opens
+the key help float, `r` polls now, `q` closes.
+
+Every key is configurable, and `false` unbinds it:
+
+  >lua
+  require("ask_agent").setup({
+    keys = {
+      rename = "R",             -- open, jump, send, send_queue, ack, dismiss,
+      answer = false,           -- rename, diff, answer, copy, filter, fold,
+      fold = { "<Tab>", "za" }, -- refresh, close, help
+    },
+  })
+  <
+The help float shows the keys you actually bound, in the same order, so it never
+lies about the buffer. Defaults follow vim conventions: `n`/`N` stay free for
+next match, `r` refreshes, `y` yanks, `d` deletes/dismisses, `v` views a diff,
+`R` renames, `J` jumps out to the agent's own window.
 
 The winbar counts what wants you (`⚠2 ✓1 ◐3`) and lists the sort order in the
 `?` help: blocked/error, done, working, idle. A freshly opened sidebar grows once

@@ -916,14 +916,30 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `J` | jump out to the agent's own window (rex/tmux) | jump out to its agent's window |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
-| `n` | rename (empty restores the directory name) | |
+| `R` | rename (empty restores the directory name) | |
 | `v` | review the whole worktree vs HEAD | review the turn behind that task |
 | `o` | show the newest task's question + answer | show the question and what the agent said back (`results = true`) |
 | `y` | copy the name | copy the task text |
 | `f` | only agents that need you (blocked / error / unread done) — toggle | |
-| `<Tab>` | fold the agent's tasks | |
+| `<Tab>` / `za` | fold the agent's tasks | |
 | `?` | key help (a float; `q` closes it) | |
 | `r` / `q` | poll now / close | |
+
+Every one of them is renameable, and `false` takes it off the buffer entirely:
+
+```lua
+require("ask_agent").setup({
+  keys = {
+    rename = "R",        -- names: open, jump, send, send_queue, ack, dismiss,
+    answer = false,      -- rename, diff, answer, copy, filter, fold, refresh,
+    fold = { "<Tab>", "za" }, -- close, help
+  },
+})
+```
+
+The defaults follow vim conventions on purpose: `n`/`N` stay free (next match),
+`r` refreshes, `y` yanks, `d` deletes/dismisses, `v` views a diff, `R` renames,
+`J` jumps out to the agent's window.
 
 Row layout: fold marker, state glyph, name (padded to the longest name) with the task
 count, then the message; a task that has a code anchor shows it as `file.lua:42`
