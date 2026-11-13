@@ -552,6 +552,12 @@ Colors, icons and letters: each instance has a stable color derived from its `id
 used both in the map and in the list, plus its agent glyph. The letter is bold.
 The map itself is compact (blocks touch) and centered on screen.
 
+Only the cell under the cursor is asked for a name: the selected pane shows its agent
+name (the same name as in the list and the winbar) instead of the letter, shortened with
+`…` when the visible part of the pane is narrow, and left as a plain letter when even
+three columns do not fit. Every other cell keeps its one-character letter, so long names
+never crowd the map or move its cells around.
+
 No adapter is required. The map is the primary picker even for a single locatable
 candidate; only when no candidate can be placed in the layout (or there is no
 adapter) does it fall back to the list, where `<Tab>` goes back to the map.

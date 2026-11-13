@@ -39,6 +39,41 @@ assert(bg("AiMapPane") ~= bg("AiMapBg"), "panes stand out from the canvas")
 assert(bg("AiMapAgent") ~= bg("AiMapPane"), "agent cells stand out from the pane")
 assert(bg("AiMapSel") ~= bg("AiMapAgent"), "the selected agent stands out")
 
+-- Only the selected cell is asked for a name; every other cell keeps its letter, so a
+-- long name cannot push the map's shape around.
+items[1].name = "apibot"
+map.select({ panes = panes, items = items })
+local named = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+assert(named:find("apibot", 1, true), "the selected cell shows the agent's name")
+assert(named:find("b", 1, true) and named:find("c", 1, true), "unselected cells keep their letters")
+vim.api.nvim_buf_delete(0, { force = true })
+
+-- A name that cannot fit is shortened rather than dropped or spilling over the pane.
+items[1].name = ("api-worker-"):rep(8)
+map.select({ panes = panes, items = items })
+local cut = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+assert(cut:find("…", 1, true), "a name too long for its pane is shortened with an ellipsis")
+assert(not cut:find("api-worker-api-worker-api-worker", 1, true), "the shortened name stays inside the pane")
+vim.api.nvim_buf_delete(0, { force = true })
+items[1].name = "a"
+
+-- A narrow pane shortens the name into the cells it has; below three columns the
+-- letter is kept instead, so a tiny pane never renders a useless single glyph.
+local narrow = {
+	{ id = "n1", rect = { 0, 0, 0.2, 1 }, kind = "tiled" },
+	{ id = "n2", rect = { 0.2, 0, 0.8, 1 }, kind = "tiled" },
+}
+local narrow_items = {
+	{ pane_id = "n1", target = { label = "n1" }, name = "api-worker", icon = "" },
+	{ pane_id = "n2", target = { label = "n2" }, name = "n2", icon = "" },
+}
+map.select({ panes = narrow, items = narrow_items })
+local narrowed = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+assert(narrowed:find("…", 1, true), "a narrow pane shortens the name to its own width")
+assert(not narrowed:find("api-worker", 1, true), "the shortened name stops at the pane edge")
+assert(narrowed:find("b", 1, true), "the other pane keeps its letter")
+vim.api.nvim_buf_delete(0, { force = true })
+
 -- A state badge follows the letter, and a running turn animates it.
 items[1].status_glyph = "W"
 items[1].status_state = "working"

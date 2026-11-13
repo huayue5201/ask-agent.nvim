@@ -264,6 +264,11 @@ A pane covered by a floating window still gets its letter — placed on a visibl
 cell of that same pane, so nothing is painted over the floating window. Blocks
 are laid out compactly (no gaps) and the map is centered on screen.
 
+Only the selected cell (the one under the cursor) is asked for a name: it shows the
+agent's name instead of the letter, shortened with "…" when the visible part of the pane
+is narrow, and kept as a letter when fewer than three columns fit. Other cells stay
+letters, so long names never crowd the map.
+
 `list` is a plain list of every instance, including ones in other tabs and
 windows (the map never shows those), shown through `vim.ui.select` — so it is whatever your config provides
 (dropbar, telescope, fzf-lua, snacks, …), with no hard dependency. Each entry

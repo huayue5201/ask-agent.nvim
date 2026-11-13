@@ -327,6 +327,37 @@ local function place_label(t, owner, need)
 	return best[1], best[2], best[3]
 end
 
+--- Shorten `str` to at most `width` display cells, ending in an ellipsis.
+--- Returns nil when nothing readable fits (the map then keeps the plain letter).
+---@param str string
+---@param width integer
+---@return string? text
+local function ellipsize(str, width)
+	if width <= 0 then
+		return nil
+	end
+	if vim.fn.strdisplaywidth(str) <= width then
+		return str
+	end
+	-- room for at least one character plus the ellipsis, otherwise it reads as noise
+	if width < 3 then
+		return nil
+	end
+	local out, used = {}, 0
+	for _, ch in ipairs(vim.fn.split(str, "\\zs")) do
+		local cw = vim.fn.strdisplaywidth(ch)
+		if used + cw > width - 1 then
+			break
+		end
+		out[#out + 1] = ch
+		used = used + cw
+	end
+	if #out == 0 then
+		return nil
+	end
+	return table.concat(out) .. "…"
+end
+
 --- Convert adapter leaf geometry into character cells (1-based, bottom-left inclusive), marking those "too small for a label"
 ---@param panes table[]
 ---@param by_pane table<string, table>
@@ -389,7 +420,7 @@ local function paint(panes, by_pane, W, H, sel, frame)
 			else
 				group = float and "AiMapFloat" or "AiMapPane"
 			end
-			-- Cell content: agent glyph + space + letter + space + status badge.
+			-- Cell content: agent glyph + space + text + space + status badge.
 			-- The badge is a spinner for a running turn and a state glyph otherwise.
 			local icon = t.item and t.item.icon or nil
 			if icon == "" then
@@ -406,28 +437,82 @@ local function paint(panes, by_pane, W, H, sel, frame)
 			end
 			local icon_w = icon and vim.fn.strdisplaywidth(icon) or 0
 			local status_w = status and vim.fn.strdisplaywidth(status) or 0
-			local need = (icon and (icon_w + 1) or 0) + letter_w
-			if status then
-				need = need + 1 + status_w
+
+			-- Only the selected cell is asked for a name: everywhere else stays a letter, so the map
+			-- keeps its shape no matter how long the names are. A name that does not fit (not even
+			-- shortened) falls back to the letter, so `body` starts out as the letter.
+			local body, body_w = letter, letter_w
+			local name = t.item and sel == t.item and t.item.name or nil
+			if type(name) ~= "string" or name == "" then
+				name = nil
 			end
-			local y, x, stop = place_label(t, owner, need)
-			if not y and status then
-				-- Narrow pane: the state badge is the first thing to drop
-				status, need = nil, (icon and (icon_w + 1) or 0) + letter_w
+
+			local y, x, stop
+			if name then
+				local name_w = vim.fn.strdisplaywidth(name)
+				local pad = icon and (icon_w + 1) or 0
+				local ny, nx, nstop = place_label(t, owner, pad + name_w + (status and (1 + status_w) or 0))
+				if not ny and status then
+					-- Same trade-off as below: the badge goes before the name gets truncated
+					ny, nx, nstop = place_label(t, owner, pad + name_w)
+					if ny then
+						status, status_w = nil, 0
+					end
+				end
+				if ny then
+					y, x, stop, body, body_w = ny, nx, nstop, name, name_w
+				end
+			end
+
+			if not y then
+				local need = (icon and (icon_w + 1) or 0) + letter_w
+				if status then
+					need = need + 1 + status_w
+				end
 				y, x, stop = place_label(t, owner, need)
+				if not y and status then
+					-- Narrow pane: the state badge is the first thing to drop
+					status, need = nil, (icon and (icon_w + 1) or 0) + letter_w
+					y, x, stop = place_label(t, owner, need)
+				end
+				if not y and icon then
+					icon, icon_w = nil, 0
+					y, x, stop = place_label(t, owner, letter_w)
+				end
+				if y and name then
+					-- The visible run is too narrow for the whole name: shorten it into the cells the
+					-- letter would have used. Under three columns a name is noise, keep the letter.
+					local avail = (stop - x + 1) - (icon and (icon_w + 1) or 0)
+					local fitted = ellipsize(name, avail - (status and (1 + status_w) or 0))
+					if status then
+						-- A badge is worth less than a readable piece of the name: when the badge is
+						-- the reason the name is cut down to a couple of characters, drop it.
+						local roomy = ellipsize(name, avail)
+						if
+							roomy
+							and vim.fn.strdisplaywidth(roomy) >= 4
+							and (not fitted or vim.fn.strdisplaywidth(roomy) > vim.fn.strdisplaywidth(fitted) + 1)
+						then
+							fitted, status, status_w = roomy, nil, 0
+						end
+					end
+					if fitted then
+						local fitted_w = vim.fn.strdisplaywidth(fitted)
+						if fitted_w >= 3 then
+							body, body_w = fitted, fitted_w
+						end
+					end
+				end
 			end
-			if not y and icon then
-				icon, icon_w = nil, 0
-				y, x, stop = place_label(t, owner, letter_w)
-			end
+
 			if y then
 				local cx = x
 				if icon then
 					text(g, y, cx, stop, icon, hl(group, icon_group(t.item.icon_hl)))
 					cx = cx + icon_w + 1
 				end
-				text(g, y, cx, stop, letter, hl(group, "Bold"))
-				cx = cx + letter_w
+				text(g, y, cx, stop, body, hl(group, "Bold"))
+				cx = cx + body_w
 				if status then
 					text(g, y, cx + 1, stop, status, hl(group, state_group(t.item.status_state)))
 				end

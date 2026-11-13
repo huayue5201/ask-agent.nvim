@@ -543,7 +543,8 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 				pane_id = pane_id,
 				target = t,
 				label = t.label,
-				name = vim.fn.fnamemodify(t.cwd or "?", ":t"),
+				-- The map draws letters, but the selected cell can afford the name
+				name = name_of(t),
 				icon = icon_prefix(mod, t):gsub("%s+$", ""),
 				icon_hl = icon_color(mod, t),
 				-- The agent glyph stays put; a badge after the letter carries the state,
