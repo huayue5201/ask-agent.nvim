@@ -831,10 +831,21 @@ function M.on(event, fn)
 	return state.on(event, fn)
 end
 
----One statusline chunk (`⚠1 ✓2 ◐3`), empty when there is nothing to report.
+---One statusline chunk (`⠹2 ⚠1 ?1 ✓3`), empty when the rest of the world is quiet:
+---
+---    ⠹N  working (animated spinner; plain ◐ with `animated = false`)
+---    ⚠N  blocked: needs your confirmation or credentials
+---    ?N  blocked: waiting for an answer to a question
+---    ✓N  finished and not looked at yet (acknowledging clears it)
+---    ✗N  failed
+---    ●N  idle, shown only when nothing above is happening
+---
+---The returned string has no highlight groups: it is plain text for
+---`vim.o.statusline`, a lualine `%s` section or any other consumer.
+---@param opts? { animated?: boolean, idle?: boolean|string }
 ---@return string
-function M.statusline()
-	return state.statusline()
+function M.statusline(opts)
+	return state.statusline(opts)
 end
 
 ---Jump to a code anchor (a table from ask_agent.context.capture, or an entry/anchor

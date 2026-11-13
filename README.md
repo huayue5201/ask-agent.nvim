@@ -47,7 +47,7 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   viewer float (rex, tmux, herdr, or any viewer you register) and on a task jumps to
   the code anchor it was written at. Blocked prompts, finished turns, failures and
   an agent exiting mid-turn are reported through `vim.notify`; `ask_agent.statusline()`
-  puts the counts (`⚠1 ✓2 ◐3`) where you want them.
+  puts the counts (`⠹2 ⚠1 ?1 ✓3`) where you want them.
 - **View an agent without leaving Neovim** — `<CR>` on an agent in the sidebar opens
   a float that shows the *same* agent, live, in the terminal you already run it in
   (rex, tmux, herdr). A second display, not a copy: the agent keeps its session,
@@ -805,7 +805,8 @@ ask.task(key)                 -- newest task handed to that agent
 ask.agents(opts)              -- every instance, most urgent first ({ state, backend, correlation })
 ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
 ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(nil) on timeout)
-ask.statusline()              -- "⚠1 ✓2 ◐3", empty when nothing needs attention
+ask.statusline(opts)          -- "⠹2 ⚠1 ?1 ✓3"; empty when no agent is up
+                              -- { animated = true, idle = "auto" }
 ask.dashboard(opts)           -- open the sidebar ({ pos = "right", width = 40 }; pos = "left" moves it)
 ask.goto_anchor(a)            -- jump to a captured anchor (false + reason if gone)
 ask.jump(target)              -- bring the agent's own window to the front (false + reason)
@@ -858,6 +859,50 @@ and a finished turn is not reported while its local terminal is the current
 window. `done` and `blocked` stay in the dashboard and count in the statusline
 until `a` (acknowledge) or `d` (dismiss) — the CLI stays the place where work is
 accepted.
+
+### What the statusline shows
+
+`ask.statusline()` returns one plain-text chunk, most urgent first, with no
+highlight groups — put it in `vim.o.statusline`, a lualine section or anything
+else that takes a string:
+
+```
+⠹2 ⚠1 ?1 ✓3 ✗1 ●2
+│  │  │  │  │  └ idle agents (only when nothing above is happening)
+│  │  │  │  └ failed
+│  │  │  └ finished turns you have not looked at yet
+│  │  └ waiting for an answer to a question
+│  └ waiting for your confirmation or credentials
+└ working, spinner animated at `tick` ms
+```
+
+- The spinner only runs while something is working, and it only exists to make the
+  statusline redraw (the frame is derived from the clock). Quiet means zero wakeups.
+- `⚠` and `?` are separate because they ask different things of you: a yes/no versus
+  an answer. A source that reports `blocked` without a `kind` counts as `⚠`.
+- `✓` disappears when you acknowledge (`a`) or dismiss (`d`) the turn — it counts
+  what you have not seen, not what finished.
+- `●` is the fallback: it appears only when the other segments are empty, so an idle
+  fleet of three reads `●2` and nothing else. Pass `idle = false` to hide it,
+  `idle = true` to keep it next to the others, `animated = false` for a static `◐`.
+
+```lua
+-- a lualine/statusline expression: evaluated on every draw, nothing else needed
+{ function() return require("ask_agent").statusline() end }
+```
+
+If you compose the string once (`vim.o.statusline = ...` and rebuild it only when
+something changes — the fast way, and what this plugin's docs assume elsewhere),
+listen for `User AskAgentStatuslineTick`: it fires ~8 times a second while an agent
+works, and only the spinner frame changes. Both hooks are cheap: the plugin's timer
+stops as soon as nothing is working.
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "AskAgentStatuslineTick",
+  callback = function() vim.o.statusline = build() end, -- or rebuild only the AI segment
+})
+```
 
 Where an observation came from is kept as `rec.source` — `rex` (the agent reported
 itself), `probe` (the backend's own hook/pane probe), or `heuristic` (nobody said

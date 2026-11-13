@@ -760,38 +760,156 @@ function M.all(opts)
 end
 
 ---Counts by state, `blocked` split by kind.
----@return { blocked: integer, done: integer, working: integer, error: integer, total: integer }
+---
+---`gone` is excluded (an exited agent is history, not a thing to act on), `done`
+---only counts while it is unread (acknowledging it is what makes the count go away),
+---and `live` is what the statusline calls "agents running right now".
+---@return { blocked: integer, permission: integer, question: integer, auth: integer,
+---  done: integer, error: integer, working: integer, idle: integer, unknown: integer,
+---  gone: integer, live: integer, total: integer }
 function M.counts()
-	local out = { blocked = 0, done = 0, working = 0, error = 0, total = 0 }
+	local out = {
+		blocked = 0,
+		permission = 0,
+		question = 0,
+		auth = 0,
+		done = 0,
+		working = 0,
+		error = 0,
+		idle = 0,
+		unknown = 0,
+		gone = 0,
+		live = 0,
+		total = 0,
+	}
 	for _, rec in ipairs(M.all()) do
-		if not rec.gone then
-			out.total = out.total + 1
+		out.total = out.total + 1
+		if rec.gone then
+			out.gone = out.gone + 1
+		else
+			out.live = out.live + 1
 			-- an acknowledged done is history, not something that needs you
 			local settled = rec.state == "done" and not rec.unread
 			if not settled and out[rec.state] ~= nil then
 				out[rec.state] = out[rec.state] + 1
+			end
+			if rec.state == "blocked" then
+				-- already counted by the generic branch above; only the kind split is new
+				local kind = rec.kind
+				if kind == "permission" or kind == "question" or kind == "auth" then
+					out[kind] = out[kind] + 1
+				end
 			end
 		end
 	end
 	return out
 end
 
----One statusline chunk, empty when there is nothing to report.
+---Animation for the statusline spinner: only runs while something is working, and its
+---only job is to make the statusline redraw (the frame itself is derived from the clock,
+---so any redraw — cursor movement, a message — shows the right one).
+local anim = { timer = nil, tick = 120 }
+
+---@param want boolean
+local function animate(want)
+	if not want then
+		if anim.timer then
+			anim.timer:stop()
+		end
+		return
+	end
+	if anim.timer then
+		if not anim.timer:is_active() then
+			anim.timer:start(anim.tick, anim.tick, anim.timer._cb)
+		end
+		return
+	end
+	local timer = vim.uv.new_timer()
+	if not timer then
+		return
+	end
+	anim.cb = anim.cb
+		or vim.schedule_wrap(function()
+			if M.counts().working == 0 then
+				if anim.timer then
+					anim.timer:stop()
+				end
+			end
+			-- Two kinds of consumers: an expression statusline (`%{%...%}`) is re-evaluated
+			-- by redrawstatus alone, while a statusline composed once into a string needs
+			-- an event to be rebuilt -- hence both. redrawstatus raises in some modes
+			-- (cmdline), and a missing autocmd is not an error either.
+			pcall(vim.cmd, "redrawstatus")
+			pcall(vim.api.nvim_exec_autocmds, "User", { pattern = "AskAgentStatuslineTick" })
+		end)
+	timer:start(anim.tick, anim.tick, anim.cb)
+	anim.timer = timer
+end
+
+---@return integer current spinner frame
+local function frame()
+	return math.floor(vim.uv.now() / anim.tick)
+end
+
+---One statusline chunk: what the agents are doing, most urgent first.
+---
+---    ⠹2 ⚠1 ?1 ✓3 ✗1
+---    │  │  │  │  └ errors
+---    │  │  │  └ finished turns you have not looked at yet
+---    │  │  └ waiting for an answer to a question
+---    │  └ waiting for your confirmation / credentials
+---    └ working (animated; plain ◐ when animated = false)
+---
+---`idle` only shows when there is nothing else: a quiet `●3` says "three agents are
+---up and doing nothing", which is exactly what you want to know when the rest is empty.
+---Empty string = no agents at all.
+---@param opts? { animated?: boolean, idle?: boolean|string, blocked?: boolean }
 ---@return string
-function M.statusline()
+function M.statusline(opts)
+	opts = opts or {}
 	local c = M.counts()
+	local icons = require("ask_agent.icons")
+	local mark = function(state)
+		return icons.ui("state", state) or ""
+	end
 	local parts = {}
-	if c.blocked > 0 then
-		parts[#parts + 1] = "⚠" .. c.blocked
+	local add = function(text)
+		parts[#parts + 1] = text
+	end
+
+	if c.working > 0 then
+		local spin = (opts.animated == false) and mark("working") or icons.spin(frame())
+		add(spin .. c.working)
+	end
+	-- permission/auth ("waiting for you") and question are different things to do:
+	-- one needs a yes/no, the other needs an answer
+	-- `blocked - question` rather than permission + auth: a source that says "blocked"
+	-- without a kind still wants you, and it needs a confirmation, not an answer
+	local confirm = c.blocked - c.question
+	if confirm > 0 then
+		add(mark("blocked") .. confirm)
+	end
+	if c.question > 0 then
+		add("?" .. c.question)
 	end
 	if c.done > 0 then
-		parts[#parts + 1] = "✓" .. c.done
+		add(mark("done") .. c.done)
 	end
 	if c.error > 0 then
-		parts[#parts + 1] = "✗" .. c.error
+		add(mark("error") .. c.error)
 	end
-	if c.working > 0 then
-		parts[#parts + 1] = "◐" .. c.working
+	-- idle is the fallback: only interesting when nothing above is happening
+	local want_idle = opts.idle
+	if want_idle == nil then
+		want_idle = #parts == 0
+	elseif want_idle == "auto" then
+		want_idle = #parts == 0
+	end
+	if want_idle and c.idle > 0 then
+		add(mark("idle") .. c.idle)
+	end
+	if opts.animated ~= false then
+		animate(c.working > 0)
 	end
 	return table.concat(parts, " ")
 end

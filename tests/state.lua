@@ -86,7 +86,9 @@ assert(#state.all({ correlation = { plugin = "todo2", key = "nope" } }) == 0, "u
 
 -- ack clears the unread mark, and the next poll settles back to idle
 state.ack("fake:a")
-assert(state.statusline() == "", "acked done is not counted")
+-- acked done drops out; both agents are idle by now, so the chunk says exactly that
+assert(not state.statusline():find("✓", 1, true), "acked done is not counted")
+assert(state.statusline():match("^●%d+$"), "only idle left: " .. state.statusline())
 state.refresh()
 assert(state.get("fake:a").state == "idle", "acked done falls back to idle")
 

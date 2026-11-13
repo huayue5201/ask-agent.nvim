@@ -595,7 +595,43 @@ ask.on("done", function(rec)
   if c and c.plugin == "todo2" then require("todo2").complete(c.key) end
 end)
 ask.wait("pi:91841", "done", 600000, function(rec) ... end)
-ask.statusline()                             -- "⚠1 ✓2 ◐3", empty when idle
+ask.statusline(opts)                         -- "⠹2 ⚠1 ?1 ✓3", empty when idle
+                                             -- { animated = true, idle = "auto" }
+<
+
+*ask-agent-statusline*
+
+The statusline chunk is plain text, most urgent first, no highlight groups:
+
+    ⠹2 ⚠1 ?1 ✓3 ✗1 ●2
+    │  │  │  │  │  └ idle agents; only when nothing above is happening
+    │  │  │  │  └ failed
+    │  │  │  └ finished turns you have not acknowledged yet
+    │  │  └ waiting for an answer to a question
+    │  └ waiting for your confirmation or credentials
+    └ working; the spinner animates at `tick` ms and stops when nothing works
+
+`⚠` and `?` are separate because they ask different things of you: a yes/no versus
+an answer. A source reporting `blocked` without a `kind` counts as `⚠`. `✓` goes
+away on `a` (acknowledge) or `d` (dismiss). `●` is the fallback and only appears
+when the other segments are empty; `statusline({ idle = false })` hides it,
+`idle = true` keeps it beside the others, `animated = false` shows a static `◐`.
+
+>lua
+  require("ask_agent").statusline()             -- "⠹2 ⚠1 ?1"
+  require("ask_agent").statusline({ animated = false })
+<
+
+The spinner needs a redraw. In an expression statusline (`%{%...%}`) the plugin's
+timer is enough; if you compose the string once, also handle `User
+AskAgentStatuslineTick` (fires ~8 times a second while something works, and stops
+when nothing does):
+
+>lua
+  vim.api.nvim_create_autocmd("User", {
+    pattern = "AskAgentStatuslineTick",
+    callback = function() vim.o.statusline = build() end,
+  })
 <
 
 A blocked instance is only reported: the sidebar and statusline show it, and
