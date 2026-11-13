@@ -7,10 +7,11 @@
 --   exact  pid + start time, so the current instance keeps its name immediately
 --   group  backend + real cwd + slot, so the name survives a restart
 --
--- A group with a single name hands it to the next instance in that directory;
--- once there are several names the slots are shown as `name ·2`, `name ·3` and
--- an instance only inherits a name that was bound to its own pid. Renaming an
--- unbound instance claims the first free slot. This never guesses which
+-- A slot is only inherited once the process that earned it is gone: while it is
+-- still running, its name belongs to it and nobody else in that directory gets
+-- it. Once there are several names the slots are shown as `name ·2`, `name ·3`
+-- and an instance only inherits a name that was bound to its own pid. Renaming
+-- an unbound instance claims the first free slot. This never guesses which
 -- conversation came back — it only remembers which name belongs to which slot.
 --
 -- The file lives in `<cache>/ask-agent/aliases.json` (override with
@@ -50,6 +51,33 @@ end
 ---@return AskAgentAliasStore
 local function blank()
 	return { version = 2, exact = {}, groups = {} }
+end
+
+-- A name is a label, not a paragraph: cap it by display cells so a terminal
+-- title or a pasted statusline chunk cannot swallow the agent list.
+local MAX_NAME = 32
+
+---Collapse whitespace and shorten to MAX_NAME cells (ellipsis included).
+---@param name string|nil
+---@return string|nil
+local function tidy(name)
+	if type(name) ~= "string" then
+		return name
+	end
+	name = vim.trim((name:gsub("[%c]", " ")):gsub("%s+", " "))
+	if name == "" or fn.strdisplaywidth(name) <= MAX_NAME then
+		return name
+	end
+	local out, w = {}, 0
+	for _, ch in ipairs(fn.split(name, "\\zs")) do
+		local cw = fn.strdisplaywidth(ch)
+		if w + cw > MAX_NAME - 1 then
+			break
+		end
+		w = w + cw
+		out[#out + 1] = ch
+	end
+	return table.concat(out) .. "…"
 end
 
 ---@param rec table
@@ -171,6 +199,28 @@ local function ts_of(t)
 	return type(t) == "table" and t.ts ~= nil and tostring(t.ts) or ""
 end
 
+---Is the process behind this slot still running? `false` for anything we cannot
+---prove alive: an id that is not a pid (herdr names, tmux panes) has no liveness
+---to check, and a name must not be handed around on a guess.
+---@param id string|nil
+---@return boolean
+local function owner_alive(id)
+	local pid = tonumber(id)
+	if not pid or pid <= 0 then
+		return false
+	end
+	-- luv reports a failed kill as (nil, "ESRCH: no such process") rather than raising
+	local ok, res, err = pcall(uv.kill, pid, 0)
+	if not ok then
+		return false
+	end
+	if res ~= nil then
+		return true
+	end
+	-- not ours to signal
+	return type(err) == "string" and err:find("EPERM", 1, true) ~= nil
+end
+
 ---@param t table|nil
 ---@return string|nil
 local function bound_slot(t, backend)
@@ -185,6 +235,21 @@ local function bound_slot(t, backend)
 		end
 	end
 	return nil
+end
+
+---The slot number is a disambiguator, so it is only shown when another slot in
+---the same directory carries the same name.
+---@param slots table<integer, table>|nil
+---@param slot integer
+---@param name string
+---@return boolean
+local function needs_slot(slots, slot, name)
+	for other, rec in pairs(slots or {}) do
+		if other ~= slot and rec.name == name then
+			return true
+		end
+	end
+	return false
 end
 
 ---@param slots table<integer, table>|nil
@@ -212,7 +277,7 @@ function M.get(t, backend)
 	if key then
 		local rec = load().exact[key] or load().exact[id_of(t) or ""]
 		if rec and (rec.ts == "" or ts_of(t) == "" or rec.ts == ts_of(t)) then
-			return count > 1 and slot and slot > 1 and (rec.name .. " ·" .. slot) or rec.name
+			return tidy(slot and needs_slot(slots, slot, rec.name) and (rec.name .. " ·" .. slot) or rec.name)
 		end
 	end
 	if not group then
@@ -220,11 +285,17 @@ function M.get(t, backend)
 	end
 	if slot then
 		local rec = slots[slot]
-		return count > 1 and slot > 1 and (rec.name .. " ·" .. slot) or rec.name
+		return tidy(needs_slot(slots, slot, rec.name) and (rec.name .. " ·" .. slot) or rec.name)
 	end
 	if count == 1 then
+		local only
 		for _, rec in pairs(slots) do
-			return rec.name
+			only = rec
+		end
+		-- A restart inherits the name; a second live agent in the same directory
+		-- does not — that was two instances wearing one name.
+		if only and not owner_alive(only.id) then
+			return tidy(only.name)
 		end
 	end
 	return nil
@@ -240,7 +311,7 @@ function M.set(t, backend, name)
 	if not id then
 		return false
 	end
-	name = vim.trim(tostring(name or ""))
+	name = tidy(tostring(name or "")) or ""
 	if name == "" then
 		return M.clear(t, backend)
 	end
@@ -286,21 +357,21 @@ end
 ---@return string
 function M.default_name(t)
 	t = type(t) == "table" and t or {}
-	if type(t.title) == "string" and t.title ~= "" then
-		return t.title
+	if type(t.title) == "string" and vim.trim(t.title) ~= "" then
+		return tidy(t.title)
 	end
 	-- pi calls every target "pid 1234"; that is the number users cannot use.
-	if type(t.label) == "string" and t.label ~= "" and not t.label:match("^pid ") then
-		return t.label
+	if type(t.label) == "string" and vim.trim(t.label) ~= "" and not t.label:match("^pid ") then
+		return tidy(t.label)
 	end
 	local dir = norm_dir(t.cwd)
 	if dir then
 		local base = fn.fnamemodify(dir, ":t")
 		if base ~= "" and base ~= "/" then
-			return base
+			return tidy(base)
 		end
 	end
-	return t.label and tostring(t.label) or tostring(t.id or "?")
+	return tidy(t.label and tostring(t.label) or tostring(t.id or "?"))
 end
 
 ---@return table
