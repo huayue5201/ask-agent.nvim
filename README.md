@@ -1,7 +1,8 @@
 # ask-agent.nvim
 
 Write a question in a floating window and send it — together with a precise anchor
-(cwd, tab, file, line, visual selection, unsaved state) — to an external coding agent
+(cwd, tab, file, line, repository and branch, cursor-line diagnostics, visual
+selection, and the text of an unsaved buffer) — to an external coding agent
 running outside Neovim: a `pi` instance in another terminal, a Claude Code session in
 a tmux pane, anything you can reach over a socket or a command line.
 
@@ -174,6 +175,56 @@ Busy rows animate when the picker implementation supports it: the plugin passes
 the contract `ui-menu.nvim` honours (it re-renders every tick while waiting for a key).
 telescope/fzf-lua/snacks/dropbar ignore `tick`, so there you see the first spinner frame
 as a static icon.
+
+## What a question carries
+
+The anchor is captured *before* any UI opens (a float or a picker would change the
+window), so it is the thing you were looking at when you pressed the key:
+
+| Field | Meaning |
+| --- | --- |
+| `cwd`, `tab` | the working directory of this tab (each tab can have its own via `:tcd`) and its number |
+| `root`, `rel`, `branch` | repository root, the file relative to it (what `git grep`/an editor wants), and the branch |
+| `path`, `line`, `col` | the file (relative to `cwd`, `~` folded) and the cursor position |
+| `filetype`, `modified` | for the code fence, and to warn that the file on disk is not what is on screen |
+| `diagnostics` | the error/warning on the cursor line (max 3), because that is often the question |
+| `context` | the source around the cursor, **only** for buffers whose content the agent cannot read from disk: unsaved (`modified`) or pathless (a diff buffer) |
+| `visual` | in visual mode: the line range plus the selected text |
+| `virtual`, `snapshot` | a plugin buffer (`codediff://…`) travels as a name only; a copy inside an extracted diff tree is marked "read it, don't edit it" |
+
+The rendered message is the question, an optional `<project-overview>` digest, then
+one `<nvim-context …>` block:
+
+    why does this loop skip the last item?
+
+    <nvim-context src/parser.rs:42 · branch main · tab 1 · unsaved>
+    cwd: /home/me/proj
+    root: /home/me/proj
+    diagnostics:
+      rust-analyzer:42: error: mismatched types
+    context (lines 22-62):
+    ```rust
+    ...
+    ```
+    </nvim-context>
+
+Inlining is deliberately narrow: a saved file is readable through `path`, so copying
+it would only cost tokens and go stale. An unsaved buffer is a different file on disk,
+so it travels with its text — that is the case the anchor exists for. Selections are
+capped (200 lines / 8 KB by default, with a `(clipped)` marker) and the snippet is
+`context_lines` each side of the cursor:
+
+```lua
+require("ask_agent").setup({
+  context_lines = 20,        -- lines of source around the cursor, 0 turns it off
+  max_selection = 200,       -- lines of selected text that travel inline
+  max_selection_bytes = 8192,
+})
+```
+
+The journal keeps the coordinate, not the source: `anchor` fields `context`,
+`diagnostics` and `visual.lines` are dropped before a task is recorded, so
+`journal.json` and `history.json` stay small and a jump still lands on the line.
 
 ## Setup
 

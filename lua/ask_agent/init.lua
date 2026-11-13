@@ -697,11 +697,13 @@ end
 ---@param opts { correlation?: table, anchor?: table }|nil
 ---@return boolean ok, string|nil err
 local function deliver_text(mod, target, text, opts)
+	-- What the journal keeps is the coordinate, not the source the question inlined
+	-- (that is for the agent, and a task only needs somewhere to jump to).
+	local anchor = require("ask_agent.context").lean(opts and opts.anchor)
 	-- Turn boundary before the send: the agent may start writing the moment the text
 	-- lands, so the tree has to be taken first. A failed send drops the record again.
 	local snap = require("ask_agent.snapshot")
-	local turn_ok, turn =
-		pcall(snap.on_dispatch, mod.id, target.id, text, opts and opts.anchor, opts and opts.correlation)
+	local turn_ok, turn = pcall(snap.on_dispatch, mod.id, target.id, text, anchor, opts and opts.correlation)
 	-- The agent gets an id it can quote back, so the answer lands on this exact task
 	-- (the protocol has no message ids of its own). Generated before the send, since
 	-- the answer may arrive before the bookkeeping below runs.
@@ -721,12 +723,12 @@ local function deliver_text(mod, target, text, opts)
 		backend = mod.id,
 		agent = target.id,
 		label = name_of(target),
-		anchor = opts and opts.anchor,
+		anchor = anchor,
 		correlation = opts and opts.correlation,
 	})
 	state.dispatch(mod.id, target.id, text, {
 		correlation = opts and opts.correlation,
-		anchor = opts and opts.anchor,
+		anchor = anchor,
 		task_id = task_id,
 		turn_id = turn_ok and turn and turn.id or nil,
 	})
@@ -1288,7 +1290,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, map?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, tree_lines?: boolean, running_line?: string, task_limit?: integer, keys?: table, task_ttl?: integer }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, map?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, tree_lines?: boolean, running_line?: string, task_limit?: integer, keys?: table, context_lines?: integer, max_selection?: integer, max_selection_bytes?: integer, task_ttl?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1317,6 +1319,12 @@ function M.setup(opts)
 	state.notify = opts.state_notify ~= false
 	-- Per-state notification copy, level and bell (see README "Notifications")
 	state.configure({ messages = opts.notify, gap = opts.notify_gap })
+	-- How much source a question inlines on its own (unsaved buffers, diffs)
+	require("ask_agent.context").setup({
+		lines = opts.context_lines,
+		max_selection = opts.max_selection,
+		max_selection_bytes = opts.max_selection_bytes,
+	})
 	-- Notification house style: bold + level colour, optional terminal bell
 	require("ask_agent.notify").setup({
 		style = opts.notify_style,

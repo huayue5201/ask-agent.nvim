@@ -32,6 +32,120 @@ local function extracted(path)
 	return nil
 end
 
+---@param file string
+---@param dir string
+---@return boolean
+local function inside(file, dir)
+	dir = dir:gsub("/+$", "")
+	return file == dir or file:sub(1, #dir + 1) == dir .. "/"
+end
+
+---How much source an anchor carries on its own. Only buffers whose content the
+---agent cannot get from disk travel with their text (unsaved, or no file at all);
+---for everything else `path:line` is enough and the agent reads the file itself.
+M.lines = 20 -- lines of source around the cursor
+---Longest selection inlined into the question (lines, then bytes).
+M.max_selection = 200
+M.max_selection_bytes = 8192
+
+---@param o { lines?: integer, max_selection?: integer, max_selection_bytes?: integer }|nil
+function M.setup(o)
+	if type(o) ~= "table" then
+		return
+	end
+	for _, name in ipairs({ "lines", "max_selection", "max_selection_bytes" }) do
+		local n = math.floor(tonumber(o[name]) or -1)
+		if n >= 0 then
+			M[name] = n
+		end
+	end
+end
+
+---The repository root for `dir` (cached by ask_agent.git), or nil.
+---@param dir string
+---@return string|nil
+local function repo_root(dir)
+	local ok, root = pcall(function()
+		return require("ask_agent.git").root(dir)
+	end)
+	if ok and type(root) == "string" and root ~= "" then
+		return root
+	end
+	return nil
+end
+
+local branches = {} -- root -> branch | false
+
+---The branch `root` is on, or nil (detached HEAD, no repo, or git failed).
+---@param root string
+---@return string|nil
+local function branch_of(root)
+	if branches[root] ~= nil then
+		return branches[root] or nil
+	end
+	local ok, name = pcall(function()
+		local good, out = require("ask_agent.git").git(root, { "rev-parse", "--abbrev-ref", "HEAD" })
+		return (good and type(out) == "string") and vim.trim(out) or nil
+	end)
+	name = (ok and type(name) == "string") and name or nil
+	if not name or name == "" or name == "HEAD" then
+		name = nil
+	end
+	branches[root] = name or false
+	return name
+end
+
+---Diagnostics sitting on `line` (error/warn only, at most three).
+---@param buf integer
+---@param line integer
+---@return table[]|nil
+function M.diagnostics(buf, line)
+	local ok, list = pcall(vim.diagnostic.get, buf, { lnum = line - 1 })
+	if not ok or type(list) ~= "table" then
+		return nil
+	end
+	local SEV = { "error", "warn", "info", "hint" }
+	local out = {}
+	for _, d in ipairs(list) do
+		if type(d.severity) == "number" and d.severity <= vim.diagnostic.severity.WARN and #out < 3 then
+			out[#out + 1] = {
+				line = (d.lnum or (line - 1)) + 1,
+				severity = SEV[d.severity] or "info",
+				source = d.source,
+				message = ((d.message or ""):gsub("\n.*", "")),
+			}
+		end
+	end
+	return #out > 0 and out or nil
+end
+
+---The source around the cursor, when the file on disk is not what is on screen.
+---@param a table anchor
+---@return table|nil
+function M.snippet(a)
+	local buf = a.buf
+	if not buf or not vim.api.nvim_buf_is_valid(buf) then
+		return nil
+	end
+	-- A saved file is readable through `path`; an unsaved one, or a buffer with no
+	-- path at all (a diff, a scratch buffer), is only visible from here.
+	if M.lines <= 0 or not (a.modified or (a.virtual and not a.path)) then
+		return nil
+	end
+	local total = vim.api.nvim_buf_line_count(buf)
+	local line = math.min(math.max(a.line or 1, 1), total)
+	local from = math.max(1, line - M.lines)
+	local to = math.min(total, line + M.lines)
+	if to < from then
+		return nil
+	end
+	return {
+		start_line = from,
+		end_line = to,
+		lines = vim.api.nvim_buf_get_lines(buf, from - 1, to, false),
+	}
+end
+
 ---Capture the anchor. With visual=true it uses the current visual selection
 ---(reading getpos("v")/(".") live rather than relying on '< '>).
 ---@param visual boolean|nil
@@ -66,19 +180,69 @@ function M.capture(visual)
 		-- find the same file in the project instead of the throwaway copy.
 		a.snapshot = extracted(path)
 	end
+	-- Project identity: a path relative to this tab's cwd can read `../other/x`
+	-- and says nothing about which repository/branch the file belongs to.
+	local root = repo_root(a.cwd)
+	if root then
+		a.root = root
+		a.branch = branch_of(root)
+		local abs = path and vim.fn.resolve(vim.fn.fnamemodify(vim.fn.expand(path), ":p")) or nil
+		if abs and inside(abs, root) then
+			a.rel = abs:sub(#root + 2)
+		end
+	end
 	if visual then
 		local s, e = vim.fn.getpos("v"), vim.fn.getpos(".")
 		local sl, el = math.min(s[2], e[2]), math.max(s[2], e[2])
 		if sl > 0 and el > 0 then
+			local lines = vim.api.nvim_buf_get_lines(buf, sl - 1, el, false)
+			local clip = M.clip_selection(lines, sl)
 			a.visual = {
 				start_line = sl,
 				end_line = el,
-				lines = vim.api.nvim_buf_get_lines(buf, sl - 1, el, false),
+				lines = clip.lines,
+				clipped = clip.clipped or nil,
 			}
 			a.line = sl
 		end
 	end
+	a.diagnostics = M.diagnostics(buf, a.line)
+	a.context = M.snippet(a)
 	return a
+end
+
+---Cut an oversized selection down to `M.max_selection` lines / `M.max_selection_bytes`.
+---The agent still learns the range, so a clipped paste is not a lie.
+---@param lines string[]
+---@param start_line integer
+---@return { lines: string[], clipped?: boolean }
+function M.clip_selection(lines, start_line)
+	local out, bytes = {}, 0
+	for _, line in ipairs(lines) do
+		local more = #out + 1 <= M.max_selection and bytes + #line + 1 <= M.max_selection_bytes
+		if not more then
+			return { lines = out, clipped = true }
+		end
+		out[#out + 1] = line
+		bytes = bytes + #line + 1
+	end
+	return { lines = out }
+end
+
+---The anchor without the bulk: the source and diagnostics it inlined are for the
+---question, not for the journal (a task keeps the coordinate it can jump to).
+---@param a table|nil
+---@return table|nil
+function M.lean(a)
+	if type(a) ~= "table" then
+		return a
+	end
+	local out = vim.deepcopy(a)
+	out.context, out.diagnostics = nil, nil
+	if type(out.visual) == "table" then
+		out.visual.lines = nil
+	end
+	return out
 end
 
 ---One-line description of the anchor, for the floating prompt title.
@@ -90,6 +254,9 @@ function M.describe(a)
 			or (a.virtual and (a.bufname or (a.virtual .. "://")))
 			or "<no filename>",
 	}
+	if a.branch then
+		table.insert(bits, a.branch)
+	end
 	if a.snapshot then
 		table.insert(bits, "diff snapshot")
 	end
@@ -116,14 +283,6 @@ local function anchor_file(a)
 		path = (a.cwd or vim.fn.getcwd()) .. "/" .. path
 	end
 	return vim.fn.resolve(vim.fn.fnamemodify(vim.fn.expand(path), ":p"))
-end
-
----@param file string
----@param dir string
----@return boolean
-local function inside(file, dir)
-	dir = dir:gsub("/+$", "")
-	return file == dir or file:sub(1, #dir + 1) == dir .. "/"
 end
 
 ---The directory that counts as "the current project": the working directory of

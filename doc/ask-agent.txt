@@ -16,7 +16,8 @@ CONTENTS                                              *ask-agent-contents*
   11. Batch questions ........................... |ask-agent-batch|
   12. Change review ............................. |ask-agent-review|
   13. History and prompts ....................... |ask-agent-history|
-  14. API ....................................... |ask-agent-api|
+  14. What a question carries ................... |ask-agent-anchor|
+  15. API ....................................... |ask-agent-api|
 
 ==============================================================================
 1. DESIGN                                                   *ask-agent-design*
@@ -920,7 +921,66 @@ A history record can be re-asked through `ask.ask({ default = rec.text })`; it i
 the same code path as the ask window, with a fresh anchor.
 
 ==============================================================================
-14. API                                                    *ask-agent-api*
+14. WHAT A QUESTION CARRIES                                *ask-agent-anchor*
+
+The anchor is captured *before* any UI opens — a float or a picker would change
+the window — so it is what you were looking at when you pressed the key. It is
+plain data, agent-agnostic: every backend is handed the same fields.
+
+  cwd, tab        working directory of this tab (tab_workspace gives each tab its
+                  own via :tcd) and its number
+  root, rel,      repository root, the file relative to it (what `git grep`, an
+  branch          editor or a compiler expects), and the branch. `path` stays
+                  relative to `cwd`; `rel` wins when both exist
+  path, line, col the file (~ folded) and the cursor position
+  filetype        language for the code fence
+  modified        the buffer has unsaved changes: the file on disk is *not* what
+                  is on screen
+  diagnostics     error/warn diagnostics on the cursor line, at most three
+  context         the source around the cursor, but only for a buffer whose text
+                  the agent cannot read from disk: unsaved, or with no path (a
+                  diff buffer). A saved file is read by the agent itself
+  visual          in visual mode: start/end line plus the selected text
+  virtual         a plugin buffer (codediff://…, fugitive://…) travels as a name
+                  only, never as a plausible-looking path
+  snapshot        a copy inside a tree extracted for `v`: readable, but marked
+                  "read it, don't edit it"
+
+The message the agent receives is: the question, an optional
+`<project-overview>` digest, then one `<nvim-context …>` block:
+
+    why does this loop skip the last item?
+
+    <nvim-context src/parser.rs:42 · branch main · tab 1 · unsaved>
+    cwd: /home/me/proj
+    root: /home/me/proj
+    diagnostics:
+      rust-analyzer:42: error: mismatched types
+    context (lines 22-62):
+    ```rust
+    ...
+    ```
+    </nvim-context>
+
+Inlining is deliberately narrow — copying a saved file only costs tokens and goes
+stale, while an unsaved buffer *is* a different file on disk. Selections are
+capped with a `(clipped)` marker:
+
+  >lua
+  require("ask_agent").setup({
+    context_lines = 20,        -- lines around the cursor; 0 disables the snippet
+    max_selection = 200,       -- lines of selected text that travel inline
+    max_selection_bytes = 8192,
+  })
+  <
+
+The journal keeps the coordinate, not the source: `context`, `diagnostics` and
+`visual.lines` are dropped before a task is recorded, so journal.json and
+history.json stay small and a jump still lands on the line. `ask.goto_anchor(a)`
+reads the same fields back.
+
+==============================================================================
+15. API                                                    *ask-agent-api*
 
 >lua
 local ask = require("ask_agent")

@@ -16,19 +16,35 @@ function M.render(anchor, prompt)
 	local question = vim.trim(prompt or "")
 	local out = { question ~= "" and question or "(empty question)" }
 
-	local where = {
-		a.path and ("%s:%d"):format(a.path, a.line or 1)
-			or (a.virtual and (a.bufname or "<no filename>"))
-			or "<no filename>",
-		a.snapshot and ("a diff snapshot of %s"):format(a.snapshot) or nil,
-		a.tab and ("tab %d"):format(a.tab) or nil,
-		a.modified and "unsaved" or nil,
-	}
+	-- Where the question lives. The repository-relative path is what an agent can
+	-- use as-is (`git grep`, an editor, a compiler), so it wins over the cwd one.
+	-- Built by appending, not in a pre-sized table: most of these are nil.
 	local bits = {}
-	for _, w in ipairs(where) do
-		if w then
-			table.insert(bits, w)
+	local function add(bit)
+		if bit then
+			table.insert(bits, bit)
 		end
+	end
+	if a.rel then
+		add(("%s:%d"):format(a.rel, a.line or 1))
+	elseif a.path then
+		add(("%s:%d"):format(a.path, a.line or 1))
+	elseif a.virtual then
+		add(a.bufname or "<no filename>")
+	else
+		add("<no filename>")
+	end
+	if a.snapshot then
+		add(("a diff snapshot of %s"):format(a.snapshot))
+	end
+	if a.branch then
+		add(("branch %s"):format(a.branch))
+	end
+	if a.tab then
+		add(("tab %d"):format(a.tab))
+	end
+	if a.modified then
+		add("unsaved")
 	end
 
 	table.insert(out, "")
@@ -46,18 +62,44 @@ function M.render(anchor, prompt)
 	if a.cwd then
 		table.insert(out, "cwd: " .. a.cwd)
 	end
+	if a.root then
+		table.insert(out, "root: " .. a.root)
+	end
 	if a.snapshot then
 		table.insert(
 			out,
 			"note: that path is a copy extracted for a diff, not the file in the project — read it, don't edit it"
 		)
 	end
-	if a.visual then
-		table.insert(out, ("selection %d-%d:"):format(a.visual.start_line, a.visual.end_line))
-		table.insert(out, "```" .. (a.filetype or ""))
-		for _, line in ipairs(a.visual.lines or {}) do
-			table.insert(out, line)
+	if a.diagnostics then
+		table.insert(out, "diagnostics:")
+		for _, d in ipairs(a.diagnostics) do
+			table.insert(
+				out,
+				("  %s:%d: %s: %s"):format(d.source or "lsp", d.line or 0, d.severity or "warn", d.message or "")
+			)
 		end
+	end
+	-- Inlined source: an unsaved buffer (disk has something else) or no path at all
+	-- (a diff). A saved file needs no copy — the agent reads it.
+	if a.context then
+		table.insert(
+			out,
+			("context (lines %d-%d%s):"):format(
+				a.context.start_line,
+				a.context.end_line,
+				a.context.clipped and ", clipped" or ""
+			)
+		)
+		table.insert(out, "```" .. (a.filetype or ""))
+		vim.list_extend(out, a.context.lines or {})
+		table.insert(out, "```")
+	end
+	if a.visual then
+		local clipped = a.visual.clipped and " (clipped)" or ""
+		table.insert(out, ("selection %d-%d%s:"):format(a.visual.start_line, a.visual.end_line, clipped))
+		table.insert(out, "```" .. (a.filetype or ""))
+		vim.list_extend(out, a.visual.lines or {})
 		table.insert(out, "```")
 	end
 	table.insert(out, "</nvim-context>")
