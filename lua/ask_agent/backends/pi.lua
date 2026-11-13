@@ -3,7 +3,11 @@
 ---running in a terminal.
 --
 -- Contract (pi side: extensions/nvim-context.ts):
---   ~/.cache/pi-agent/ask/<pid>.sock   unix socket, receives one JSON line {"text": "..."}
+--   ~/.cache/pi-agent/ask/<pid>.sock   unix socket, receives one JSON line
+--                                       {"text": "...", "task_id": "..."}
+--     `task_id` is optional and opaque: the extension quotes it back with the
+--     final answer (`action=result` over the nvim bridge), so the question and
+--     the answer can be paired without parsing a transcript.
 --   ~/.cache/pi-agent/ask/<pid>.json   registry {pid, sock, cwd, ts, embedded, busy}
 --     `busy` is rewritten by the extension on agent_start/agent_settled, so nvim can
 --     tell "idle" from "processing a task"; messages sent while busy are queued by pi
@@ -148,8 +152,9 @@ end
 
 ---@param target table
 ---@param text string
+---@param opts { task_id?: string }|nil
 ---@return boolean ok, string? err
-function M.send(target, text)
+function M.send(target, text, opts)
 	local ok, chan = pcall(vim.fn.sockconnect, "pipe", target.sock, {
 		rpc = false,
 		-- Receive the ack asynchronously: warn on write failures (e.g. the
@@ -166,7 +171,7 @@ function M.send(target, text)
 	if not ok or chan == 0 then
 		return false, ("cannot connect to pi socket: %s (the instance may have exited)"):format(target.sock)
 	end
-	vim.fn.chansend(chan, vim.json.encode({ text = text }) .. "\n")
+	vim.fn.chansend(chan, vim.json.encode({ text = text, task_id = opts and opts.task_id }) .. "\n")
 	-- keep the channel open long enough for the ack; does not block nvim
 	vim.defer_fn(function()
 		pcall(vim.fn.chanclose, chan)

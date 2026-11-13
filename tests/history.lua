@@ -105,6 +105,24 @@ local gone = assert(history.add({ text = "gone", anchor = anchor("nope.lua", 1) 
 local ok, err = history.jump(gone)
 assert(ok == false and type(err) == "string", "missing file reports an error")
 
+-- ids: the send path generates the id before the send and hands it to the agent,
+-- so `add` must accept it; answers need an explicit opt-in (questions only by default)
+history.remove(nil)
+local explicit = assert(history.add({ id = "task-42", text = "q" }))
+assert(explicit.id == "task-42" and history.get("task-42") == explicit, "explicit id is used")
+assert(history.set_answer("task-42", "the answer") == nil, "answers are off until enabled")
+history.answers = true
+assert(history.set_answer("task-42", "the answer").answer == "the answer", "answer attaches")
+assert(history.get("task-42").answer_ts, "answer is stamped")
+local big = assert(history.set_answer("task-42", string.rep("x", 500)))
+assert(#big.answer < 200 and big.answer:find("truncated", 1, true), "answers are capped like questions")
+assert(history.set_answer("missing", "x") == nil, "unknown task is a no-op")
+assert(history.new_id() ~= history.new_id(), "generated ids are unique")
+-- and answers survive a reload of the file
+history.setup({ path = store, keep = 5, max_text = 100 })
+assert(history.get("task-42").answer_ts, "the answer is on disk")
+history.answers = false
+
 vim.cmd("silent! %bwipeout!")
 vim.fn.delete(repo, "rf")
 vim.fn.delete(store)

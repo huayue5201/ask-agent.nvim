@@ -67,6 +67,9 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   anchor, target and text, across sessions. `:AskAgentHistory` searches it (full text,
   path, label), then re-asks, copies, or jumps back to the exact line — even after a
   restart. Answers stay in the agent; this is a ledger of questions, not a transcript.
+  With `results = true` (off by default) the agent hands its final answer back for
+  the task it was given, so `o` in the dashboard re-reads the exchange without
+  scrolling the agent's terminal — one task, not a transcript.
 - **Prompt library** — reusable templates with placeholders (`{{file}}`, `{{line}}`,
   `{{selection}}`, `{{cwd}}`, `{{diagnostics}}`…) that are filled from the anchor at
   ask time. Keep them globally, or commit them as `.ask-agent/prompts.json` so a
@@ -273,6 +276,11 @@ require("ask_agent").setup({
   -- delivered questions, newest 200, with their anchors; `false` records nothing.
   -- path moves the journal; max_text caps one record (a huge paste is truncated).
   history = { enabled = true, keep = 200, max_text = 20000 },
+
+  -- true also keeps the agent's final answer on the record (`o` in the dashboard,
+  -- ask.answer()). Off by default: the ledger promises questions, not a transcript.
+  -- pi quotes the task id back live; hooks can drop JSON into the results mailbox.
+  results = false,
 
   -- prompt templates: global_path is the user file, project_file is looked up under
   -- the git root (or the nearest ancestor with .ask-agent) and may be committed.
@@ -591,11 +599,14 @@ in lists, the ask window title and the "sent" notification. Without a name the
 directory basename is shown instead of `pid 123`, then the agent's title/label.
 
 Names are stored in `<cache>/ask-agent/aliases.json` as a slot per backend +
-real directory, so they survive a restart: one name in a directory is inherited
-by the next instance, and once there are several they are shown as `name ·2`,
-`name ·3`. Only a slot bound to the same pid + start time is reused
-automatically; a new instance in a crowded directory starts unnamed instead of
-guessing. `:AskAgentRename!` clears the name and its slot.
+real directory, so they survive a restart: a name whose owner is gone is
+inherited by the next instance in that directory, while a name whose owner is
+still running stays with it — renaming one agent never renames the other agents
+sitting in the same directory. Only a slot bound to the same pid + start time is
+reused automatically; a new instance in a crowded directory starts unnamed
+instead of guessing. Slots are numbered (`name ·2`) only when two of them carry
+the same name, so the list stays readable. `:AskAgentRename!` clears the name and
+its slot.
 
 ## RPC bridge (live context for the agent)
 
@@ -672,6 +683,8 @@ ask.diff(opts)                -- review changes ({ id = turn, head = true, backe
 ask.snapshot(id)              -- start (nil) or close ("last", an id) a manual interval
 ask.turns(cwd)                -- recorded turns, newest first ({ id, start, finish, ... })
 ask.history(opts)             -- delivered questions, newest first ({ query, cwd, backend, limit })
+ask.answer(task_id)           -- the agent's final answer to that task (results = true), or nil
+ask.show_answer(task)         -- that question + answer in a float (dashboard `o`)
 ask.prompts(cwd)              -- prompt templates visible from a directory
 ask.prompt(name, opts)        -- ask with a template rendered against the anchor
 ask.prompt_save(name, text, opts) / ask.prompt_remove(name, opts)
@@ -750,7 +763,7 @@ require("lua-line").add(ask.statusline)
 
 Correlation is opaque: `ask.send(text, { correlation = { plugin, key } })`
 stores it on the instance's record, `:AskAgent` and batch sends do not set one, and
-`rec.dispatch = { text, ts, correlation, anchor }` is handed back with every event.
+`rec.dispatch = { text, ts, correlation, anchor, task_id }` is handed back with every event.
 
 Pass `pick = true` when a plugin asks on the user's behalf and you do not want to
 guess the instance: a sole candidate in the current project is sent to directly,
@@ -758,8 +771,11 @@ anything ambiguous opens the picker, and `on_sent(ok, err)` tells you what
 happened (`err == "no target chosen"` when the picker was cancelled).
 
 Every send is also appended to `rec.tasks` (newest first, last 20): `{ text, ts,
-status = "running" | "done" | "error", correlation, anchor }` — that is what the
-sidebar shows under each agent. Tasks finish when the instance reports `done` /
+status = "running" | "done" | "error", correlation, anchor, task_id, turn_id,
+has_answer }` — that is what the sidebar shows under each agent. `task_id` is the
+opaque id the agent was sent with (so an answer can be attached), `turn_id` is the
+snapshot turn the send opened (what `v` diffs), and `has_answer` is set when the
+agent handed the answer back. Tasks finish when the instance reports `done` /
 `error`, or when a turn ends after we sent something.
 
 ### Notification copy and the bell
@@ -863,6 +879,7 @@ unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
 | `n` | rename (empty restores the directory name) | |
 | `v` | review the whole worktree vs HEAD | review the turn behind that task |
+| `o` | show the newest task's question + answer | show the question and what the agent said back (`results = true`) |
 | `y` | copy the name | copy the task text |
 | `f` | only agents that need you (blocked / error / unread done) — toggle | |
 | `<Tab>` | fold the agent's tasks | |
@@ -1085,7 +1102,34 @@ back to opening the file by path when the original buffer is gone.
 
 ```lua
 ask.history({ query = "rename", limit = 10 })  -- newest first, filter by cwd/backend too
+ask.answer(task_id)          -- the agent's final answer to that task, or nil
+ask.show_answer(task)        -- question + answer in a float (the dashboard's `o`)
 ```
+
+**Answers** are opt-in (`results = true`, off by default) because they change the
+promise: the ledger starts keeping what the agent said. Nothing is scraped from a
+transcript — the agent itself hands the answer back, keyed by the task id it was
+sent with (`{"text": ..., "task_id": ...}` on the socket):
+
+- **pi**, immediately: the nvim-context extension quotes the id back over the nvim
+  bridge (`action=result`) when a run ends, and the last assistant text of that run
+  becomes the answer. Works for messages sent while pi was busy too: each queued
+  message gets its own run, and a run only claims tasks sent before it started, so
+  an answer is never attached to the wrong question.
+- **hooks / scripts**, by mail: write `{"task_id": "...", "text": "..."}` (or,
+  without an id, `{"cwd": "/repo", "text": "..."}` for the newest task of the
+  agent working there) into `stdpath("cache")/ask-agent/results/`. Files are
+  imported when the dashboard opens, on `o`, and when an agent reports done; a
+  file that cannot be delivered is left in place rather than deleted (a week
+  later it is dropped, so a Stop hook cannot fill the directory forever).
+  `extensions/claude-ask-agent-state.sh done` does this from a Claude Code Stop
+  hook (it prefers the hook's `last_assistant_message`, and falls back to the last
+  assistant entry in `transcript_path`).
+
+The answer is capped like the question (`history.max_text`), lives on the same
+record, and is dropped with it when history is pruned. With `results` off, `o`
+says there is no answer and nothing is stored — `.json` mail in the results
+directory just sits there.
 
 **Prompts** are JSON files with `{ version = 1, prompts = [{ name, text, desc }] }`:
 

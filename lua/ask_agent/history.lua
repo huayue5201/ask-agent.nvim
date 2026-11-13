@@ -7,14 +7,19 @@
 -- accepted the text, so the history never claims something was delivered when it was
 -- not.
 --
--- Deliberately local and opaque: no agent transcript is read or parsed, no answers
--- are stored. A record is `{ text, anchor, backend, agent, ts }` — the same payload
--- the agent received. Answers live in the agent's own session, which stays its job.
+-- Deliberately local and opaque: no agent transcript is read or parsed. A record is
+-- `{ text, anchor, backend, agent, ts }` — the same payload the agent received.
+-- Answers stay in the agent's own session unless `results = true` opted in (see
+-- ask_agent.results): then the agent hands the final answer back and it is kept on
+-- the record (`answer`, `answer_ts`) so a task can be re-read without scrolling
+-- the agent's terminal. Nothing is parsed out of a transcript either way.
 
 local M = {}
 
 ---Master switch (`setup({ history = false })`).
 M.enabled = true
+---Keep the agent's final answer with the question (`setup({ results = true })`).
+M.answers = false
 ---Journal path override (tests).
 M.path = nil
 ---How many questions to keep, newest first.
@@ -29,6 +34,13 @@ local seq = 0
 local function now_ms()
 	local sec, usec = vim.uv.gettimeofday()
 	return sec * 1000 + math.floor(usec / 1000)
+end
+
+---A task id: unique across sends and stable for the agent round trip.
+---@return string
+function M.new_id()
+	seq = seq + 1
+	return ("%d-%d"):format(now_ms(), seq)
 end
 
 ---@return string
@@ -49,6 +61,8 @@ local function slim(rec)
 		cwd = rec.cwd,
 		anchor = rec.anchor,
 		correlation = rec.correlation,
+		answer = rec.answer,
+		answer_ts = rec.answer_ts,
 	}
 end
 
@@ -130,21 +144,20 @@ end
 
 ---Record one delivered question. Called from the send path only; failures never
 ---propagate (history is a side channel, not part of delivery).
----@param rec { text: string, backend?: string, agent?: string|number, label?: string, anchor?: table, correlation?: table }
+---@param rec { id?: string, text: string, backend?: string, agent?: string|number, label?: string, anchor?: table, correlation?: table }
 ---@return table|nil entry
 function M.add(rec)
 	if not M.enabled or type(rec) ~= "table" or type(rec.text) ~= "string" then
 		return nil
 	end
 	local ok, entry = pcall(function()
-		seq = seq + 1
 		local ts = now_ms()
 		local text = rec.text
 		if #text > M.max_text then
 			text = text:sub(1, M.max_text) .. "\n… (truncated in history)"
 		end
 		local out = {
-			id = ("%d-%d"):format(ts, seq),
+			id = type(rec.id) == "string" and rec.id ~= "" and rec.id or M.new_id(),
 			ts = ts,
 			text = text,
 			backend = rec.backend,
@@ -160,6 +173,44 @@ function M.add(rec)
 		return out
 	end)
 	return ok and entry or nil
+end
+
+---One recorded question by task id.
+---@param id string|nil
+---@return table|nil
+function M.get(id)
+	if type(id) ~= "string" or id == "" then
+		return nil
+	end
+	for _, rec in ipairs(load()) do
+		if rec.id == id then
+			return rec
+		end
+	end
+	return nil
+end
+
+---Attach the agent's final answer to a recorded question. Only the newest
+---`M.keep` records are kept, so an answer for a pruned task is dropped silently.
+---@param id string|nil task id
+---@param answer string
+---@param ts integer|nil
+---@return table|nil entry
+function M.set_answer(id, answer, ts)
+	if not M.enabled or not M.answers or type(id) ~= "string" or type(answer) ~= "string" then
+		return nil
+	end
+	local rec = M.get(id)
+	if not rec then
+		return nil
+	end
+	if #answer > M.max_text then
+		answer = answer:sub(1, M.max_text) .. "\n… (truncated in history)"
+	end
+	rec.answer = answer
+	rec.answer_ts = ts or now_ms()
+	save()
+	return rec
 end
 
 ---@param rec table|nil

@@ -157,6 +157,22 @@ for _, task in ipairs(saved.agents["fake:a"].tasks) do
 end
 assert(texts.recent, "the newest task survives")
 assert(not texts.ancient, "a stale finished task is pruned")
+
+-- the id the agent got and the turn behind the send survive a restart: `o` and `v`
+-- must keep working on tasks recorded before nvim was restarted
+state.dispatch("fake", "a", "with ids", { task_id = "t-1", turn_id = "turn-9" })
+state.flush()
+state.dismiss("fake:a")
+state.reload_journal()
+state.refresh()
+vim.wait(20)
+local ids = assert(state.get("fake:a")).tasks[1]
+assert(ids.task_id == "t-1" and ids.turn_id == "turn-9", "task id and turn id survive the journal")
+assert(state.task_by_id("t-1") == ids, "task_by_id finds the task")
+assert(state.attach_result("t-1", 1234).has_answer, "the answer flag attaches")
+assert(state.task_by_id("t-1").answer_ts == 1234, "the answer keeps its timestamp")
+assert(state.task_by_id("nope") == nil, "an unknown id attaches to nothing")
+assert(state.task_by_id(nil) == nil, "no id is not a lookup")
 state.persist = false
 
 -- notifications: blocked always reports, done/error throttle, exits report while working

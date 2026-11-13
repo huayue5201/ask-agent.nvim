@@ -19,6 +19,9 @@
 --      | {"action":"diagnostics"} | {"action":"quickfix"} | {"action":"list"}
 --      | {"action":"agents","state":..} | {"action":"ask","text":..,"backend":..,"target":..}
 --      | {"action":"task","key":..}
+--      | {"action":"result","task_id":..,"text":..,"ts":..}
+--        (answers only land when `setup({ results = true })`; the task id is the
+--        one the backend was sent with, so nothing has to be parsed)
 --      | {"action":"status"}
 --      | {"action":"project","root":..,"full":..,"wait_ms":..}
 -- The `project` action is not built in: register a handler with
@@ -404,6 +407,18 @@ local function status()
 	return { ok = true, action = "status", counts = st.counts(), statusline = st.statusline() }
 end
 
+---The agent's final answer for a task (action: "result"). Opt-in: with results
+---off this answers `ok=false` and nothing is stored.
+---@param req table
+---@return table
+local function result(req)
+	local ok, err = require("ask_agent.results").record(req)
+	if not ok then
+		return { ok = false, action = "result", error = err }
+	end
+	return { ok = true, action = "result" }
+end
+
 local handlers = {
 	task = task,
 	status = function()
@@ -422,6 +437,7 @@ local handlers = {
 	list = function()
 		return M.list()
 	end,
+	result = result,
 }
 
 ---Register an extra action handler. `fn` receives the request table and must

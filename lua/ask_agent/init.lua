@@ -701,7 +701,11 @@ local function deliver_text(mod, target, text, opts)
 	local snap = require("ask_agent.snapshot")
 	local turn_ok, turn =
 		pcall(snap.on_dispatch, mod.id, target.id, text, opts and opts.anchor, opts and opts.correlation)
-	local ok, send_err = mod.send(target, text)
+	-- The agent gets an id it can quote back, so the answer lands on this exact task
+	-- (the protocol has no message ids of its own). Generated before the send, since
+	-- the answer may arrive before the bookkeeping below runs.
+	local task_id = require("ask_agent.history").new_id()
+	local ok, send_err = mod.send(target, text, { task_id = task_id })
 	if not ok then
 		if turn_ok and turn then
 			pcall(snap.cancel, turn)
@@ -711,6 +715,7 @@ local function deliver_text(mod, target, text, opts)
 	-- History is the question ledger: only delivered text is recorded, and a broken
 	-- journal never breaks a send.
 	pcall(require("ask_agent.history").add, {
+		id = task_id,
 		text = text,
 		backend = mod.id,
 		agent = target.id,
@@ -718,7 +723,12 @@ local function deliver_text(mod, target, text, opts)
 		anchor = opts and opts.anchor,
 		correlation = opts and opts.correlation,
 	})
-	state.dispatch(mod.id, target.id, text, opts)
+	state.dispatch(mod.id, target.id, text, {
+		correlation = opts and opts.correlation,
+		anchor = opts and opts.anchor,
+		task_id = task_id,
+		turn_id = turn_ok and turn and turn.id or nil,
+	})
 	return true, nil
 end
 state.sender = deliver_text
@@ -1210,6 +1220,21 @@ function M.history(opts)
 	return require("ask_agent.history").list(opts)
 end
 
+--- The agent's final answer to a recorded question (`results = true`), or nil.
+---@param task_id string
+---@return string|nil
+function M.answer(task_id)
+	local rec = require("ask_agent.history").get(task_id)
+	return rec and rec.answer or nil
+end
+
+--- Show the question and its answer in a float (also used by the dashboard's `o`).
+---@param task table|string  a state task, or a task id
+---@return boolean ok, string|nil err
+function M.show_answer(task)
+	return require("ask_agent.results").show(task)
+end
+
 ---Prompts visible from a directory: global first, project overrides by name.
 ---@param cwd string|nil
 ---@return table[]
@@ -1332,6 +1357,14 @@ function M.setup(opts)
 		hist.enabled = false
 	else
 		hist.setup(type(opts.history) == "table" and opts.history or nil)
+	end
+	-- Answers (`results = true`) are opt-in: they turn the ledger into a little
+	-- transcript, which is exactly what history alone promises not to keep.
+	local results = require("ask_agent.results")
+	results.enabled = opts.results == true
+	hist.answers = results.enabled
+	if results.enabled then
+		results.attach(state)
 	end
 	local prompts = require("ask_agent.prompts")
 	if type(opts.prompts) == "table" then

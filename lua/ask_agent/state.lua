@@ -412,6 +412,11 @@ local function slim_task(task)
 		finish = task.finish,
 		correlation = task.correlation,
 		anchor = task.anchor,
+		-- the id the agent got, so an answer can be attached after a restart, and the
+		-- turn this send opened, so `v` can diff exactly this exchange
+		task_id = task.task_id,
+		turn_id = task.turn_id,
+		has_answer = task.has_answer,
 	}
 end
 
@@ -755,7 +760,7 @@ end
 ---@param backend string
 ---@param id string
 ---@param text string
----@param opts { correlation?: table, anchor?: table }|nil
+---@param opts { correlation?: table, anchor?: table, task_id?: string, turn_id?: string|number }|nil
 function M.dispatch(backend, id, text, opts)
 	local key = key_of(backend, id)
 	local rec = agents[key]
@@ -775,7 +780,7 @@ function M.dispatch(backend, id, text, opts)
 		end
 	end
 	local ts = now_ms()
-	rec.dispatch = { ts = ts, correlation = opts and opts.correlation }
+	rec.dispatch = { ts = ts, correlation = opts and opts.correlation, task_id = opts and opts.task_id }
 	rec.tasks = rec.tasks or {}
 	table.insert(rec.tasks, 1, {
 		text = (text:gsub("\n.*", "")),
@@ -783,6 +788,8 @@ function M.dispatch(backend, id, text, opts)
 		status = "running",
 		correlation = opts and opts.correlation,
 		anchor = opts and opts.anchor,
+		task_id = opts and opts.task_id,
+		turn_id = opts and opts.turn_id,
 	})
 	if #rec.tasks > TASK_KEEP then
 		rec.tasks[TASK_KEEP + 1] = nil
@@ -790,6 +797,40 @@ function M.dispatch(backend, id, text, opts)
 	rec.unread = false
 	emit("update", rec)
 	schedule_save()
+end
+
+---The task carrying that task id, across every agent (an answer comes back with
+---nothing but the id the agent was given).
+---@param task_id string|nil
+---@return table|nil task, table|nil rec
+function M.task_by_id(task_id)
+	if type(task_id) ~= "string" or task_id == "" then
+		return nil
+	end
+	for _, rec in pairs(agents) do
+		for _, task in ipairs(rec.tasks or {}) do
+			if task.task_id == task_id then
+				return task, rec
+			end
+		end
+	end
+	return nil
+end
+
+---Mark a task as answered (the text itself lives in history). A no-op when the
+---task is gone: the agent may answer after the journal was pruned.
+---@param task_id string|nil
+---@param ts integer|nil
+---@return table|nil task
+function M.attach_result(task_id, ts)
+	local task = M.task_by_id(task_id)
+	if not task then
+		return nil
+	end
+	task.has_answer = true
+	task.answer_ts = ts or now_ms()
+	schedule_save()
+	return task
 end
 
 ---Newest task handed to an instance: { text, ts, status, correlation, anchor }.

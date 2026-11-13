@@ -693,6 +693,7 @@ local HELP = {
 	{ "d", "Delete the queued task · dismiss a dead agent" },
 	{ "n", "Rename an agent (empty restores the directory name)" },
 	{ "v", "Diff: the turn behind that task · the whole worktree for an agent" },
+	{ "o", "Answer: the question and what the agent said back (results = true)" },
 	{ "y", "Copy the task text" },
 	{ "f", "Only agents that need you (blocked / error / unread done)" },
 	{ "<Tab>", "Fold or unfold the agent's tasks (and the older-task row)" },
@@ -796,9 +797,28 @@ local function attach(bufnr)
 		end
 	end
 	vim.keymap.set("n", "<CR>", with(nil, open_node), opts_buf)
-	-- the sidebar is nomodifiable, so an unmapped `o` would answer "E21: Cannot
-	-- make changes" — a key nobody needs deserves silence, not an error
-	vim.keymap.set("n", "o", "<Nop>", opts_buf)
+	-- `o` shows the exchange: the question plus the answer the agent handed back
+	-- (`results = true`); on an agent row it opens its newest task's answer.
+	vim.keymap.set(
+		"n",
+		"o",
+		with(nil, function(node)
+			if node.kind == "queued" then
+				notify.notify("[ask_agent] That question is still queued: no answer yet", vim.log.levels.INFO)
+				return
+			end
+			local task = node.task or (node.rec and node.rec.tasks and node.rec.tasks[1])
+			if not task or not task.task_id then
+				notify.notify("[ask_agent] No answer recorded for this task", vim.log.levels.INFO)
+				return
+			end
+			local ok, err = require("ask_agent").show_answer(task)
+			if not ok then
+				notify.notify("[ask_agent] " .. (err or "could not show the answer"), vim.log.levels.INFO)
+			end
+		end),
+		opts_buf
+	)
 	vim.keymap.set("n", "J", with(nil, jump_host_node), opts_buf)
 	vim.keymap.set(
 		"n",
@@ -878,6 +898,13 @@ local function attach(bufnr)
 				ask.diff({ cwd = cwd })
 				return
 			end
+			-- the turn this send opened is the precise diff; the correlation is the
+			-- older fallback for tasks recorded before turn ids were kept
+			local turn_id = node.kind ~= "queued" and node.task and node.task.turn_id
+			if turn_id then
+				ask.diff({ cwd = cwd, id = turn_id })
+				return
+			end
 			local correlation = node.kind ~= "queued" and node.task and node.task.correlation
 			if not correlation then
 				notify.notify("[ask_agent] No turn recorded for this question yet", vim.log.levels.INFO)
@@ -950,6 +977,12 @@ end
 ---@param o { pos?: "left"|"right", width?: integer }|nil
 function M.open(callbacks, o)
 	api = callbacks or api
+	-- mail-style answers (a hook that can only write a file) land before the first
+	-- render, so the rows are already flagged on open
+	local results = require("ask_agent.results")
+	if results.enabled then
+		pcall(results.import)
+	end
 	opts = vim.tbl_extend("force", { pos = "right", width = 40 }, o or {})
 	opts.autowidth = not (o and o.width ~= nil)
 	M.configure(opts)

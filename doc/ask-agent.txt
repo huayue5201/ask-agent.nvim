@@ -84,6 +84,8 @@ require("ask_agent").setup({
     keep = 200,                  -- newest records retained
     max_text = 20000,            -- cap per record (long pastes are truncated)
   },
+  results = false,               -- also keep the agent's final answer (`o`),
+                                 -- opt-in: the ledger is questions otherwise
   prompts = {                    -- global prompt file; project file is
     global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json",
   },                             -- <root>/.ask-agent/prompts.json
@@ -417,11 +419,13 @@ an optional name; see |ask-agent-aliases|.
 
 Without a name the directory basename is shown instead of `pid 123`, then the
 agent's title or non-pid label. Names live in a JSON file (default under
-`stdpath("cache")`). Each backend + real directory keeps slots: one name is
-inherited by the next instance in that directory; with several names the slots
-are shown as `name ·2`, `name ·3` and only a slot bound to the same pid + start
-time is reused. A new instance in a crowded directory starts unnamed. Set or
-clear them with |:AskAgentRename|, or press `n` in the dashboard.
+`stdpath("cache")`). Each backend + real directory keeps slots: a name whose
+owner has exited is inherited by the next instance in that directory, while a
+name whose owner still runs stays with it — renaming one agent does not rename
+the others in the same directory. Only a slot bound to the same pid + start time
+is reused. Duplicate names are numbered (`name ·2`) so the list stays readable; a
+new instance in a crowded directory starts unnamed. Set or clear them with
+|:AskAgentRename|, or press `n` in the dashboard.
 
 ==============================================================================
 8. LAYOUT ADAPTERS                                   *ask-agent-layouts*
@@ -567,11 +571,15 @@ Tasks and unread marks are journaled to
 `<cache>/ask-agent/journal.json` (1 s debounce, week-old tasks dropped, disable
 with `persist = false`), so a restart keeps pending work visible.
 
-`rec.dispatch = { ts, correlation }` records when we last sent and the
-opaque correlation table given to `ask.send(text, { correlation = { plugin, key } })`;
-it comes back with every event for that instance. Every send is also appended to
-`rec.tasks` (newest first, the last 20): `{ text, ts, status, correlation, anchor }`
-with `status` = `running` / `done` / `error`.
+`rec.dispatch = { ts, correlation, task_id }` records when we last sent, the
+opaque correlation table given to `ask.send(text, { correlation = { plugin, key } })`,
+and the id the agent was sent with; it comes back with every event for that
+instance. Every send is also appended to `rec.tasks` (newest first, the last 20):
+`{ text, ts, status, correlation, anchor, task_id, turn_id, has_answer }`
+with `status` = `running` / `done` / `error`. `task_id` lets an answer find its
+question (`ask.answer()`), `turn_id` is the snapshot turn the send opened (what
+`v` diffs — no more "no turn recorded" for a plain ask), `has_answer` is set when
+the agent handed the answer back.
 
 ==============================================================================
 11. DASHBOARD                                        *ask-agent-dashboard*
@@ -613,7 +621,8 @@ other way — out to the terminal window the agent really runs in, through a jum
 adapter (see |ask-agent-jump|). `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
 queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
-the whole worktree for an agent), `y` copies the task text, `f` toggles "only
+the whole worktree for an agent), `o` shows the question and the answer the agent
+handed back (|ask-agent-results|), `y` copies the task text, `f` toggles "only
 agents that need you", `<Tab>` folds its tasks, `?` opens the key help float, `r`
 polls now, `q` closes.
 
@@ -803,8 +812,33 @@ path when the original buffer is gone.
 
   >lua
   ask.history({ query = "rename", limit = 10 })  -- newest first
+  ask.answer(task_id)          -- final answer to that task, or nil
+  ask.show_answer(task)        -- question + answer in a float (`o`)
   <
 Filter by `cwd`, `backend` or free `query` (text, path, label).
+
+                                                       *ask-agent-results*
+Answers are opt-in (`results = true`, off by default): they turn the ledger into
+a little transcript, which history alone does not promise. The agent is sent
+`{"text": ..., "task_id": ...}`, and it hands the answer back keyed by that id —
+nothing is scraped from a transcript:
+
+  pi       the nvim-context extension quotes the id back over the nvim bridge
+           (`action=result`) when a run ends; the last assistant text of that run
+           becomes the answer. A run only claims tasks sent before it started, so
+           a queued follow-up cannot receive the previous run's answer.
+  hooks    write `{"task_id": "...", "text": "..."}` (or `{"cwd": "/repo",
+           "text": "..."}` for the newest task of the agent working there) into
+           `<cache>/ask-agent/results/`; imported on dashboard open, on `o`, and
+           when an agent reports done. Undeliverable files are kept, not deleted;
+           a week later they are dropped, so a Stop hook cannot fill the
+           directory forever.
+           `extensions/claude-ask-agent-state.sh done` does this from a Claude
+           Code Stop hook.
+
+Answers are capped like questions (`history.max_text`) and pruned with the record
+(`history.keep`). With `results` off, `o` says there is no answer and nothing is
+stored.
 
 Prompts are JSON files, `{ version = 1, prompts = [{ name, text, desc }] }`. A
 project prompt overrides a global one with the same name:
@@ -855,6 +889,8 @@ ask.diff({ id = "..." })                -- review a turn / { head = true }
 ask.snapshot(id)                        -- start (nil) / close ("last") an interval
 ask.turns(cwd)                          -- recorded turns, newest first
 ask.history({ query = "..." })          -- delivered questions, newest first
+ask.answer(task_id)                     -- final answer (results = true), or nil
+ask.show_answer(task)                   -- question + answer in a float
 ask.prompts(cwd)                        -- prompt templates (global + project)
 ask.prompt(name, opts)                  -- ask with a template
 ask.prompt_save(name, text, opts) / ask.prompt_remove(name, opts)

@@ -42,6 +42,11 @@ const EMBEDDED = process.argv.some((a, i, argv) => a === "--mode" && argv[i + 1]
 type AskPayload = {
 	/** nvim 侧已经渲染好的整条消息（新协议，优先使用） */
 	text?: string;
+	/**
+	 * nvim 生成的、不透明的任务 id：结束一轮时原样带回（bridge 的 action=result），
+	 * 让问题和答案配对，不必解析 transcript。旧协议没有这个字段。
+	 */
+	task_id?: string;
 	/** 旧协议：问题正文 + 锚点，由本扩展拼装 */
 	prompt?: string;
 	anchor?: {
@@ -55,6 +60,19 @@ type AskPayload = {
 		visual?: { start_line: number; end_line: number; lines: string[] };
 	};
 };
+
+/** 一条 assistant 消息里的可见文本（content 可能是字符串或 part 数组） */
+function assistantText(message: any): string | undefined {
+	if (!message || message.role !== "assistant") return undefined;
+	const content = message.content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return undefined;
+	const text = content
+		.filter((p: any) => p?.type === "text" && typeof p.text === "string")
+		.map((p: any) => p.text)
+		.join("");
+	return text === "" ? undefined : text;
+}
 
 /** nvim 发来的 {问题 + 锚点} 拼成一条用户消息 */
 function renderAsk(payload: AskPayload): string {
@@ -137,6 +155,12 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 	// ---- 反向通道：nvim 浮窗 (`<leader>aq`) 把「问题 + 锚点」发进来 ----
 	let inbox: net.Server | undefined;
 	let busy = false;
+	/** 发出、但还没把答案带回 nvim 的任务（按发送时间先进先出） */
+	let pending: { task_id: string; at: number }[] = [];
+	/** 当前这一轮里最后一条 assistant 文本，`agent_start` 清空 */
+	let runText: string | undefined;
+	/** 这一轮何时开始：只认开始之后才发出的任务，避免把上一轮的答案记到新问题上 */
+	let runStartedAt = 0;
 
 	async function handleAsk(line: string, socket: net.Socket): Promise<void> {
 		let payload: AskPayload;
@@ -149,6 +173,9 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 		try {
 			// 新协议：nvim 已渲染好整条消息；旧协议回落 renderAsk
 			const text = typeof payload.text === "string" ? payload.text : renderAsk(payload);
+			if (typeof payload.task_id === "string" && payload.task_id !== "") {
+				pending.push({ task_id: payload.task_id, at: Date.now() });
+			}
 			// busy 时当跟进消息排队，避免打断当前工具链
 			await pi.sendUserMessage(text, busy ? { deliverAs: "followUp" } : undefined);
 			socket.write(JSON.stringify({ ok: true }) + "\n");
@@ -227,6 +254,37 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 	});
 	pi.on("agent_start", () => {
 		busy = true;
+		runText = undefined;
+		runStartedAt = Date.now();
+	});
+	// 收集中间消息：最后一轮的 assistant 文本就是这个任务的答案
+	pi.on("message_end", (event: any) => {
+		const text = assistantText(event?.message);
+		if (text !== undefined) runText = text;
+	});
+	// 一轮结束：把答案交回原来的 nvim 实例。失败只是没有记录，从不打断 agent。
+	pi.on("agent_end", async () => {
+		const idx = pending.findIndex((p) => p.at <= runStartedAt);
+		if (idx < 0) return;
+		const text = runText;
+		if (!text) return;
+		const [done] = pending.splice(idx, 1);
+		try {
+			const inst = await resolve();
+			if (!inst) return;
+			const reply = await rpc<{ ok?: boolean; error?: string }>(
+				inst.sock,
+				// history caps it anyway; this only keeps the RPC small
+				{ action: "result", task_id: done.task_id, text: text.slice(0, 20000), ts: Date.now() },
+				8000,
+			);
+			// `ok=false` is the normal answer when the user did not opt into results
+			if (reply?.ok === false && reply.error && !reply.error.includes("disabled")) {
+				console.error(`[nvim-context] result rejected: ${reply.error}`);
+			}
+		} catch (e) {
+			console.error(`[nvim-context] result not delivered: ${e instanceof Error ? e.message : String(e)}`);
+		}
 	});
 	pi.on("agent_settled", () => {
 		busy = false;
