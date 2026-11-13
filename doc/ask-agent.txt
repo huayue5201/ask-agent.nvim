@@ -452,9 +452,12 @@ agent's title or non-pid label. Names live in a JSON file (default under
 owner has exited is inherited by the next instance in that directory, while a
 name whose owner still runs stays with it — renaming one agent does not rename
 the others in the same directory. Only a slot bound to the same pid + start time
-is reused. Duplicate names are numbered (`name ·2`) so the list stays readable; a
-new instance in a crowded directory starts unnamed. Set or clear them with
-|:AskAgentRename|, or press `n` in the dashboard.
+is reused. Duplicate names are numbered (`name ·1`, `name ·2`) so the list stays
+readable; the numbering covers the whole panel, so two unnamed agents in one
+project (both falling back to the directory name) and an alias that collides with
+somebody else's default are told apart too. A new instance in a crowded
+directory starts unnamed. Set or clear them with |:AskAgentRename|, or press `n`
+in the dashboard.
 
 ==============================================================================
 8. LAYOUT ADAPTERS                                   *ask-agent-layouts*

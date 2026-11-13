@@ -24,6 +24,8 @@ package.loaded["ask_agent.status.rex"] = {
 
 local backends = require("ask_agent.backends")
 local state = require("ask_agent.state")
+-- names come from here: never touch the user's aliases file from a test
+require("ask_agent.aliases").setup({ file = "/tmp/ask-agent-aliases-state.json" })
 
 state.notify = false
 -- never touch the user's journal from tests
@@ -218,6 +220,35 @@ targets = {}
 state.refresh()
 assert(#notes == 1 and notes[1].msg:find("exited while working", 1, true), "an exit while working notifies")
 assert(state.get("fake:b").gone, "unseen instance is gone")
+
+-- Two agents whose name falls back to the same directory must still be told
+-- apart in the panel: identical rows would look like one agent shown twice.
+local dup = {
+	{ id = "c", cwd = "/tmp", label = "pid 9001" },
+	{ id = "d", cwd = "/tmp", label = "pid 9002" },
+}
+backends.register({
+	id = "fake2",
+	label = "Fake2",
+	targets = function()
+		return dup
+	end,
+	probe = function()
+		return { running = true, state = "idle" }
+	end,
+	available = function()
+		return true
+	end,
+	send = function()
+		return true
+	end,
+})
+state.refresh()
+local n1 = state.name(state.get("fake2:c"))
+local n2 = state.name(state.get("fake2:d"))
+assert(n1 ~= n2, "two agents in one directory get different names: " .. n1 .. " / " .. n2)
+assert(n1:match(" ·%d+$") and n2:match(" ·%d+$"), "the shared name is numbered: " .. n1 .. " / " .. n2)
+assert(state.name(state.get("fake:a")) == "A", "a unique name is left alone")
 assert(not state.statusline():find("⚠"), "gone blocked is not counted")
 vim.notify = save_notify
 

@@ -99,10 +99,47 @@ function M.priority(rec)
 	return base
 end
 
+---The name an instance would wear on its own: an alias if it has one, else the
+---directory it lives in.
+---@param rec table
+---@return string
+local function raw_name(rec)
+	return aliases.get(rec.target, rec.backend) or aliases.default_name(rec.target or { id = rec.id })
+end
+
+-- Display names for the whole list, rebuilt whenever the set of instances or one
+-- of their aliases changes: names must be unique across the panel, not just
+-- inside one directory slot (see M.name).
+local name_cache
+
 ---@param rec table
 ---@return string
 function M.name(rec)
-	return aliases.get(rec.target, rec.backend) or aliases.default_name(rec.target or { id = rec.id })
+	if not name_cache then
+		local cache = {}
+		local counts, seen = {}, {}
+		for _, key in ipairs(order) do
+			local other = agents[key]
+			if other then
+				cache[key] = raw_name(other)
+				counts[cache[key]] = (counts[cache[key]] or 0) + 1
+			end
+		end
+		-- Two agents fall back to the same directory name (`pi` twice in one
+		-- project), or an alias happens to equal somebody else's default; the
+		-- list has to tell them apart, so a shared name gets the same `·2`
+		-- suffix the alias slots use. Numbering follows the list order, which is
+		-- stable while the same agents stay alive.
+		for _, key in ipairs(order) do
+			local base = cache[key]
+			if base and counts[base] > 1 then
+				seen[base] = (seen[base] or 0) + 1
+				cache[key] = ("%s ·%d"):format(base, seen[base])
+			end
+		end
+		name_cache = cache
+	end
+	return name_cache[rec.key] or raw_name(rec)
 end
 
 ---Rename an instance; it also claims a directory slot so the name survives a restart.
@@ -113,7 +150,9 @@ function M.rename(rec, name)
 	if not rec or not rec.target then
 		return false
 	end
-	return aliases.set(rec.target, rec.backend, name or "")
+	local ok = aliases.set(rec.target, rec.backend, name or "")
+	name_cache = nil
+	return ok
 end
 
 ---@param event string
@@ -532,6 +571,7 @@ local function ensure(mod, t)
 		end
 		agents[key] = rec
 		table.insert(order, key)
+		name_cache = nil
 	end
 	rec.target = t
 	return rec
@@ -590,6 +630,8 @@ function M.refresh()
 		return
 	end
 	refreshing = true
+	-- a poll can learn about a rename or a new/vanished instance from another nvim
+	name_cache = nil
 	local seen, sessions = {}, {}
 	for _, info in ipairs(backends.list()) do
 		local mod = backends.get(info.id)
@@ -862,6 +904,7 @@ function M.dismiss(key)
 		return
 	end
 	agents[key] = nil
+	name_cache = nil
 	for i, k in ipairs(order) do
 		if k == key then
 			table.remove(order, i)

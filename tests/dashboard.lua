@@ -112,7 +112,8 @@ vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vim.api.nvim_feedkeys("n", "x", false)
 vim.wait(30)
 vim.ui.input = real_input
-assert(state.name(state.get("fake:a")) == "api-worker", "the sidebar renamed the agent")
+-- the two fake agents share a fallback name, so the panel numbers them (·1/·2)
+assert(state.name(state.get("fake:a")):match("^api%-worker"), "the sidebar renamed the agent")
 assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("api%-worker"), "the row redrew")
 vim.fn.delete("/tmp/ask-agent-dashboard-aliases.json")
 

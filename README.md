@@ -640,9 +640,12 @@ inherited by the next instance in that directory, while a name whose owner is
 still running stays with it — renaming one agent never renames the other agents
 sitting in the same directory. Only a slot bound to the same pid + start time is
 reused automatically; a new instance in a crowded directory starts unnamed
-instead of guessing. Slots are numbered (`name ·2`) only when two of them carry
-the same name, so the list stays readable. `:AskAgentRename!` clears the name and
-its slot.
+instead of guessing. Duplicate names are numbered (`name ·1`, `name ·2`) so the
+list stays readable. That numbering covers the whole panel, not just one
+directory: two unnamed agents in the same project both fall back to the
+directory name, and an alias can collide with somebody else's default, so a name
+claimed more than once is numbered in list order (it changes only if those
+agents come and go). `:AskAgentRename!` clears the name and its slot.
 
 ## RPC bridge (live context for the agent)
 
