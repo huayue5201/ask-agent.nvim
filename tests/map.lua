@@ -91,6 +91,41 @@ vim.api.nvim_buf_delete(0, { force = true })
 
 vim.api.nvim_buf_delete(buf, { force = true })
 
+-- Canvas size and label behaviour are configurable (ask.setup({ map = {...} })).
+map.setup({ width = 0.5, height = 0.5, min_width = 4, max_width = 10, min_height = 2, max_height = 4 })
+local cw, ch = map.size()
+assert(cw == 10 and ch == 4, "width/height ratios are clamped by min/max")
+map.setup({ width = 0.25, height = 0.20, min_width = 12, max_width = 12, min_height = 3, max_height = 3 })
+local cw2 = map.size()
+assert(cw2 == 12, "min_width clamps the canvas")
+
+map.setup({ name = false })
+items[1].name = "apibot"
+map.select({ panes = panes, items = items })
+local letters = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+assert(not letters:find("apibot", 1, true), "name = false keeps the map to letters")
+vim.api.nvim_buf_delete(0, { force = true })
+
+-- name_min decides when a shortened name is still worth drawing
+map.setup({ name = true, name_min = 4 })
+items[1].name = ("api-worker-"):rep(8)
+map.select({ panes = panes, items = items })
+local strict = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+assert(strict:find("…", 1, true), "a shortened name still draws at four columns")
+vim.api.nvim_buf_delete(0, { force = true })
+map.setup({
+	name = true,
+	name_min = 3,
+	name_over_badge = true,
+	width = 0.25,
+	height = 0.20,
+	min_width = 12,
+	max_width = 32,
+	min_height = 3,
+	max_height = 9,
+})
+items[1].name = "a"
+
 -- Zoom only changes what rex draws: the map still needs the full split tree,
 -- otherwise an agent in a zoomed-away pane becomes unplaceable.
 local rex = require("ask_agent.layouts.rex")

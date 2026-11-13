@@ -186,6 +186,20 @@ require("ask_agent").setup({
   -- "map" (split-layout map, default) or "list"
   picker = "map",
 
+  -- map canvas and labels: the size is a share of the editor clamped to a range of
+  -- cells, and only the selected cell is widened into the agent's name
+  map = {
+    width = 0.25,       -- share of the editor width
+    min_width = 12,     -- clamp, in cells (a 12x3 map is still readable)
+    max_width = 32,
+    height = 0.20,      -- share of the editor height
+    min_height = 3,
+    max_height = 9,
+    name = true,        -- false keeps the map to letters only
+    name_min = 3,       -- fewest columns a shortened name may take
+    name_over_badge = true, -- drop the state badge rather than cut the name to nothing
+  },
+
   -- list implementation: "auto" (ui-menu if installed, else vim.ui.select),
   -- "ui_menu" (require it), or "vim_ui". ui-menu gives centering, spinner
   -- animation and <Tab> back to the map; it is recommended, not required.
@@ -557,6 +571,22 @@ name (the same name as in the list and the winbar) instead of the letter, shorte
 `…` when the visible part of the pane is narrow, and left as a plain letter when even
 three columns do not fit. Every other cell keeps its one-character letter, so long names
 never crowd the map or move its cells around.
+
+The canvas is a quarter of the editor clamped to 12–32 columns and 3–9 rows; all of it is
+configurable through `map` in `setup()`:
+
+| key | default | meaning |
+| --- | --- | --- |
+| `width` / `height` | `0.25` / `0.20` | share of the editor |
+| `min_width` / `max_width` | `12` / `32` | column clamp |
+| `min_height` / `max_height` | `3` / `9` | row clamp |
+| `name` | `true` | selected cell shows the name instead of the letter |
+| `name_min` | `3` | fewest columns a shortened name may take, below it the letter stays |
+| `name_over_badge` | `true` | drop the state badge when it is what squeezes the name |
+
+A `width`/`height` share that lands outside its clamp is pulled back inside, and a
+`max_*` smaller than its `min_*` is ignored, so a hand-written `map` block cannot make
+the canvas vanish.
 
 No adapter is required. The map is the primary picker even for a single locatable
 candidate; only when no candidate can be placed in the layout (or there is no

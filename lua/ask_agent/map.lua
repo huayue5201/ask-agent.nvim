@@ -11,6 +11,41 @@
 local api = vim.api
 local M = {}
 
+----------------------------------------------------------------------
+-- Options
+----------------------------------------------------------------------
+
+--- Where the canvas sits between these bounds, and how the selected cell is labelled.
+--- Fraction fields (`width`, `height`) are shares of the editor, the `min_*`/`max_*` fields
+--- clamp the result in cells, so the map stays readable on a small screen and stops
+--- growing on a huge one.
+local conf = {
+	width = 0.25,
+	min_width = 12,
+	max_width = 32,
+	height = 0.20,
+	min_height = 3,
+	max_height = 9,
+	-- `name = false` keeps the map to letters only
+	name = true,
+	-- Fewest columns a shortened name may take; below that the letter is kept
+	name_min = 3,
+	-- When true the state badge is dropped before the name is cut to `name_min`
+	name_over_badge = true,
+}
+
+--- Configure the map canvas and its labels (all fields optional).
+---@param opts? table
+function M.setup(opts)
+	opts = opts or {}
+	for key, value in pairs(opts) do
+		local default = conf[key]
+		if default ~= nil and type(value) == type(default) then
+			conf[key] = value
+		end
+	end
+end
+
 -- Extmark namespace for the map buffer (backgrounds/highlights rely on it)
 local NS = api.nvim_create_namespace("ai_map")
 
@@ -442,7 +477,7 @@ local function paint(panes, by_pane, W, H, sel, frame)
 			-- keeps its shape no matter how long the names are. A name that does not fit (not even
 			-- shortened) falls back to the letter, so `body` starts out as the letter.
 			local body, body_w = letter, letter_w
-			local name = t.item and sel == t.item and t.item.name or nil
+			local name = conf.name and t.item and sel == t.item and t.item.name or nil
 			if type(name) ~= "string" or name == "" then
 				name = nil
 			end
@@ -484,7 +519,7 @@ local function paint(panes, by_pane, W, H, sel, frame)
 					-- letter would have used. Under three columns a name is noise, keep the letter.
 					local avail = (stop - x + 1) - (icon and (icon_w + 1) or 0)
 					local fitted = ellipsize(name, avail - (status and (1 + status_w) or 0))
-					if status then
+					if status and conf.name_over_badge then
 						-- A badge is worth less than a readable piece of the name: when the badge is
 						-- the reason the name is cut down to a couple of characters, drop it.
 						local roomy = ellipsize(name, avail)
@@ -611,15 +646,13 @@ local function neighbour(panes, from, dir)
 	return best
 end
 
-----------------------------------------------------------------------
--- Picker
-----------------------------------------------------------------------
-
 --- Size of the map canvas, in cells.
 ---@return integer W, integer H
 function M.size()
-	local W = math.min(math.max(math.floor(vim.o.columns * 0.25 + 0.5), 12), 32)
-	local H = math.min(math.max(math.floor(vim.o.lines * 0.20 + 0.5), 3), 9)
+	local W = math.floor(vim.o.columns * conf.width + 0.5)
+	local H = math.floor(vim.o.lines * conf.height + 0.5)
+	W = math.min(math.max(W, conf.min_width), math.max(conf.min_width, conf.max_width))
+	H = math.min(math.max(H, conf.min_height), math.max(conf.min_height, conf.max_height))
 	return W, H
 end
 

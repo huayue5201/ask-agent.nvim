@@ -79,6 +79,17 @@ require("ask_agent").setup({
     width = 0.85,                -- share of the editor a big agent may take
     height = 0.75,               -- (1 = fill the screen)
   },
+  map = {                        -- map canvas and labels (|ask-agent-pickers|)
+    width = 0.25,                -- share of the editor width
+    min_width = 12,              -- clamp in cells
+    max_width = 32,
+    height = 0.20,               -- share of the editor height
+    min_height = 3,
+    max_height = 9,
+    name = true,                 -- selected cell shows the agent name
+    name_min = 3,                -- fewest columns a shortened name may take
+    name_over_badge = true,      -- drop the badge before cutting the name further
+  },
   history = {                    -- delivered questions; false disables
     enabled = true,
     keep = 200,                  -- newest records retained
@@ -266,8 +277,21 @@ are laid out compactly (no gaps) and the map is centered on screen.
 
 Only the selected cell (the one under the cursor) is asked for a name: it shows the
 agent's name instead of the letter, shortened with "…" when the visible part of the pane
-is narrow, and kept as a letter when fewer than three columns fit. Other cells stay
+is narrow, and kept as a letter when fewer than `name_min` columns fit. Other cells stay
 letters, so long names never crowd the map.
+
+The canvas is a share of the editor clamped to a range of cells. Defaults:
+  width = 0.25, min_width = 12, max_width = 32,
+  height = 0.20, min_height = 3, max_height = 9,
+  name = true, name_min = 3, name_over_badge = true
+All of them are set through `map` in setup:
+>lua
+  require("ask_agent").setup({
+    map = { width = 0.3, max_width = 40, name_min = 5 },
+  })
+<
+`name = false` keeps the map to letters only; `name_over_badge = false` always keeps the
+state badge next to a name (which then gets cut shorter).
 
 `list` is a plain list of every instance, including ones in other tabs and
 windows (the map never shows those), shown through `vim.ui.select` — so it is whatever your config provides

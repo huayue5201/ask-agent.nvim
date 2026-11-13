@@ -1288,7 +1288,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, task_limit?: integer, task_ttl?: integer }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, map?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, task_limit?: integer, task_ttl?: integer }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"
@@ -1302,6 +1302,8 @@ function M.setup(opts)
 		tick = opts.tick
 	end
 	require("ask_agent.icons").setup(opts.icons, opts.icon_colors)
+	-- Map canvas size and labels: `map = { width = 0.25, name = true, ... }`
+	require("ask_agent.map").setup(type(opts.map) == "table" and opts.map or nil)
 	-- Empty/missing falls back to icons.ui.spinner (braille by default); equal-width glyphs are
 	-- required (the map centers rows by cell width, the list just swaps one cell).
 	spinner = (type(opts.spinner) == "table" and #opts.spinner > 0) and opts.spinner
