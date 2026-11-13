@@ -175,6 +175,13 @@ assert(ids.task_id == "t-1" and ids.turn_id == "turn-9", "task id and turn id su
 assert(state.task_by_id("t-1") == ids, "task_by_id finds the task")
 assert(state.attach_result("t-1", 1234).has_answer, "the answer flag attaches")
 assert(state.task_by_id("t-1").answer_ts == 1234, "the answer keeps its timestamp")
+-- the run ending is what closes a task: the state heuristic alone never fires when
+-- the agent goes straight from one turn into the next (no idle period to observe)
+assert(state.complete_task("t-1", "done") == true, "complete_task closes the task")
+local closed = state.task_by_id("t-1")
+assert(closed.status == "done" and type(closed.finish) == "number", "a closed task says so and when")
+assert(state.complete_task("t-1", "done") == true, "closing twice is harmless")
+assert(state.complete_task("nope") == false, "an unknown id closes nothing")
 assert(state.task_by_id("nope") == nil, "an unknown id attaches to nothing")
 assert(state.task_by_id(nil) == nil, "no id is not a lookup")
 state.persist = false

@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { execFile } from "node:child_process";
-import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -228,6 +228,35 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 		}
 	}
 
+	/**
+	 * 重写登记文件：`busy` 是 nvim 判断“这一轮还在跑”的唯一依据 —— 没有它，
+	 * 每个 pi 实例永远被看成 idle，面板里的任务就永远停在运行态。
+	 * 先写临时文件再 rename，免得 nvim 读到写了一半的 JSON。
+	 */
+	async function writeRegistry(): Promise<void> {
+		const entry = {
+			pid: PID,
+			sock: ASK_SOCK,
+			cwd: process.cwd(),
+			ts: Math.floor(Date.now() / 1000),
+			embedded: EMBEDDED,
+			busy,
+			// 跑在 rex 里时把所在 session/block 一起登记：nvim 侧据此把这个实例
+			// 映射到终端分屏里的具体位置（浮窗地图选目标用）。不在 rex 里就是 undefined。
+			rex:
+				process.env.REX_SESSION && process.env.REX_BLOCK
+					? { session: process.env.REX_SESSION, block: process.env.REX_BLOCK }
+					: undefined,
+		};
+		const tmp = `${ASK_REG}.tmp`;
+		try {
+			await writeFile(tmp, JSON.stringify(entry));
+			await rename(tmp, ASK_REG);
+		} catch {
+			// 登记失败只是让 nvim 看不见这个实例，绝不打断 session
+		}
+	}
+
 	async function startInbox(): Promise<void> {
 		await mkdir(ASK_DIR, { recursive: true });
 		// 清理已死实例的登记文件
@@ -260,22 +289,7 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 			inbox!.once("error", reject);
 			inbox!.listen(ASK_SOCK, () => resolve());
 		});
-		await writeFile(
-			ASK_REG,
-			JSON.stringify({
-				pid: PID,
-				sock: ASK_SOCK,
-				cwd: process.cwd(),
-				ts: Math.floor(Date.now() / 1000),
-				embedded: EMBEDDED,
-				// 跑在 rex 里时把所在 session/block 一起登记：nvim 侧据此把这个实例
-				// 映射到终端分屏里的具体位置（浮窗地图选目标用）。不在 rex 里就是 undefined。
-				rex:
-					process.env.REX_SESSION && process.env.REX_BLOCK
-						? { session: process.env.REX_SESSION, block: process.env.REX_BLOCK }
-						: undefined,
-			}),
-		);
+		await writeRegistry();
 	}
 
 	async function stopInbox(): Promise<void> {
@@ -300,6 +314,7 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 		busy = true;
 		runText = undefined;
 		runStartedAt = Date.now();
+		void writeRegistry();
 	});
 	// 收集中间消息：最后一轮的 assistant 文本就是这个任务的答案
 	pi.on("message_end", (event: any) => {
@@ -317,8 +332,10 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 			const candidate = assistantText(message);
 			if (candidate !== undefined) text = candidate;
 		}
-		if (!text) return;
 		const [done] = pending.splice(idx, 1);
+		// 没有 assistant 文本也要把“这轮结束了”交回去：nvim 靠它把任务收尾，
+		// 否则那一行会一直转圈（答案为空时 results 只是不存文本）
+		text = text ?? "";
 		try {
 			const inst = await resolve();
 			if (!inst) {
@@ -343,6 +360,7 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 	});
 	pi.on("agent_settled", () => {
 		busy = false;
+		void writeRegistry();
 	});
 
 	async function pickInteractive(ctx: any): Promise<Instance | undefined> {

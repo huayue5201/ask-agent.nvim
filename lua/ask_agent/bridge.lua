@@ -409,16 +409,28 @@ local function status()
 	return { ok = true, action = "status", counts = st.counts(), statusline = st.statusline() }
 end
 
----The agent's final answer for a task (action: "result"). Opt-in: with results
----off this answers `ok=false` and nothing is stored.
+---The agent's final answer for a task (action: "result").
+---
+---The run ending is what closes the task, and that is not opt-in: without it a
+---question whose turn ended while the agent went straight on to the next one
+---keeps its spinner forever (no idle period is ever observed). Storing the text
+---*is* opt-in (`results = true`), so `record` may still fail with everything
+---else having worked.
 ---@param req table
 ---@return table
 local function result(req)
-	local ok, err = require("ask_agent.results").record(req)
-	if not ok then
-		return { ok = false, action = "result", error = err }
+	local closed = false
+	if type(req.task_id) == "string" and req.task_id ~= "" then
+		closed = require("ask_agent.state").complete_task(req.task_id, "done")
 	end
-	return { ok = true, action = "result" }
+	local ok, err = require("ask_agent.results").record(req)
+	if ok then
+		return { ok = true, action = "result" }
+	end
+	if closed then
+		return { ok = true, action = "result", stored = false, error = err }
+	end
+	return { ok = false, action = "result", error = err }
 end
 
 local handlers = {

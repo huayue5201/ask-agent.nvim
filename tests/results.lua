@@ -131,6 +131,21 @@ local bridged = call({ action = "result", task_id = "t1", text = "via the bridge
 assert(bridged.ok == true, "the bridge accepts a result: " .. vim.inspect(bridged))
 assert(history.get("t1").answer == "via the bridge", "a bridged answer lands on the record")
 
+-- results off: the answer is not stored, but the run still closes the task --
+-- otherwise the row spins forever and the spinner lies about the agent
+results.enabled = false
+local st = require("ask_agent.state")
+st.targets = function()
+	return { { id = "a", cwd = "/tmp", label = "pid 1" } }
+end
+st.dispatch("fake", "a", "spin me", { task_id = "t-closing" })
+local closing = call({ action = "result", task_id = "t-closing", text = "" })
+assert(closing.ok == true, "completion travels even without results: " .. vim.inspect(closing))
+assert(closing.stored == false, "and it says the text was not stored")
+local task = assert(st.task_by_id("t-closing"), "the task is still there")
+assert(task.status == "done" and task.finish, "an empty answer still closes the task")
+results.enabled = true
+
 -- and with results off it refuses instead of silently storing
 results.enabled = false
 local refused = call({ action = "result", task_id = "t1", text = "nope" })

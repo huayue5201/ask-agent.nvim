@@ -402,10 +402,12 @@ local function apply(rec, st, src)
 	if rec.gone then
 		notify_gone(rec, prev)
 	end
-	if state == "done" or state == "error" then
+	if state == "done" or state == "error" or rec.gone then
+		-- gone counts as failed: nobody is going to answer those questions
+		local end_state = (state == "done" and "done") or "error"
 		for _, task in ipairs(rec.tasks or {}) do
 			if task.status == "running" then
-				task.status = state == "done" and "done" or "error"
+				task.status = end_state
 				task.finish = now_ms()
 			end
 		end
@@ -988,6 +990,29 @@ function M.task_by_id(task_id)
 		end
 	end
 	return nil
+end
+
+---Close one task, whatever the agent's overall state says. This is the only
+---completion signal that is about *this* question: a turn that ends while the
+---agent already runs the next one never shows up as an idle period, so the
+---state heuristic alone leaves the answered task spinning.
+---@param task_id string|nil
+---@param status? "done"|"error"
+---@return boolean closed
+function M.complete_task(task_id, status)
+	local task, rec = M.task_by_id(task_id)
+	if not task then
+		return false
+	end
+	status = status or "done"
+	if task.status == status and task.finish then
+		return true
+	end
+	task.status = status
+	task.finish = task.finish or now_ms()
+	emit("update", rec)
+	schedule_save()
+	return true
 end
 
 ---Mark a task as answered (the text itself lives in history). A no-op when the
