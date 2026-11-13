@@ -242,6 +242,7 @@ function M.clear()
 		end
 	end
 	push_undo(snapshot, "clear")
+	M.redraw()
 end
 
 ---Restore the most recently deleted entry (or everything removed by the last clear).
@@ -272,11 +273,6 @@ function M.undo()
 		M.redraw()
 	end
 	return restored, skipped, group.label
-end
-
----@return integer
-function M.undo_depth()
-	return #undo_groups
 end
 
 ---Entries in creation order (a copy: batch_send removes entries while iterating).

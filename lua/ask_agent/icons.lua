@@ -192,6 +192,8 @@ end
 
 ---Highlight group name for an instance colour (already defined, ready to use).
 ---@param key string|nil
+local accent_defined = {}
+
 ---@return string|nil
 function M.accent_hl(key)
 	local color = M.accent(key)
@@ -199,7 +201,11 @@ function M.accent_hl(key)
 		return nil
 	end
 	local name = "AiInst" .. color:gsub("[^%w]+", "")
-	api.nvim_set_hl(0, name, { fg = color, default = true })
+	-- the dashboard asks for this once per row per frame; a group is defined once
+	if not accent_defined[name] then
+		api.nvim_set_hl(0, name, { fg = color, default = true })
+		accent_defined[name] = true
+	end
 	return name
 end
 
@@ -248,11 +254,6 @@ function M.all()
 	local out = vim.deepcopy(glyphs)
 	out.ui = vim.deepcopy(ui)
 	return out
-end
-
----@return table<string, string>
-function M.all_colors()
-	return vim.deepcopy(colors)
 end
 
 return M

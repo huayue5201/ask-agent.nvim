@@ -74,15 +74,12 @@ local function repo_root(dir)
 	return nil
 end
 
-local branches = {} -- root -> branch | false
-
 ---The branch `root` is on, or nil (detached HEAD, no repo, or git failed).
 ---@param root string
 ---@return string|nil
 local function branch_of(root)
-	if branches[root] ~= nil then
-		return branches[root] or nil
-	end
+	-- not cached: `git rev-parse` is a few milliseconds, and a cached name would be
+	-- wrong for every question asked after `git switch`
 	local ok, name = pcall(function()
 		local good, out = require("ask_agent.git").git(root, { "rev-parse", "--abbrev-ref", "HEAD" })
 		return (good and type(out) == "string") and vim.trim(out) or nil
@@ -91,7 +88,6 @@ local function branch_of(root)
 	if not name or name == "" or name == "HEAD" then
 		name = nil
 	end
-	branches[root] = name or false
 	return name
 end
 
@@ -196,7 +192,7 @@ function M.capture(visual)
 		local sl, el = math.min(s[2], e[2]), math.max(s[2], e[2])
 		if sl > 0 and el > 0 then
 			local lines = vim.api.nvim_buf_get_lines(buf, sl - 1, el, false)
-			local clip = M.clip_selection(lines, sl)
+			local clip = M.clip_selection(lines)
 			a.visual = {
 				start_line = sl,
 				end_line = el,
@@ -214,9 +210,8 @@ end
 ---Cut an oversized selection down to `M.max_selection` lines / `M.max_selection_bytes`.
 ---The agent still learns the range, so a clipped paste is not a lie.
 ---@param lines string[]
----@param start_line integer
 ---@return { lines: string[], clipped?: boolean }
-function M.clip_selection(lines, start_line)
+function M.clip_selection(lines)
 	local out, bytes = {}, 0
 	for _, line in ipairs(lines) do
 		local more = #out + 1 <= M.max_selection and bytes + #line + 1 <= M.max_selection_bytes
@@ -250,7 +245,7 @@ end
 ---@return string
 function M.describe(a)
 	local bits = {
-		a.path and ("%s:%d"):format(a.path, a.line)
+		a.path and ("%s:%d"):format(a.path, a.line or 1)
 			or (a.virtual and (a.bufname or (a.virtual .. "://")))
 			or "<no filename>",
 	}

@@ -45,6 +45,9 @@ local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 -- plain indentation so the text keeps its room.
 local TREE_MIN_WIDTH = 20
 local cfg = { tree_lines = true, running_line = "dash", task_limit = 5, keys = {} }
+
+-- declared here because render() (above the key table) draws the winbar hint
+local KEYS, keys_of, key_label
 local RUN_HL = { "AskAgentRunDim", "AskAgentRunMid", "AskAgentRunBright" }
 local RUN_FG = { "#2b6b3e", "#3fb950", "#7ee787" }
 local run_hl_tc -- termguicolors value the groups were built for
@@ -95,16 +98,7 @@ local function fit(text, width)
 		return text
 	end
 	truncated = true
-	local out, w = {}, 0
-	for _, ch in ipairs(vim.fn.split(text, "\\zs")) do
-		local cw = vim.fn.strdisplaywidth(ch)
-		if w + cw > width - 1 then
-			break
-		end
-		w = w + cw
-		out[#out + 1] = ch
-	end
-	return table.concat(out) .. "…"
+	return require("ask_agent.text").fit(text, width) or ""
 end
 
 ---Does this agent want a human? (`f` keeps only these rows.)
@@ -165,6 +159,7 @@ end
 ---@param queued table<string, table[]>
 ---@return table[]
 local function tasks_of(rec, queued)
+	queued = queued or {}
 	local out = {}
 	for _, entry in ipairs(queued[rec.key] or {}) do
 		out[#out + 1] = { kind = "queued", entry = entry, ts = 0, index = entry.index }
@@ -518,7 +513,18 @@ local function render()
 		if only_needs then
 			title = title .. "  needs you"
 		end
-		local help = width >= 56 and "  ⏎ open · J host · ? keys" or ""
+		-- the hint names the keys as they are bound now, not the defaults
+		local hint = {}
+		for _, name in ipairs({ "open", "jump", "help" }) do
+			local key = keys_of(name)
+			if key and key ~= "" then
+				hint[#hint + 1] = ("%s %s"):format(
+					key_label(key),
+					name == "jump" and "host" or (name == "open" and "open" or "keys")
+				)
+			end
+		end
+		local help = (width >= 56 and #hint > 0) and ("  " .. table.concat(hint, " · ")) or ""
 		vim.wo[win].winbar = title .. help
 		-- A fresh sidebar that had to truncate grows once; the content decides the
 		-- width instead of the width cutting the content.
@@ -683,10 +689,10 @@ local function dismiss(rec)
 end
 
 -- Keys, in the order they appear in the help float. `name` is what
--- `setup({ dashboard = { keys = { ... } } })` overrides; a name bound to `false`
+-- `setup({ keys = { ... } })` overrides; a name bound to `false`
 -- is not mapped at all. Semantics first: `R` renames (R), `v` views the diff,
 -- `y` yanks, `r` refreshes, `s` sends, `d` deletes/dismisses, `J` jumps.
-local KEYS = {
+KEYS = {
 	{ "help", "?", "Show these keys" },
 	{
 		"open",
@@ -711,7 +717,7 @@ local KEYS = {
 ---One key for `name`, or nil when the user unbound it.
 ---@param name string
 ---@return string|string[]|nil
-local function keys_of(name)
+function keys_of(name)
 	for _, item in ipairs(KEYS) do
 		if item[1] == name then
 			local key = cfg.keys[name]
@@ -727,7 +733,7 @@ end
 ---A key as the help float shows it: `<Tab>` stays, a list is joined with "/".
 ---@param key string|string[]
 ---@return string
-local function key_label(key)
+function key_label(key)
 	if type(key) == "table" then
 		local out = {}
 		for _, k in ipairs(key) do
@@ -823,6 +829,9 @@ local function flush_queue(rec)
 	end
 	if #ids == 0 then
 		notify.notify(("[ask_agent] No queued question is routed to %s"):format(state.name(rec)), vim.log.levels.INFO)
+		return
+	end
+	if not api then
 		return
 	end
 	api.batch_send({ ids = table.concat(ids, ",") })

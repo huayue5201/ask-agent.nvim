@@ -110,11 +110,11 @@ local long = {}
 for i = 1, 400 do
 	long[i] = string.rep("x", 10) -- short enough that the line ceiling hits first
 end
-local clipped = context.clip_selection(long, 1)
+local clipped = context.clip_selection(long)
 assert(clipped.clipped, "an oversized selection is clipped")
 eq(#clipped.lines, context.max_selection, "to max_selection lines")
 eq(clipped.lines[1], long[1], "keeping the start")
-local small = context.clip_selection({ "a", "b" }, 1)
+local small = context.clip_selection({ "a", "b" })
 eq(small.clipped, nil, "a small selection is left alone")
 eq(#small.lines, 2, "and kept whole")
 

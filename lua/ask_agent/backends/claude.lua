@@ -32,7 +32,12 @@ end
 ---@return table backend
 function M.new(opts)
 	opts = opts or {}
-	local panes = opts.command_pattern and generic.tmux_panes(opts.command_pattern)
+	-- `command_pattern` is a Lua pattern for the pane's command (`"claude$"`), while
+	-- tmux_panes() takes a predicate -- so the pattern is wrapped, not passed through.
+	local panes = opts.command_pattern
+			and generic.tmux_panes(function(pane)
+				return pane.command ~= nil and pane.command:find(opts.command_pattern) ~= nil
+			end)
 		or generic.tmux_panes_by_cmd(opts.command or "claude")
 	return generic.tmux({
 		id = opts.id or "claude",

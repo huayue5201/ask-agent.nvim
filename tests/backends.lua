@@ -102,4 +102,11 @@ local okb = b.status(custom)
 assert(okb == true, "custom backend should be usable")
 custom.send(cands[1].target, "hello")
 assert(sent[1] == "hello", "custom send should receive the text")
+-- same_project: a prefix is not a parent unless it ends on a separator
+assert(b.same_project("/a/b", "/a/b"), "same")
+assert(b.same_project("/a/b", "/a/b/c"), "child")
+assert(b.same_project("/a/b/c", "/a/b"), "parent")
+assert(not b.same_project("/a/b", "/a/bc"), "/a/b is not the project of /a/bc")
+assert(not b.same_project("/a/b", nil), "nil is never the same project")
+
 print("EXT OK")

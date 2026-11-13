@@ -65,19 +65,10 @@ local function tidy(name)
 		return name
 	end
 	name = vim.trim((name:gsub("[%c]", " ")):gsub("%s+", " "))
-	if name == "" or fn.strdisplaywidth(name) <= MAX_NAME then
+	if name == "" then
 		return name
 	end
-	local out, w = {}, 0
-	for _, ch in ipairs(fn.split(name, "\\zs")) do
-		local cw = fn.strdisplaywidth(ch)
-		if w + cw > MAX_NAME - 1 then
-			break
-		end
-		w = w + cw
-		out[#out + 1] = ch
-	end
-	return table.concat(out) .. "…"
+	return require("ask_agent.text").fit(name, MAX_NAME) or name
 end
 
 ---@param rec table

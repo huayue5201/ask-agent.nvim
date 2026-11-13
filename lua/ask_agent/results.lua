@@ -71,9 +71,15 @@ function M.record(req)
 	if not task_id then
 		return false, "no task to attach this answer to"
 	end
-	local rec = history().set_answer(task_id, text, req.ts)
+	local hist = history()
+	local rec = hist.set_answer(task_id, text, req.ts)
 	if not rec then
-		return false, ("history has no task %s"):format(task_id)
+		if not hist.enabled then
+			return false, "history is disabled (setup({ history = { enabled = true } }))"
+		elseif not hist.answers then
+			return false, "answers are off (setup({ results = true }))"
+		end
+		return false, ("history has no task %s (it may have aged out)"):format(task_id)
 	end
 	-- state persists the "has an answer" flag; the dashboard picks it up on its
 	-- next render (the write is debounced, like every other state change).
@@ -95,7 +101,10 @@ function M.match_question(question, cwd)
 	if not ok then
 		return nil
 	end
-	local best, best_ts
+	-- a mail that does not say where it came from may still be attributed, but only
+	-- when the question names one project's task: two projects asking the same thing
+	-- must not be resolved by guessing
+	local best, best_ts, best_cwd, ambiguous
 	for _, rec in ipairs(recs or {}) do
 		local at = rec.target and rec.target.cwd
 		if not cwd or at == cwd then
@@ -104,11 +113,19 @@ function M.match_question(question, cwd)
 				-- task.text is the first line of what we sent; the hook quotes the whole prompt
 				if task.task_id and text and text ~= "" and question:find(text, 1, true) then
 					if not best_ts or (task.ts or 0) > best_ts then
-						best, best_ts = task.task_id, task.ts or 0
+						if cwd == nil and best_cwd ~= nil and best_cwd ~= at then
+							ambiguous = best_cwd
+						end
+						best, best_ts, best_cwd = task.task_id, task.ts or 0, at
+					elseif cwd == nil and at ~= best_cwd then
+						ambiguous = best_cwd
 					end
 				end
 			end
 		end
+	end
+	if ambiguous then
+		return nil
 	end
 	return best
 end

@@ -132,10 +132,12 @@ end
 ---cwd, so the agent needs to know which projects are actually open).
 local function tabs()
 	local out = {}
-	local cur = vim.fn.tabpagenr()
-	for idx in ipairs(vim.fn.gettabinfo()) do
+	local cur = vim.api.nvim_get_current_tabpage()
+	-- handles, not indices: nvim_tabpage_get_win wants a tabpage, and gettabinfo() only
+	-- gives the 1-based number
+	for idx, tab in ipairs(vim.api.nvim_list_tabpages()) do
 		local file
-		local okw, win = pcall(vim.api.nvim_tabpage_get_win, idx)
+		local okw, win = pcall(vim.api.nvim_tabpage_get_win, tab)
 		if okw then
 			local okb, buf = pcall(vim.api.nvim_win_get_buf, win)
 			if okb then
@@ -143,7 +145,7 @@ local function tabs()
 			end
 		end
 		local okc, cwd = pcall(vim.fn.getcwd, -1, idx)
-		table.insert(out, { index = idx, active = idx == cur, cwd = okc and cwd or nil, file = file })
+		table.insert(out, { index = idx, active = tab == cur, cwd = okc and cwd or nil, file = file })
 	end
 	return out
 end

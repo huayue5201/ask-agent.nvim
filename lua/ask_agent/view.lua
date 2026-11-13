@@ -139,7 +139,9 @@ local function detach(win, close)
 	if vim.api.nvim_get_current_win() == win and prev and vim.api.nvim_win_is_valid(prev) then
 		pcall(vim.api.nvim_set_current_win, prev)
 	end
-	if #vim.api.nvim_tabpage_list_wins(0) > 1 then
+	-- the tab that owns the viewer, not whatever tab happens to be current
+	local tab = vim.api.nvim_win_get_tabpage(win)
+	if #vim.api.nvim_tabpage_list_wins(tab) > 1 then
 		pcall(vim.api.nvim_win_close, win, true)
 	end
 end

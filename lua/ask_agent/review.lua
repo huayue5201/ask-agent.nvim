@@ -163,7 +163,7 @@ end
 ---@param to string
 ---@param meta table
 ---@return boolean ok, string|nil err
-local function show_tree_viewer(viewer, root, from, to, meta)
+local function show_tree_viewer(viewer, root, from, to)
 	local left = materialize(from, root)
 	if not left then
 		return false, "could not extract the starting tree"
@@ -212,9 +212,9 @@ local function show_codediff(root, from, to, meta)
 	if not a then
 		return false, err
 	end
-	local b = git.commit(root, to, "ask-agent: " .. (meta.label or "turn end"), a)
+	local b, b_err = git.commit(root, to, "ask-agent: " .. (meta.label or "turn end"), a)
 	if not b then
-		return false, err
+		return false, b_err
 	end
 	local ok, cmd_err = pcall(vim.cmd, "CodeDiff " .. a .. " " .. b)
 	return ok, ok and nil or tostring(cmd_err)
@@ -228,6 +228,9 @@ function M.open(opts)
 	opts = opts or {}
 	if opts.backend then
 		M.backend = opts.backend
+	end
+	if opts.include_unsaved ~= nil then
+		M.include_unsaved = opts.include_unsaved
 	end
 	local cwd = opts.cwd or vim.fn.getcwd()
 	local root = git.root(cwd)
@@ -273,10 +276,6 @@ function M.open(opts)
 		notify.notify("[ask_agent] no changes in " .. label, vim.log.levels.INFO)
 		return true, nil, meta
 	end
-	if opts.include_unsaved ~= nil then
-		M.include_unsaved = opts.include_unsaved
-	end
-
 	local errs = {}
 	for _, viewer in ipairs(order()) do
 		local ok, err
@@ -285,7 +284,7 @@ function M.open(opts)
 		elseif viewer == "codediff" then
 			ok, err = show_codediff(root, from, to, meta)
 		else
-			ok, err = show_tree_viewer(viewer, root, from, to, meta)
+			ok, err = show_tree_viewer(viewer, root, from, to)
 		end
 		if ok then
 			return true, nil, meta

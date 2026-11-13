@@ -2,7 +2,8 @@
 ---@brief Floating input box: write a question; in normal mode <CR> hands it to on_submit(text). Agent-agnostic.
 --
 -- Keys deliberately avoid intruding on Vim's two modes:
---   insert: except <A-]> (minuet completion) and <C-s> (send directly), everything is native — <CR>/<C-j> insert newlines
+--   insert: except <C-s> (send directly), everything is native — <CR>/<C-j> insert newlines, and
+--           whatever completion keymap your completion plugin installs keeps working
 --   normal: <CR> sends, <Esc>/q cancels, <C-c> cancels
 --
 -- Why a floating window instead of an :edit temp file / codecompanion: asking is a one-off 5-second action,
@@ -11,7 +12,7 @@
 local M = {}
 
 --- Open the input floating window
----@param opts { title: string, on_submit: fun(text: string), prompt?: string, default?: string }
+---@param opts { title: string, on_submit: fun(text: string), default?: string }
 ---@return integer buf, integer win
 function M.input(opts)
 	local ui_w, ui_h = vim.o.columns, vim.o.lines
@@ -26,7 +27,7 @@ function M.input(opts)
 	-- markdown: lets minuet (auto_trigger_ft includes markdown) complete inside the input window too.
 	-- But keep manual trigger only: with an empty nofile context and a free-form question, automatic
 	-- suggestions are inevitably off-topic, wasting a FIM request (measured: an unrelated full ghost
-	-- after 2.9s in an empty buffer), so disable buffer-level auto_trigger and pull one on demand with <A-]>.
+	-- after 2.9s in an empty buffer), so disable buffer-level auto_trigger: a manual trigger key still works.
 	vim.bo[buf].filetype = "markdown"
 	vim.b[buf].minuet_virtual_text_auto_trigger = false -- minuet virtualtext.lua:26 reads this variable directly
 	-- blink.cmp: keep the popup menu out of this buffer. Leaving insert closes the menu, and that close
@@ -45,7 +46,8 @@ function M.input(opts)
 		col = math.max(0, math.floor((ui_w - width) / 2)),
 		title = " " .. opts.title .. " ",
 		title_pos = "center",
-		footer = " <C-s> send · <Esc> leave insert · <CR> in normal mode sends · q close · <A-]> complete ",
+		-- no completion key in the footer: that mapping belongs to whatever plugin the user installed
+		footer = " <C-s> send · <Esc> leave insert · <CR> in normal mode sends · q close ",
 		footer_pos = "center",
 		noautocmd = true,
 	})

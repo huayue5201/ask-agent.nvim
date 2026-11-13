@@ -747,7 +747,6 @@ local function deliver_text(mod, target, text, opts)
 	})
 	return true, nil
 end
-state.sender = deliver_text
 
 -- Queued questions: routing and subset sending live in their own module
 local batch = require("ask_agent.batch")
@@ -1116,7 +1115,9 @@ function M.alias(target, name)
 			target.backend = mod.id
 		end
 	end
-	return aliases.set(target, target.backend, name or "")
+	local ok = aliases.set(target, target.backend, name or "")
+	require("ask_agent.state").invalidate_names()
+	return ok
 end
 
 --- Read the alias
@@ -1314,7 +1315,7 @@ end
 --- keymaps belong to the user's config (see README "Usage").
 --- `opts.layout` picks a layout adapter (default: first usable one, see ask_agent.layouts).
 --- `opts.bridge` is forwarded to ask_agent.bridge (unless false), and `opts.aliases` to ask_agent.aliases when present.
----@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, map?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, tree_lines?: boolean, running_line?: string, task_limit?: integer, keys?: table, context_lines?: integer, max_selection?: integer, max_selection_bytes?: integer, project?: table, task_ttl?: integer }|nil
+---@param opts { default?: string, extra?: table[], matching?: string, picker?: string, show_stale?: boolean, layout?: string, icons?: table, icon_colors?: table, aliases?: table, map?: table, bridge?: table|false, spinner?: string[], tick?: integer, state_interval?: integer, state_notify?: boolean, notify?: table, notify_gap?: integer, notify_style?: boolean, notify_sound?: boolean, notify_sound_cmd?: string|string[], notify_belloff?: boolean, notify_popup?: boolean, notify_popup_ms?: integer, persist?: boolean|{ path?: string, enabled?: boolean }, tree_lines?: boolean, running_line?: string, task_limit?: integer, keys?: table, context_lines?: integer, max_selection?: integer, max_selection_bytes?: integer, project?: table, task_ttl?: integer, results?: boolean, snapshots?: table|false, history?: table, prompts?: table, review?: table, view?: table }|nil
 function M.setup(opts)
 	opts = opts or {}
 	matching = opts.matching or "exact"

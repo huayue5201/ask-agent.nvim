@@ -77,7 +77,7 @@ function M.available()
 	return M.path() ~= nil
 end
 
----Forget the cached answer (after `:AskAgentHealth` or an install).
+---Forget the cached answer (after `:checkhealth ask_agent` or an install).
 function M.reset()
 	resolved = nil
 end

@@ -205,13 +205,8 @@ local function fill(g, y0, y1, x0, x1, group)
 	end
 end
 
-local function chars(str)
-	local out = {}
-	for i = 1, vim.fn.strchars(str) do
-		out[i] = vim.fn.strcharpart(str, i - 1, 1)
-	end
-	return out
-end
+local textmod = require("ask_agent.text")
+local chars = textmod.chars
 
 local function text(g, y, x0, x1, str, group)
 	local col = x0
@@ -268,7 +263,8 @@ end
 -- Layout → canvas
 ----------------------------------------------------------------------
 
--- Candidates → keys: a, b, c... (falls back to numeric indices beyond 26)
+-- Candidates → keys: a, b, c… 22 of them (h/j/k/l are reserved); past that the first
+-- nine cells also answer to 1-9.
 local ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 -- h/j/k/l are reserved for directional movement: with more than 7 candidates the 8th candidate's letter would be h
 -- and collide with "move left", so skip those four when assigning letters. Beyond 22 candidates, use numbers.
@@ -362,37 +358,6 @@ local function place_label(t, owner, need)
 	return best[1], best[2], best[3]
 end
 
---- Shorten `str` to at most `width` display cells, ending in an ellipsis.
---- Returns nil when nothing readable fits (the map then keeps the plain letter).
----@param str string
----@param width integer
----@return string? text
-local function ellipsize(str, width)
-	if width <= 0 then
-		return nil
-	end
-	if vim.fn.strdisplaywidth(str) <= width then
-		return str
-	end
-	-- room for at least one character plus the ellipsis, otherwise it reads as noise
-	if width < 3 then
-		return nil
-	end
-	local out, used = {}, 0
-	for _, ch in ipairs(vim.fn.split(str, "\\zs")) do
-		local cw = vim.fn.strdisplaywidth(ch)
-		if used + cw > width - 1 then
-			break
-		end
-		out[#out + 1] = ch
-		used = used + cw
-	end
-	if #out == 0 then
-		return nil
-	end
-	return table.concat(out) .. "…"
-end
-
 --- Convert adapter leaf geometry into character cells (1-based, bottom-left inclusive), marking those "too small for a label"
 ---@param panes table[]
 ---@param by_pane table<string, table>
@@ -410,7 +375,7 @@ local function geometry(panes, by_pane, W, H)
 end
 
 --- Draw one frame. The whole area is cells, with no footer — content is fixed and does not jump with candidate count.
----@param frame? integer animation frame (0,1,2,...): items carrying `icon_frames` swap their icon per frame
+---@param frame? integer animation frame (0,1,2,...): items carrying `status_frames` swap their icon per frame
 local function paint(panes, by_pane, W, H, sel, frame)
 	local geom = geometry(panes, by_pane, W, H)
 	local g = grid_new(W, H)
@@ -518,11 +483,12 @@ local function paint(panes, by_pane, W, H, sel, frame)
 					-- The visible run is too narrow for the whole name: shorten it into the cells the
 					-- letter would have used. Under three columns a name is noise, keep the letter.
 					local avail = (stop - x + 1) - (icon and (icon_w + 1) or 0)
-					local fitted = ellipsize(name, avail - (status and (1 + status_w) or 0))
+					-- nil when nothing readable fits: the map then keeps the plain letter
+					local fitted = textmod.fit(name, avail - (status and (1 + status_w) or 0), { min = 3 })
 					if status and conf.name_over_badge then
 						-- A badge is worth less than a readable piece of the name: when the badge is
 						-- the reason the name is cut down to a couple of characters, drop it.
-						local roomy = ellipsize(name, avail)
+						local roomy = textmod.fit(name, avail, { min = 3 })
 						if
 							roomy
 							and vim.fn.strdisplaywidth(roomy) >= 4
@@ -533,7 +499,7 @@ local function paint(panes, by_pane, W, H, sel, frame)
 					end
 					if fitted then
 						local fitted_w = vim.fn.strdisplaywidth(fitted)
-						if fitted_w >= 3 then
+						if fitted_w >= conf.name_min then
 							body, body_w = fitted, fitted_w
 						end
 					end
@@ -559,11 +525,10 @@ local function paint(panes, by_pane, W, H, sel, frame)
 	return { rows, segs, hit }
 end
 
---- Directional selection: the nearest pane from `from` in direction `dir` (h/j/k/l)
----@param panes table[]
----@param from table|nil
----@param dir string
----@return table|nil
+---Is `inner` entirely inside `outer` (a floating pane over a tiled one)?
+---@param outer number[] {x, y, w, h}
+---@param inner number[] {x, y, w, h}
+---@return boolean
 local function covers(outer, inner)
 	return outer[1] <= inner[1] + 1e-9
 		and outer[2] <= inner[2] + 1e-9
@@ -571,6 +536,11 @@ local function covers(outer, inner)
 		and outer[2] + outer[4] >= inner[2] + inner[4] - 1e-9
 end
 
+--- Directional selection: the nearest pane from `from` in direction `dir` (h/j/k/l)
+---@param panes table[]
+---@param from table|nil
+---@param dir string
+---@return table|nil
 local function neighbour(panes, from, dir)
 	if not from or not from.rect then
 		return nil
@@ -667,10 +637,7 @@ function M.select(opts)
 	-- current-window-only, and agents elsewhere are chosen from the list (<Tab>).
 	local by_pane = {}
 	for i, it in ipairs(items) do
-		it.letter = LETTERS[i]
-		if it.letter == "" then
-			it.letter = nil
-		end
+		it.letter = LETTERS[i] -- nil past the last letter; numbers cover those
 		if it.pane_id then
 			by_pane[it.pane_id] = it
 		end
@@ -897,14 +864,14 @@ function M.select(opts)
 		local row = api.nvim_win_get_cursor(win)[1]
 		local col = api.nvim_win_get_cursor(win)[2] + 1
 		local list = hit and hit[row]
-		return list and (list[col] or list[1]) or nil
+		return list and list[col] or nil
 	end
 
 	local function current_pane()
 		local row = api.nvim_win_get_cursor(win)[1]
 		local col = api.nvim_win_get_cursor(win)[2] + 1
 		local list = hit and hit[row]
-		local item = list and (list[col] or list[1]) or nil
+		local item = list and list[col] or nil
 		if not item then
 			return nil
 		end
@@ -949,7 +916,7 @@ function M.select(opts)
 			return
 		end
 		local list = hit and hit[pos.line]
-		local item = list and (list[pos.wincol] or list[pos.column] or list[1])
+		local item = list and (list[pos.wincol] or list[pos.column])
 		if item then
 			close(item)
 		end
@@ -1034,6 +1001,12 @@ function M.select(opts)
 		group = group,
 		buffer = buf,
 		callback = function()
+			finished = true
+			if timer then
+				timer:stop()
+				timer:close()
+				timer = nil
+			end
 			pcall(api.nvim_del_augroup_by_id, group)
 		end,
 	})

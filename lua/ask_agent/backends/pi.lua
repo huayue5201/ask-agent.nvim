@@ -17,7 +17,7 @@
 -- client, never to nvim. Such instances are excluded from cwd matching by
 -- default (see `avoid` in backends/init.lua).
 -- `anchor` is optional and structured (see context.capture): the extension renders the
--- <nvim-context> block itself (renderAnchor in nvim-context.ts), so `text` stays the
+-- <nvim-context> block itself (renderBlock in nvim-context.ts), so `text` stays the
 -- question as it was typed. Older extensions ignore the field, which is why the text
 -- still carries the same block when `anchor` is absent.
 -- pi only has to sendUserMessage the assembled message into its own session.

@@ -23,7 +23,7 @@ CONTENTS                                              *ask-agent-contents*
 1. DESIGN                                                   *ask-agent-design*
 
 Agents that run outside Neovim only see what is on disk. This plugin sends the
-question *and* the thing you are looking at: cwd, tab, `file:line`, visual
+question `and` the thing you are looking at: cwd, tab, `file:line`, visual
 selection, unsaved state. Delivery is a socket or a command line, so it works
 with any agent that can receive text.
 
@@ -35,6 +35,8 @@ require("ask_agent").setup({
   matching = "exact",            -- "exact" | "related" | "single"
   picker = "map",                -- "map" | "list"
   list_impl = "auto",            -- "auto" | "ui_menu" | "vim_ui"
+  layout = nil,                  -- layout adapter id (default: first usable one)
+  keys = {},                     -- dashboard key overrides, see *ask-agent-dashboard*
   show_stale = true,             -- list exited instances too, marked "not running"
   spinner = { "⠋", "⠙", "⠹" },      -- frames for the busy icon (default: braille)
   tick = 90,                     -- animation interval in ms (default 90)
@@ -98,9 +100,19 @@ require("ask_agent").setup({
   },
   results = false,               -- also keep the agent's final answer (`o`),
                                  -- opt-in: the ledger is questions otherwise
-  prompts = {                    -- global prompt file; project file is
+  prompts = {                    -- prompt templates
     global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json",
-  },                             -- <root>/.ask-agent/prompts.json
+    project_file = ".ask-agent/prompts.json",  -- relative to the project root
+  },
+  context_lines = 20,            -- lines of source inlined for a dirty buffer
+  max_selection = 200,           -- most lines a visual selection carries
+  max_selection_bytes = 8192,    -- and its byte cap
+  project = {                    -- <project-overview> digest (see *ask-agent-anchor*)
+    enabled = true,
+    wait_ms = 1500,              -- how long the overview may take
+    full = false,                -- full or outline mode
+    ttl = 300,                   -- seconds a digest is reused
+  },
   default = "pi",                -- default backend id
   extra = {},                    -- backends registered at setup time
   icons = {                      -- every glyph: flat key = an agent icon,
@@ -549,7 +561,7 @@ prefixed with ": "), `{state}`, `{kind}` and `{was}` (what a vanished agent was
 doing; translate it with `was = { blocked = "在等你", working = "在干活" }` in the
 same table); `level` is a key of
 `vim.log.levels` as a string, and `sound = true` rings the terminal bell for that
-message (unless `belloff` contains "all"). Set a state to `false` to silence it,
+message (unless `notify_belloff = true` and `belloff` contains "all"). Set a state to `false` to silence it,
 or give just a string to replace only its text:
 
 >lua
@@ -595,8 +607,8 @@ ask.on("done", function(rec)
   if c and c.plugin == "todo2" then require("todo2").complete(c.key) end
 end)
 ask.wait("pi:91841", "done", 600000, function(rec) ... end)
-ask.statusline(opts)                         -- "⠹2 ⚠1 ?1 ✓3", empty when idle
-                                             -- { animated = true, idle = "auto" }
+ask.statusline(opts)                         -- "⠹2 ⚠1 ?1 ✓3"; empty when no agent
+                                             -- is up. { animated = true, idle = false }
 <
 
 *ask-agent-statusline*
@@ -748,7 +760,7 @@ inspect` finds the block's `window_id`, `rex window focus <window> -s <session>`
 switches tabs, `rex block focus <block> -s <session>` puts the cursor in the pane,
 and finally `rex do session.select session_id=...` (the app-side action;
 `REX_CLIENT` picks the app when set) makes the session visible. Failures become
-warnings. |ask.jump()| does the same from Lua, |ask.jumps()| lists the adapters.
+warnings. `ask.jump()` does the same from Lua, `ask.jumps()` lists the adapters.
 
                                                           *ask-agent-viewer*
 Which terminal or multiplexer shows an agent is user-specific, so the sidebar
@@ -769,8 +781,8 @@ ask.register_view({
 optional (`env` unsets inherited variables, `note` is shown on the float). The
 first matching provider (highest `priority`) handles the target. rex
 (`target.rex = { session, block }`), tmux (`target.pane`) and herdr
-(`target.herdr = { agent }`, or `{ pane }`) ship built in, and |health| lists
-them.
+(`target.herdr = { agent }`, or `{ pane }`) ship built in, and `:checkhealth
+ask_agent` lists them.
 
 The float opens in terminal mode, like |:terminal|: open it and type. The float
 adds only these keys, and its footer always shows them:
@@ -805,7 +817,7 @@ somebody else is looking at. A viewer is a second client, not a mirror: a
 full-screen TUI may still repaint when the screen is too small for the session,
 and `destroy-unattached` can end a tmux session when its last client leaves.
 
-Rex has no attach, so that viewer mirrors instead: |bin/rex-view.py| asks rex for
+Rex has no attach, so that viewer mirrors instead: `bin/rex-view.py` asks rex for
 the block's screen (visible rows only, not scrollback) as VT text, repaints whole
 frames and forwards typed keys with `com.superlogical.terminal.write`. Whole
 frames keep the picture correct even when the float and the block disagree about
@@ -822,8 +834,8 @@ The rex CLI itself is found even when it is not on `$PATH` (Neovim started from
 a herdr pane or a launcher that does not source Rex's shell setup): the plugin
 uses `vim.g.ask_agent_rex`, then `$ASK_AGENT_REX`, then `$PATH`, then the newest
 installation under `~/Library/Application Support/com.superlogical.rex/RexServer/
-Versions/*/Rex Server.app/Contents/MacOS/rex`. |:AskAgentHealth| reports which
-one it picked.
+Versions/*/Rex Server.app/Contents/MacOS/rex`. ``:checkhealth ask_agent``
+reports which one it picked.
 
 ==============================================================================
 12. BATCH QUESTIONS                                         *ask-agent-batch*
@@ -959,7 +971,7 @@ the same code path as the ask window, with a fresh anchor.
 ==============================================================================
 14. WHAT A QUESTION CARRIES                                *ask-agent-anchor*
 
-The anchor is captured *before* any UI opens — a float or a picker would change
+The anchor is captured `before` any UI opens — a float or a picker would change
 the window — so it is what you were looking at when you pressed the key. It is
 plain data, agent-agnostic: every backend is handed the same fields.
 
@@ -970,7 +982,7 @@ plain data, agent-agnostic: every backend is handed the same fields.
                   relative to `cwd`; `rel` wins when both exist
   path, line, col the file (~ folded) and the cursor position
   filetype        language for the code fence
-  modified        the buffer has unsaved changes: the file on disk is *not* what
+  modified        the buffer has unsaved changes: the file on disk is `not` what
                   is on screen
   diagnostics     error/warn diagnostics on the cursor line, at most three
   context         the source around the cursor, but only for a buffer whose text
@@ -983,10 +995,10 @@ plain data, agent-agnostic: every backend is handed the same fields.
                   "read it, don't edit it"
   digest          the project overview (see below)
 
-Two things ride along: the *digest* says what this project is, the *anchor* says
+Two things ride along: the `digest` says what this project is, the `anchor` says
 where in it the question was asked. The digest comes from project-overview.nvim
 (structure, size, build entry, conventions — no source); it is fetched when the
-question is *sent*, cached per root, and never fails a question: no plugin, a
+question is `sent`, cached per root, and never fails a question: no plugin, a
 broken collect or `enabled = false` just means the block is absent.
 
   >lua
@@ -1016,7 +1028,7 @@ A text-only backend receives the question and this block as one string:
     </nvim-context>
 
 Inlining is deliberately narrow — copying a saved file only costs tokens and goes
-stale, while an unsaved buffer *is* a different file on disk. Selections are
+stale, while an unsaved buffer `is` a different file on disk. Selections are
 capped with a `(clipped)` marker:
 
   >lua
@@ -1050,6 +1062,7 @@ ask.batch_send({ ids = "3,5-7" }) / ask.batch_route(ids, opts)
 ask.batch_list() / ask.batch_clear() / ask.batch_count()
 ask.send(text, opts)                    -- { backend, target, correlation, anchor,
                                         --   pick, on_sent }
+ask.task(key)                           -- newest task handed to that agent
 ask.agents({ state = "blocked" })       -- instances, most urgent first
 ask.on(event, fn)                       -- state | update | done | blocked | error
 ask.wait(key, want, ms, cb)             -- one-shot wait; cb(nil) on timeout
@@ -1067,6 +1080,7 @@ ask.prompt(name, opts)                  -- ask with a template
 ask.prompt_save(name, text, opts) / ask.prompt_remove(name, opts)
 ask.use("pi") / ask.current()
 ask.list() / ask.targets("pi")
+ask.list_impl("auto"|"ui_menu"|"vim_ui")
 ask.pin(id) / ask.pinned()
 ask.alias(target, name) / ask.alias_of(target)
 ask.picker("map"|"list")

@@ -115,14 +115,14 @@ end
 -- Find the owning window first, focus it, and finally ask the app to show the
 -- session — three server/app actions, in that order.
 
----The connected rex app to address with `-C`; REX_CLIENT wins when set. Without
----one, `session.select` has no visible effect (it is a client action).
----@param session string|nil
----@return string|nil client
+---Where the rex CLI lives (see ask_agent.rex_cli for the resolution order).
+---@return string
 local function rex_bin()
 	return require("ask_agent.rex_cli").path() or "rex"
 end
 
+---The connected rex app to address with `-C`; REX_CLIENT wins when set. Without
+---one, `session.select` has no visible effect (it is a client action).
 ---@param session string|nil
 ---@return string|nil client
 local function app_client(session)

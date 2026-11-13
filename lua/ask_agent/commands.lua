@@ -202,6 +202,7 @@ function M.install(deps)
 			end
 			if args.bang then
 				deps.aliases.clear(item, deps.current())
+				require("ask_agent.state").invalidate_names()
 				notify.notify(("[ask_agent] Cleared alias for #%d"):format(item.index or 0), vim.log.levels.INFO)
 				return
 			end
@@ -216,6 +217,7 @@ function M.install(deps)
 					notify.notify("[ask_agent] Could not write the alias to the cache file", vim.log.levels.WARN)
 					return
 				end
+				require("ask_agent.state").invalidate_names()
 				local now = deps.aliases.get(item, deps.current())
 				notify.notify(
 					now and ("[ask_agent] #%d is now called %s"):format(item.index or 0, now)

@@ -117,20 +117,13 @@ end
 local function fit(msg)
 	local one = msg:gsub("%s*\n%s*", " "):gsub("\t", " ")
 	local width = math.max(20, vim.o.columns - 20)
-	if vim.api.nvim_strwidth(one) <= width then
-		return one
-	end
-	-- the ellipsis counts too: cutting to `width - 1` cells and then appending
-	-- "…" would land exactly on `columns` and wrap, which is the pager again
-	local cut = vim.fn.strcharpart(one, 0, width - 1)
-	while cut ~= "" and vim.api.nvim_strwidth(cut .. "…") > width do
-		cut = vim.fn.strcharpart(cut, 0, vim.fn.strchars(cut) - 1)
-	end
-	return cut .. "…"
+	-- the ellipsis counts too: cutting to `width - 1` cells and then appending "…" would
+	-- land exactly on `columns` and wrap, which is the pager again
+	return require("ask_agent.text").fit(one, width, { min = 2 }) or "…"
 end
 
 ---@param opts { style?: boolean, sound?: boolean, sound_cmd?: string|string[],
----  popup?: boolean, popup_ms?: integer }|nil
+---  popup?: boolean, popup_ms?: integer, respect_belloff?: boolean }|nil
 function M.setup(opts)
 	opts = opts or {}
 	if opts.style ~= nil then
@@ -147,6 +140,9 @@ function M.setup(opts)
 	end
 	if opts.popup_ms ~= nil then
 		M.popup_ms = opts.popup_ms
+	end
+	if opts.respect_belloff ~= nil then
+		M.respect_belloff = opts.respect_belloff ~= false
 	end
 end
 
@@ -167,6 +163,8 @@ local function toast(msg)
 			pcall(vim.api.nvim_win_close, popup_win, true)
 		end
 		local buf = vim.api.nvim_create_buf(false, true)
+		-- the window is closed on dismiss/timeout, so the buffer must follow it out
+		vim.bo[buf].bufhidden = "wipe"
 		vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n", { plain = true }))
 		popup_win = vim.api.nvim_open_win(buf, false, {
 			relative = "editor",
@@ -204,11 +202,6 @@ local function toast(msg)
 		end)
 	end)
 	return true
-end
-
----Ring the bell once, for callers that want it on their own schedule.
-function M.ring()
-	ring()
 end
 
 ---Drop-in replacement for `vim.notify(msg, level, opts)` with the house style.

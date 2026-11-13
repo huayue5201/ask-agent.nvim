@@ -49,10 +49,6 @@ local JOURNAL_KEEP = 50
 local JOURNAL_DEBOUNCE = 1000
 local JOURNAL_TTL = 7 * 24 * 3600 * 1000
 
----Send a message to one resolved instance (set by init, which owns the picker-free sender).
----@type fun(mod: table, target: table, text: string, opts: table|nil): boolean, string?
-M.sender = nil
-
 ---Persist tasks/unread marks across restarts (`setup({ persist = ... })`).
 M.persist = true
 ---Journal override (path string), mainly for tests.
@@ -144,6 +140,13 @@ end
 
 ---Rename an instance; it also claims a directory slot so the name survives a restart.
 ---@param rec table
+---Forget the panel-wide name cache. Aliases are written outside this module too
+---(`ask.alias`, `:AskAgentRename`), and a stale name lingers until the next poll
+---resets it otherwise.
+function M.invalidate_names()
+	name_cache = nil
+end
+
 ---@param name string|nil empty clears
 ---@return boolean ok
 function M.rename(rec, name)
@@ -393,6 +396,9 @@ local function apply(rec, st, src)
 	end
 	rec.state, rec.kind, rec.progress, rec.msg = state, kind, st.progress, st.msg
 	rec.gone = st.gone or nil
+	-- `since` tracks state changes, so a record that idled for an hour has no usable
+	-- "vanished recently" timestamp of its own
+	rec.gone_at = rec.gone and now_ms() or nil
 	if rec.gone then
 		notify_gone(rec, prev)
 	end
@@ -456,6 +462,7 @@ local function slim_task(task)
 		task_id = task.task_id,
 		turn_id = task.turn_id,
 		has_answer = task.has_answer,
+		answer_ts = task.answer_ts,
 	}
 end
 
@@ -492,13 +499,7 @@ local function save_journal()
 			out.agents[key] = { backend = rec.backend, id = rec.id, unread = rec.unread, tasks = tasks }
 		end
 	end
-	local ok, encoded = pcall(vim.json.encode, out)
-	if not ok then
-		return
-	end
-	local file = journal_file()
-	pcall(vim.fn.mkdir, vim.fn.fnamemodify(file, ":h"), "p")
-	pcall(vim.fn.writefile, { encoded }, file)
+	require("ask_agent.journal").write(journal_file(), out)
 end
 
 ---Write the journal once things settle; every dispatch/state change goes through here.
@@ -518,12 +519,9 @@ local function load_journal()
 	if not M.persist then
 		return {}
 	end
-	local ok, lines = pcall(vim.fn.readfile, journal_file())
-	if not ok or type(lines) ~= "table" or #lines == 0 then
-		return {}
-	end
-	local decoded, data = pcall(vim.json.decode, table.concat(lines, "\n"))
-	if not decoded or type(data) ~= "table" or type(data.agents) ~= "table" then
+	local data, problem = require("ask_agent.journal").read(journal_file())
+	require("ask_agent.journal").report(problem)
+	if type(data) ~= "table" or type(data.agents) ~= "table" then
 		return {}
 	end
 	-- tasks older than a week are noise: an instance that comes back with the same
@@ -625,11 +623,22 @@ end
 ---One polling pass over every registered backend. Cheap for a 2s timer: targets()
 ---only reads files / lists panes, and the expensive per-block source (rex) is
 ---queried asynchronously.
+local poll
+
 function M.refresh()
 	if refreshing then
 		return
 	end
 	refreshing = true
+	local ok, err = pcall(poll)
+	refreshing = false
+	if not ok then
+		error(err, 0)
+	end
+end
+
+---One polling pass (see M.refresh, which owns the re-entrancy flag).
+function poll()
 	-- a poll can learn about a rename or a new/vanished instance from another nvim
 	name_cache = nil
 	local seen, sessions = {}, {}
@@ -669,15 +678,20 @@ function M.refresh()
 		end
 	end
 	local now = now_ms()
-	for _, key in ipairs(order) do
+	-- a copy: M.dismiss removes from `order` while we iterate, which would skip the next key
+	for _, key in ipairs(vim.list_slice(order)) do
 		local rec = agents[key]
-		if not seen[key] and not rec.gone then
+		if rec and not seen[key] and not rec.gone then
 			apply(rec, { state = rec.state, kind = rec.kind, msg = rec.msg, gone = true })
-		elseif rec.gone and (rec.state == "idle" or rec.state == "unknown") and now - (rec.since or 0) > PRUNE_MS then
+		elseif
+			rec
+			and rec.gone
+			and (rec.state == "idle" or rec.state == "unknown")
+			and now - (rec.gone_at or rec.since or 0) > PRUNE_MS
+		then
 			M.dismiss(key)
 		end
 	end
-	refreshing = false
 	watch_sessions(sessions)
 end
 
@@ -808,7 +822,19 @@ end
 ---Animation for the statusline spinner: only runs while something is working, and its
 ---only job is to make the statusline redraw (the frame itself is derived from the clock,
 ---so any redraw — cursor movement, a message — shows the right one).
-local anim = { timer = nil, tick = 120 }
+local anim = { timer = nil, cb = nil, tick = 120 }
+
+local function spinner_cb()
+	if M.counts().working == 0 and anim.timer then
+		anim.timer:stop()
+	end
+	-- Two kinds of consumers: an expression statusline (`%{%...%}`) is re-evaluated by
+	-- redrawstatus alone, while a statusline composed once into a string needs an event
+	-- to be rebuilt -- hence both. redrawstatus raises in some modes (cmdline), and a
+	-- missing autocmd is not an error either.
+	pcall(vim.cmd, "redrawstatus")
+	pcall(vim.api.nvim_exec_autocmds, "User", { pattern = "AskAgentStatuslineTick" })
+end
 
 ---@param want boolean
 local function animate(want)
@@ -820,30 +846,17 @@ local function animate(want)
 	end
 	if anim.timer then
 		if not anim.timer:is_active() then
-			anim.timer:start(anim.tick, anim.tick, anim.timer._cb)
+			anim.timer:start(anim.tick, anim.tick, anim.cb)
 		end
 		return
 	end
-	local timer = vim.uv.new_timer()
-	if not timer then
+	local spinner = vim.uv.new_timer()
+	if not spinner then
 		return
 	end
-	anim.cb = anim.cb
-		or vim.schedule_wrap(function()
-			if M.counts().working == 0 then
-				if anim.timer then
-					anim.timer:stop()
-				end
-			end
-			-- Two kinds of consumers: an expression statusline (`%{%...%}`) is re-evaluated
-			-- by redrawstatus alone, while a statusline composed once into a string needs
-			-- an event to be rebuilt -- hence both. redrawstatus raises in some modes
-			-- (cmdline), and a missing autocmd is not an error either.
-			pcall(vim.cmd, "redrawstatus")
-			pcall(vim.api.nvim_exec_autocmds, "User", { pattern = "AskAgentStatuslineTick" })
-		end)
-	timer:start(anim.tick, anim.tick, anim.cb)
-	anim.timer = timer
+	anim.cb = anim.cb or vim.schedule_wrap(spinner_cb)
+	spinner:start(anim.tick, anim.tick, anim.cb)
+	anim.timer = spinner
 end
 
 ---@return integer current spinner frame
@@ -863,7 +876,7 @@ end
 ---`idle` only shows when there is nothing else: a quiet `●3` says "three agents are
 ---up and doing nothing", which is exactly what you want to know when the rest is empty.
 ---Empty string = no agents at all.
----@param opts? { animated?: boolean, idle?: boolean|string, blocked?: boolean }
+---@param opts? { animated?: boolean, idle?: boolean }
 ---@return string
 function M.statusline(opts)
 	opts = opts or {}
@@ -898,11 +911,10 @@ function M.statusline(opts)
 	if c.error > 0 then
 		add(mark("error") .. c.error)
 	end
-	-- idle is the fallback: only interesting when nothing above is happening
+	-- idle is the fallback: interesting only when nothing above is happening, unless the
+	-- caller asked for it always (true) or never (false)
 	local want_idle = opts.idle
 	if want_idle == nil then
-		want_idle = #parts == 0
-	elseif want_idle == "auto" then
 		want_idle = #parts == 0
 	end
 	if want_idle and c.idle > 0 then
@@ -929,7 +941,8 @@ function M.dispatch(backend, id, text, opts)
 		if not mod then
 			return
 		end
-		for _, t in ipairs(mod.targets()) do
+		local ok, targets = pcall(mod.targets)
+		for _, t in ipairs(ok and targets or {}) do
 			if tostring(t.id) == tostring(id) then
 				rec = ensure(mod, t)
 				break

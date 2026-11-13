@@ -92,6 +92,35 @@ function M.list()
 end
 
 ---List candidate targets for an interactive picker, ordered by
+---Normalise a path for comparison: on macOS /tmp and /private/tmp, and symlinked
+---directories, all collapse onto the same directory.
+---@param p string|nil
+---@return string|nil
+function M.norm_path(p)
+	if not p or p == "" then
+		return nil
+	end
+	return vim.uv.fs_realpath(p) or p
+end
+
+---Is one directory the same as, or inside, the other? The separator matters:
+---"/foo/bar" is not a parent of "/foo/barbaz".
+---@param a string|nil normalised
+---@param b string|nil normalised
+---@return boolean
+function M.same_project(a, b)
+	if not a or not b then
+		return false
+	end
+	if a == b then
+		return true
+	end
+	local function inside(parent, child)
+		return child:sub(1, #parent + 1) == parent .. "/"
+	end
+	return inside(a, b) or inside(b, a)
+end
+
 ---"same cwd > same project > other; live > stale; unmanaged > managed".
 ---tier=1 means the cwd matches exactly (the strict tier that may send directly).
 ---Stale candidates (opts.include_stale) carry `stale=true`: they are only there so the picker
@@ -102,25 +131,19 @@ end
 ---@return table[] {{ target: table, tier: integer, stale?: boolean }}
 function M.candidates(mod, cwd, opts)
 	opts = opts or {}
-	local function norm(p)
-		if not p then
-			return nil
-		end
-		return vim.uv.fs_realpath(p) or p
-	end
 	local ok, targets = pcall(mod.targets)
 	if not ok then
 		return {}
 	end
-	cwd = norm(cwd or vim.fn.getcwd())
+	cwd = M.norm_path(cwd or vim.fn.getcwd())
 	local out = {}
 	local function add(t, stale)
 		t.backend = t.backend or mod.id
-		local tcwd = norm(t.cwd)
+		local tcwd = M.norm_path(t.cwd)
 		local tier = 3 -- a different project
 		if tcwd == cwd then
 			tier = 1
-		elseif tcwd and (cwd:sub(1, #tcwd) == tcwd or tcwd:sub(1, #cwd) == cwd) then
+		elseif M.same_project(cwd, tcwd) then
 			tier = 2
 		end
 		table.insert(out, { target = t, tier = tier, stale = stale or nil })
@@ -202,15 +225,7 @@ end
 ---@return table|nil target, string|nil err
 function M.pick(mod, cwd, opts)
 	opts = opts or {}
-	-- Normalise paths: on macOS /tmp and /private/tmp, and symlinked directories,
-	-- all collapse onto the same cwd.
-	local function norm(p)
-		if not p then
-			return nil
-		end
-		return vim.uv.fs_realpath(p) or p
-	end
-	cwd = norm(cwd or vim.fn.getcwd())
+	cwd = M.norm_path(cwd or vim.fn.getcwd())
 	local ok, targets = pcall(mod.targets)
 	if not ok then
 		return nil, ("%s backend failed to get targets: %s"):format(mod.label or mod.id, tostring(targets))
@@ -240,7 +255,7 @@ function M.pick(mod, cwd, opts)
 
 	-- 1) exact cwd match (targets are already sorted by activity, take the first)
 	for _, t in ipairs(targets) do
-		if norm(t.cwd) == cwd then
+		if M.norm_path(t.cwd) == cwd then
 			return t
 		end
 	end
@@ -250,8 +265,8 @@ function M.pick(mod, cwd, opts)
 	if opts.related then
 		local related = {}
 		for _, t in ipairs(targets) do
-			local tcwd = norm(t.cwd)
-			if tcwd and (cwd:sub(1, #tcwd) == tcwd or tcwd:sub(1, #cwd) == cwd) then
+			local tcwd = M.norm_path(t.cwd)
+			if M.same_project(cwd, tcwd) then
 				table.insert(related, t)
 			end
 		end

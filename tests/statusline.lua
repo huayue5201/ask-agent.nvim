@@ -40,6 +40,18 @@ local function clear()
 end
 
 ---Add an agent that the next poll will observe in `probe`.
+---Forgot one agent entirely (target gone, record gone).
+local function drop(id)
+	for i, t in ipairs(targets) do
+		if t.id == id then
+			table.remove(targets, i)
+			break
+		end
+	end
+	probes[id] = nil
+	state.dismiss("fake:" .. id)
+end
+
 local function add(id, probe)
 	targets[#targets + 1] = { id = id, cwd = "/tmp", label = "pid " .. id }
 	probes[id] = probe
@@ -130,6 +142,19 @@ assert(
 	end),
 	"quiet statusline after the last agent leaves"
 )
+
+-- the spinner must survive a working -> quiet -> working cycle (the timer is reused)
+clear()
+add("w1", { running = true, state = "working" })
+state.refresh()
+assert(state.statusline({ animated = true }) ~= "", "animated chunk while working")
+drop("w1")
+state.refresh()
+assert(state.statusline({ animated = true }) == "", "quiet again")
+add("w2", { running = true, state = "working" })
+state.refresh()
+local again = state.statusline({ animated = true })
+assert(again:find("%d$") ~= nil, "restarted spinner still renders, got " .. again)
 
 print("STATUSLINE OK")
 vim.cmd("qa!")

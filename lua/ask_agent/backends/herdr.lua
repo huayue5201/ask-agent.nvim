@@ -157,23 +157,22 @@ local function locate(target)
 	if hit then
 		return hit
 	end
-	M.refresh(true)
-	hit = cache.by[key]
-	if not hit and vim.uv.now() - cache.ts > TTL then
-		local data = cli({ "agent", "get", tostring(key) })
-		local a = type(data) == "table" and (data.result or {}).agent
-		if a then
-			cache.by[key] = {
-				name = a.name,
-				pane = a.pane_id,
-				agent = a.agent,
-				cwd = a.cwd or a.foreground_cwd,
-				status = STATE[a.agent_status] or "unknown",
-				title = a.terminal_title_stripped,
-				workspace = a.workspace_id,
-				tab = a.tab_id,
-			}
-		end
+	-- not in the list: ask herdr about that one agent (the list can lag a
+	-- just-started one, and an agent started with `--name` may never be listed
+	-- under the key we were given)
+	local data = cli({ "agent", "get", tostring(key) })
+	local a = type(data) == "table" and (data.result or {}).agent
+	if a then
+		cache.by[key] = {
+			name = a.name,
+			pane = a.pane_id,
+			agent = a.agent,
+			cwd = a.cwd or a.foreground_cwd,
+			status = STATE[a.agent_status] or "unknown",
+			title = a.terminal_title_stripped,
+			workspace = a.workspace_id,
+			tab = a.tab_id,
+		}
 	end
 	return cache.by[key]
 end
@@ -225,7 +224,8 @@ end
 function M.probe(target)
 	local a = locate(target)
 	if not a then
-		return { running = true }
+		-- herdr no longer lists it: the agent exited, it did not go quiet
+		return { running = false, state = "gone" }
 	end
 	local state = a.status
 	local out = { running = true }

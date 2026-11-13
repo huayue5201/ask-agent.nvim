@@ -28,11 +28,12 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   color, and a batch send delivers each entry to its own agent.
 - **Commands only, no keymaps** — the plugin never touches your mappings; you bind
   `:AskAgent*` commands however you like.
-- **Anchor capture** — `cwd`, tab, `file:line`, visual selection, `modified`, plus a
-  one-line human-readable summary that travels with the question.
+- **Anchor capture** — `cwd`, tab, `file:line`, visual selection, `modified`, plus the
+  code around the line and the diagnostics on it; the agent gets them as a structured
+  `<nvim-context>` block (see "What a question carries").
 - **Multiple instances, disambiguated** — when several agents run in the same project
   you get a picker. Every instance gets a stable color, so the same agent is the same
-  color in the list and in the map. Give instances names with `:AskAgentRename` (or `n` in the dashboard).
+  color in the list and in the map. Give instances names with `:AskAgentRename` (or `R` in the dashboard).
 - **Two pickers** — a **map** of your terminal split layout (pick the agent by the pane
   it lives in; it only shows agents of the window nvim lives in) and a plain **list**
   (works across tabs/windows — use it for agents outside the current window). `<Tab>`
@@ -44,8 +45,9 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   (most urgent first: permission > question > finished > error > working > idle), their
   tasks below — the questions still queued for that agent (`◐`) and the turns already
   sent (`spinner` running, `✓` done, `✗` failed). `<CR>` on an agent opens it in a
-  viewer float (rex, tmux, herdr, or any viewer you register) and on a task jumps to
-  the code anchor it was written at. Blocked prompts, finished turns, failures and
+  viewer float (rex, tmux, herdr, or any viewer you register); on a task another tool
+  dispatched, it jumps to the code anchor that task carries, and on a turn of your own
+  it opens the agent (see `v` for the diff). Blocked prompts, finished turns, failures and
   an agent exiting mid-turn are reported through `vim.notify`; `ask_agent.statusline()`
   puts the counts (`⠹2 ⚠1 ?1 ✓3`) where you want them.
 - **View an agent without leaving Neovim** — `<CR>` on an agent in the sidebar opens
@@ -298,6 +300,12 @@ require("ask_agent").setup({
   -- animation and <Tab> back to the map; it is recommended, not required.
   list_impl = "auto",
 
+  -- layout adapter for the map picker (default: the first usable one, see "Layouts")
+  layout = nil,
+
+  -- rebind (or unbind, with false) any dashboard key: `keys = { rename = "R" }`
+  keys = {},
+
   -- also list exited instances in the list picker as "not running" (default true)
   show_stale = true,
 
@@ -326,7 +334,7 @@ require("ask_agent").setup({
   notify_sound_cmd = { "afplay", "/System/Library/Sounds/Glass.aiff" },
   -- show state notifications as a small card in the corner (default false):
   -- a cmdline line is redrawn away by the next keystroke, a card is not
-  notify_popup = true,
+  notify_popup = false, -- this block shows the defaults; set true for the corner card
   notify_popup_ms = 3000,
 
   -- per-state notification copy, level and bell (see "Notification copy");
@@ -391,7 +399,20 @@ require("ask_agent").setup({
 
   -- prompt templates: global_path is the user file, project_file is looked up under
   -- the git root (or the nearest ancestor with .ask-agent) and may be committed.
-  prompts = { global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json" },
+  prompts = {
+    global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json",
+    project_file = ".ask-agent/prompts.json", -- relative to the project root
+  },
+
+  -- what the agent learns about the code you are looking at: how many lines of a
+  -- dirty buffer travel with the question, and the caps on a visual selection
+  context_lines = 20,
+  max_selection = 200,
+  max_selection_bytes = 8192,
+
+  -- the <project-overview> digest that rides along with every question (see
+  -- "What a question carries"); set `enabled = false` to send coordinates only
+  project = { enabled = true, wait_ms = 1500, full = false, ttl = 300 },
 
   -- keep tasks and unread marks across restarts (default true);
   -- persist = { path = ".../journal.json", enabled = false } moves or disables it
@@ -422,7 +443,15 @@ require("ask_agent").setup({
         gone = "○",
       },
       task = { queued = "◐", done = "✓", error = "✗" },
-      tree = { collapsed = "▸", expanded = "▾", leaf = "·" },
+      tree = {
+        collapsed = "▸",
+        expanded = "▾",
+        leaf = "·",
+        vertical = "│",
+        branch = "├",
+        corner = "└",
+        horizontal = "─",
+      },
       spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
     },
   },
@@ -723,7 +752,7 @@ usually a 30-line file.
 
 ## Instance names
 
-`:AskAgentRename` (or `n` in the dashboard) names an instance; the name is used
+`:AskAgentRename` (or `R` in the dashboard) names an instance; the name is used
 in lists, the ask window title and the "sent" notification. Without a name the
 directory basename is shown instead of `pid 123`, then the agent's title/label.
 
@@ -806,7 +835,7 @@ ask.agents(opts)              -- every instance, most urgent first ({ state, bac
 ask.on(event, fn)             -- "state" | "update" | "done" | "blocked" | "error"; returns unsubscribe
 ask.wait(key, want, ms, cb)   -- cb(rec) once that instance reaches a state (cb(nil) on timeout)
 ask.statusline(opts)          -- "⠹2 ⚠1 ?1 ✓3"; empty when no agent is up
-                              -- { animated = true, idle = "auto" }
+                              -- { animated = true, idle = false }
 ask.dashboard(opts)           -- open the sidebar ({ pos = "right", width = 40 }; pos = "left" moves it)
 ask.goto_anchor(a)            -- jump to a captured anchor (false + reason if gone)
 ask.jump(target)              -- bring the agent's own window to the front (false + reason)
@@ -823,6 +852,7 @@ ask.prompt(name, opts)        -- ask with a template rendered against the anchor
 ask.prompt_save(name, text, opts) / ask.prompt_remove(name, opts)
 ask.use(id) / ask.current()   -- default backend
 ask.list() / ask.targets(id)  -- backends / instances
+ask.list_impl(value)          -- read (nil) or set "auto" | "ui_menu" | "vim_ui" at runtime
 ask.pin(id) / ask.pinned()    -- pin a target
 ask.alias(target, name) / ask.alias_of(target)
 ask.picker("map" | "list")
@@ -883,7 +913,7 @@ else that takes a string:
 - `✓` disappears when you acknowledge (`a`) or dismiss (`d`) the turn — it counts
   what you have not seen, not what finished.
 - `●` is the fallback: it appears only when the other segments are empty, so an idle
-  fleet of three reads `●2` and nothing else. Pass `idle = false` to hide it,
+  fleet of three reads `●3` and nothing else. Pass `idle = false` to hide it,
   `idle = true` to keep it next to the others, `animated = false` for a static `◐`.
 
 ```lua
@@ -1169,7 +1199,7 @@ launched elsewhere (herdr, tmux, an IDE terminal) would otherwise claim "rex is
 not installed" while the app runs fine. Resolution order is `vim.g.ask_agent_rex`,
 `$ASK_AGENT_REX`, `$PATH`, then the newest bundle under `~/Library/Application
 Support/com.superlogical.rex/RexServer/Versions/*/Rex Server.app/Contents/MacOS/
-rex`; `:AskAgentHealth` prints the path in use. A viewer provider that cannot run
+rex`; `:checkhealth ask_agent` prints the path in use. A viewer provider that cannot run
 is skipped rather than fatal, so an agent visible through two hosts (started in a
 rex block, now running under herdr) keeps a working float.
 

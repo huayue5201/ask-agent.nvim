@@ -126,4 +126,32 @@ history.answers = false
 vim.cmd("silent! %bwipeout!")
 vim.fn.delete(repo, "rf")
 vim.fn.delete(store)
+-- truncation must not split a multi-byte character
+history.setup({ path = "/tmp/ask-agent-history-utf8.json", enabled = true, keep = 20, max_text = 5 })
+history.clear()
+local wide = history.add({ text = "日本語テストです", backend = "fake", agent = "u" })
+assert(wide, "added")
+local u = history.get(wide.id)
+assert(
+	u and u.text:find("日本語テス\n", 1, true) == 1,
+	"cut on a character boundary, got " .. vim.inspect(u and u.text)
+)
+assert(u and not u.text:find("\239\191\189", 1, true), "no replacement character in " .. vim.inspect(u and u.text))
+history.setup({ path = "/tmp/ask-agent-history.json", max_text = 20000 })
+
+-- a journal that cannot be decoded is moved aside, never overwritten
+local bad = "/tmp/ask-agent-history-corrupt.json"
+for _, stale in ipairs(vim.fn.glob(bad .. ".bad-*", false, true)) do
+	vim.fn.delete(stale)
+end
+vim.fn.writefile({ '{"version": 1, "entries": [ oops' }, bad)
+history.setup({ path = bad, enabled = true, keep = 20, max_text = 20000 })
+history.clear()
+local fresh = history.add({ text = "after the crash", backend = "fake", agent = "c" })
+assert(fresh, "add works on a fresh journal")
+local siblings = vim.fn.glob("/tmp/ask-agent-history-corrupt.json.bad-*", false, true)
+assert(#siblings == 1, "the corrupt file was moved aside, found " .. #siblings)
+assert(vim.fn.readfile(siblings[1])[1]:find("oops", 1, true) ~= nil, "the old bytes are still there")
+history.setup({ path = "/tmp/ask-agent-history.json", max_text = 20000 })
+
 print("HISTORY OK")

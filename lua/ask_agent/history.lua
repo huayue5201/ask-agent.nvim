@@ -89,15 +89,10 @@ local function load()
 		return entries
 	end
 	entries = {}
-	local file = journal()
-	if vim.uv.fs_stat(file) then
-		local ok, lines = pcall(vim.fn.readfile, file)
-		if ok and lines and lines[1] then
-			local decoded_ok, decoded = pcall(vim.json.decode, table.concat(lines, "\n"))
-			if decoded_ok and type(decoded) == "table" and type(decoded.entries) == "table" then
-				entries = decoded.entries
-			end
-		end
+	local data, problem = require("ask_agent.journal").read(journal())
+	require("ask_agent.journal").report(problem)
+	if type(data) == "table" and type(data.entries) == "table" then
+		entries = data.entries
 	end
 	prune()
 	return entries
@@ -112,13 +107,7 @@ local function save()
 	for i, rec in ipairs(entries) do
 		out.entries[i] = slim(rec)
 	end
-	local ok, encoded = pcall(vim.json.encode, out)
-	if not ok then
-		return
-	end
-	local file = journal()
-	pcall(vim.fn.mkdir, vim.fn.fnamemodify(file, ":h"), "p")
-	pcall(vim.fn.writefile, { encoded }, file)
+	require("ask_agent.journal").write(journal(), out)
 end
 
 ---Configure (called from ask_agent.setup).
@@ -153,8 +142,9 @@ function M.add(rec)
 	local ok, entry = pcall(function()
 		local ts = now_ms()
 		local text = rec.text
-		if #text > M.max_text then
-			text = text:sub(1, M.max_text) .. "\n… (truncated in history)"
+		-- counted in characters: a byte budget would cut a multi-byte character in half
+		if vim.fn.strchars(text) > M.max_text then
+			text = vim.fn.strcharpart(text, 0, M.max_text) .. "\n… (truncated in history)"
 		end
 		local out = {
 			id = type(rec.id) == "string" and rec.id ~= "" and rec.id or M.new_id(),
@@ -189,8 +179,8 @@ function M.set_answer(id, answer, ts)
 	if not rec then
 		return nil
 	end
-	if #answer > M.max_text then
-		answer = answer:sub(1, M.max_text) .. "\n… (truncated in history)"
+	if vim.fn.strchars(answer) > M.max_text then
+		answer = vim.fn.strcharpart(answer, 0, M.max_text) .. "\n… (truncated in history)"
 	end
 	rec.answer = answer
 	rec.answer_ts = ts or now_ms()

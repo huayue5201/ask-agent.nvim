@@ -64,6 +64,7 @@ local function slim(rec)
 		correlation = rec.correlation,
 		start = rec.start,
 		finish = rec.finish,
+		finish_trigger = rec.finish_trigger,
 		closed = rec.closed,
 		status = rec.status,
 	}
@@ -94,15 +95,10 @@ local function load()
 		return turns
 	end
 	turns = {}
-	local file = journal()
-	if vim.uv.fs_stat(file) then
-		local ok, lines = pcall(vim.fn.readfile, file)
-		if ok and lines and lines[1] then
-			local decoded_ok, decoded = pcall(vim.json.decode, table.concat(lines, "\n"))
-			if decoded_ok and type(decoded) == "table" and type(decoded.turns) == "table" then
-				turns = decoded.turns
-			end
-		end
+	local data, problem = require("ask_agent.journal").read(journal())
+	require("ask_agent.journal").report(problem)
+	if type(data) == "table" and type(data.turns) == "table" then
+		turns = data.turns
 	end
 	prune()
 	return turns
@@ -117,13 +113,7 @@ local function save()
 	for i, rec in ipairs(turns) do
 		out.turns[i] = slim(rec)
 	end
-	local ok, encoded = pcall(vim.json.encode, out)
-	if not ok then
-		return
-	end
-	local file = journal()
-	pcall(vim.fn.mkdir, vim.fn.fnamemodify(file, ":h"), "p")
-	pcall(vim.fn.writefile, { encoded }, file)
+	require("ask_agent.journal").write(journal(), out)
 end
 
 ---Configure (called from ask_agent.setup).

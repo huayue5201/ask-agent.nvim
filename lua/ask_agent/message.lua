@@ -9,7 +9,7 @@
 --     render the block themselves; the question stays clean so the agent's transcript, the history
 --     ledger and the answer float all show the words rather than an envelope (see pi.lua).
 --
--- The block format is shared with extensions/nvim-context.ts (`renderAnchor`), which is why it
+-- The block format is shared with extensions/nvim-context.ts (`renderBlock`), which is why it
 -- lives in one function here and one there, and nowhere else.
 
 local M = {}
