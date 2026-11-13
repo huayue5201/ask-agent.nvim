@@ -15,6 +15,11 @@ local mail = vim.fn.tempname()
 results.dir = function()
 	return mail
 end
+-- hooks that predate the stdpath("cache") path write to the legacy directory
+local legacy = vim.fn.tempname()
+results.legacy_dir = function()
+	return legacy
+end
 
 assert(results.record({ task_id = "t1", text = "x" }) == false, "results are off by default")
 local ok, err = results.record({ task_id = "t1", text = "x" })
@@ -50,6 +55,50 @@ vim.fn.writefile({ vim.json.encode({ task_id = "t1", text = "written last year" 
 vim.uv.fs_utime(stale, os.time() - results.mail_ttl - 60, os.time() - results.mail_ttl - 60)
 local imported2 = results.import()
 assert(imported2 == 0 and vim.fn.filereadable(stale) == 0, "stale mail is deleted")
+
+-- mail written by an old hook (no `nvim` segment in the path) is still read
+vim.fn.mkdir(legacy, "p")
+vim.fn.writefile({ vim.json.encode({ task_id = "t1", text = "from an old hook" }) }, legacy .. "/old.json")
+assert(results.import() == 1 and vim.fn.filereadable(legacy .. "/old.json") == 0, "legacy mail is read and consumed")
+assert(history.get("t1").answer == "from an old hook", "legacy mail lands")
+
+-- a hook that quotes the question beats "newest task in this directory"
+local backends = require("ask_agent.backends")
+local state = require("ask_agent.state")
+state.notify = false
+state.persist = false
+backends.register({
+	id = "fake",
+	label = "Fake",
+	targets = function()
+		return {
+			{ id = "a", cwd = "/tmp/dir-a", label = "alpha" },
+			{ id = "b", cwd = "/tmp/dir-a", label = "beta" },
+		}
+	end,
+	probe = function()
+		return { running = true, state = "working" }
+	end,
+	available = function()
+		return true
+	end,
+	send = function()
+		return true
+	end,
+})
+state.refresh()
+history.add({ id = "q-first", text = "fix the parser" })
+history.add({ id = "q-second", text = "rename the module" })
+state.dispatch("fake", "a", "fix the parser", { task_id = "q-first" })
+vim.uv.sleep(5) -- so "newest" is unambiguous at millisecond resolution
+state.dispatch("fake", "b", "rename the module", { task_id = "q-second" })
+local asked = require("ask_agent.message").render({ path = "x.lua", line = 3 }, "fix the parser")
+assert(results.match_question(asked, "/tmp/dir-a") == "q-first", "the quoted question picks its own task")
+assert(results.match_question("something else", "/tmp/dir-a") == nil, "no match is not a guess")
+assert(results.match_cwd("/tmp/dir-a") == "q-second", "without a question the newest task wins")
+assert(results.record({ cwd = "/tmp/dir-a", question = asked, text = "parser fixed" }), "record uses the question")
+assert(history.get("q-first").answer == "parser fixed", "the right task got the answer")
+assert(history.get("q-second").answer == nil, "the other task is untouched")
 
 -- show() refuses tasks it cannot render instead of opening an empty float
 local ok3, err3 = results.show({ text = "no id here" })

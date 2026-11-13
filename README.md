@@ -1146,9 +1146,9 @@ ask.show_answer(task)        -- question + answer in a float (the dashboard's `o
 ```
 
 **Answers** are opt-in (`results = true`, off by default) because they change the
-promise: the ledger starts keeping what the agent said. Nothing is scraped from a
-transcript — the agent itself hands the answer back, keyed by the task id it was
-sent with (`{"text": ..., "task_id": ...}` on the socket):
+promise: the ledger starts keeping what the agent said. The answer is never
+parsed out of a transcript — the agent itself hands it back, keyed by the task id
+it was sent with (`{"text": ..., "task_id": ...}` on the socket):
 
 - **pi**, immediately: the nvim-context extension quotes the id back over the nvim
   bridge (`action=result`) when a run ends, and the last assistant text of that run
@@ -1156,14 +1156,21 @@ sent with (`{"text": ..., "task_id": ...}` on the socket):
   message gets its own run, and a run only claims tasks sent before it started, so
   an answer is never attached to the wrong question.
 - **hooks / scripts**, by mail: write `{"task_id": "...", "text": "..."}` (or,
-  without an id, `{"cwd": "/repo", "text": "..."}` for the newest task of the
-  agent working there) into `stdpath("cache")/ask-agent/results/`. Files are
-  imported when the dashboard opens, on `o`, and when an agent reports done; a
-  file that cannot be delivered is left in place rather than deleted (a week
-  later it is dropped, so a Stop hook cannot fill the directory forever).
+  without an id, `{"cwd": "/repo", "question": "...", "text": "..."}`) into
+  `stdpath("cache")/ask-agent/results/`; the older
+  `$XDG_CACHE_HOME/ask-agent/results/` is still read, so a hook installed before
+  this existed keeps working. Files are imported when the dashboard opens, on
+  `o`, and when an agent reports done; a file that cannot be delivered is left in
+  place rather than deleted (a week later it is dropped, so a Stop hook cannot
+  fill the directory forever).
+  Without a task id the answer goes to the task whose question text appears in
+  `question` (the last user message the hook saw), falling back to the newest
+  task of the agent in that `cwd` — that is what keeps two agents in one
+  directory from stealing each other's answers.
   `extensions/claude-ask-agent-state.sh done` does this from a Claude Code Stop
-  hook (it prefers the hook's `last_assistant_message`, and falls back to the last
-  assistant entry in `transcript_path`).
+  hook (it prefers the hook's `last_assistant_message`, falls back to the last
+  assistant entry in `transcript_path`, and quotes the transcript's last user
+  message as `question` for attribution).
 
 The answer is capped like the question (`history.max_text`), lives on the same
 record, and is dropped with it when history is pruned. With `results` off, `o`

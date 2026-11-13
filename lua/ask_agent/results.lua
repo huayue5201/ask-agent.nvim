@@ -39,6 +39,18 @@ function M.dir()
 	return vim.fn.stdpath("cache") .. "/ask-agent/results"
 end
 
+---Where hooks that predate the `stdpath("cache")` path still write
+---(`$XDG_CACHE_HOME/ask-agent/results`, i.e. without the `nvim` segment). Read as
+---well, so an old hook keeps working; nothing is written there any more.
+---@return string
+function M.legacy_dir()
+	local base = vim.env.XDG_CACHE_HOME
+	if not base or base == "" then
+		base = (vim.env.HOME or "~") .. "/.cache"
+	end
+	return base .. "/ask-agent/results"
+end
+
 ---Keep one answer: history keeps the text, state keeps the "has an answer" flag
 ---(the dashboard reads the flag on every render and the text only on `o`).
 ---@param req table  { task_id?, text, ts?, cwd? }
@@ -53,7 +65,8 @@ function M.record(req)
 	end
 	local task_id = req.task_id
 	if type(task_id) ~= "string" or task_id == "" then
-		task_id = M.match_cwd(req.cwd)
+		-- a hook cannot know our task id, but it can quote the question it saw
+		task_id = M.match_question(req.question, req.cwd) or M.match_cwd(req.cwd)
 	end
 	if not task_id then
 		return false, "no task to attach this answer to"
@@ -66,6 +79,38 @@ function M.record(req)
 	-- next render (the write is debounced, like every other state change).
 	state().attach_result(task_id, req.ts)
 	return true
+end
+
+---The task whose question appears in `question` (the last user message a hook
+---saw). Beats `match_cwd`: two agents in one directory get their own answers
+---instead of the newest one winning both. Returns the newest match, or nil.
+---@param question string|nil
+---@param cwd string|nil
+---@return string|nil task_id
+function M.match_question(question, cwd)
+	if type(question) ~= "string" or question == "" then
+		return nil
+	end
+	local ok, recs = pcall(state().all)
+	if not ok then
+		return nil
+	end
+	local best, best_ts
+	for _, rec in ipairs(recs or {}) do
+		local at = rec.target and rec.target.cwd
+		if not cwd or at == cwd then
+			for _, task in ipairs(rec.tasks or {}) do
+				local text = task.text
+				-- task.text is the first line of what we sent; the hook quotes the whole prompt
+				if task.task_id and text and text ~= "" and question:find(text, 1, true) then
+					if not best_ts or (task.ts or 0) > best_ts then
+						best, best_ts = task.task_id, task.ts or 0
+					end
+				end
+			end
+		end
+	end
+	return best
 end
 
 ---Newest task of the agent working in `cwd` (mail without a task id).
@@ -102,11 +147,33 @@ function M.import()
 	if not M.enabled then
 		return 0, 0
 	end
-	local dir = M.dir()
+	local now = os.time()
+	local imported, failed = 0, 0
+	for _, dir in ipairs(M.dirs()) do
+		local a, b = M.import_dir(dir, now)
+		imported, failed = imported + a, failed + b
+	end
+	return imported, failed
+end
+
+---Every directory mail can come from; the first one is where we now write.
+---@return string[]
+function M.dirs()
+	local out = { M.dir() }
+	local legacy = M.legacy_dir()
+	if legacy ~= out[1] then
+		out[#out + 1] = legacy
+	end
+	return out
+end
+
+---@param dir string
+---@param now integer
+---@return integer imported, integer failed
+function M.import_dir(dir, now)
 	if vim.fn.isdirectory(dir) == 0 then
 		return 0, 0
 	end
-	local now = os.time()
 	local imported, failed = 0, 0
 	for name, kind in vim.fs.dir(dir) do
 		local path = dir .. "/" .. name

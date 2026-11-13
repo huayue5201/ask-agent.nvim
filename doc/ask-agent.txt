@@ -853,20 +853,24 @@ Filter by `cwd`, `backend` or free `query` (text, path, label).
 Answers are opt-in (`results = true`, off by default): they turn the ledger into
 a little transcript, which history alone does not promise. The agent is sent
 `{"text": ..., "task_id": ...}`, and it hands the answer back keyed by that id —
-nothing is scraped from a transcript:
+the answer is never parsed out of a transcript:
 
   pi       the nvim-context extension quotes the id back over the nvim bridge
            (`action=result`) when a run ends; the last assistant text of that run
            becomes the answer. A run only claims tasks sent before it started, so
            a queued follow-up cannot receive the previous run's answer.
-  hooks    write `{"task_id": "...", "text": "..."}` (or `{"cwd": "/repo",
-           "text": "..."}` for the newest task of the agent working there) into
-           `<cache>/ask-agent/results/`; imported on dashboard open, on `o`, and
-           when an agent reports done. Undeliverable files are kept, not deleted;
-           a week later they are dropped, so a Stop hook cannot fill the
-           directory forever.
+  hooks    write `{"task_id": "...", "text": "..."}` (or, without an id,
+           `{"cwd": "/repo", "question": "...", "text": "..."}`) into
+           `<cache>/ask-agent/results/` (the older `$XDG_CACHE_HOME/ask-agent/
+           results/` is still read); imported on dashboard open, on `o`, and
+           when an agent reports done. Without an id the answer goes to the task
+           whose question appears in `question`, else to the newest task of the
+           agent in that `cwd`. Undeliverable files are kept, not deleted; a week
+           later they are dropped, so a Stop hook cannot fill the directory
+           forever.
            `extensions/claude-ask-agent-state.sh done` does this from a Claude
-           Code Stop hook.
+           Code Stop hook (it also quotes the transcript's last user message as
+           `question`, so two agents in one directory keep their own answers).
 
 Answers are capped like questions (`history.max_text`) and pruned with the record
 (`history.keep`). With `results` off, `o` says there is no answer and nothing is
