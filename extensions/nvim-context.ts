@@ -263,15 +263,25 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 		if (text !== undefined) runText = text;
 	});
 	// 一轮结束：把答案交回原来的 nvim 实例。失败只是没有记录，从不打断 agent。
-	pi.on("agent_end", async () => {
+	pi.on("agent_end", async (event: any) => {
 		const idx = pending.findIndex((p) => p.at <= runStartedAt);
 		if (idx < 0) return;
-		const text = runText;
+		// `agent_end.messages` 是本轮的权威消息，优先用它；没有就退回 message_end 攒下的
+		const messages: any[] = Array.isArray(event?.messages) ? event.messages : [];
+		let text = runText;
+		for (const message of messages) {
+			const candidate = assistantText(message);
+			if (candidate !== undefined) text = candidate;
+		}
 		if (!text) return;
 		const [done] = pending.splice(idx, 1);
 		try {
 			const inst = await resolve();
-			if (!inst) return;
+			if (!inst) {
+				// 没有实例可送：留着，下一轮再试（答案总比没有强）
+				pending.splice(idx, 0, done);
+				return;
+			}
 			const reply = await rpc<{ ok?: boolean; error?: string }>(
 				inst.sock,
 				// history caps it anyway; this only keeps the RPC small
@@ -283,6 +293,7 @@ export default function nvimContextExtension(pi: ExtensionAPI) {
 				console.error(`[nvim-context] result rejected: ${reply.error}`);
 			}
 		} catch (e) {
+			// nvim 关了/重启了：这条答案就没了，但别把它算到下一个任务头上
 			console.error(`[nvim-context] result not delivered: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	});

@@ -196,6 +196,12 @@ function M.show(task)
 		add(rec.answer)
 	else
 		add("(no answer recorded yet)")
+		if M.enabled then
+			add("")
+			add("The agent hands the answer back when the run ends. An agent that was")
+			add("already running before `results = true` kept its old extension in")
+			add("memory: restart it and the next answer is recorded.")
+		end
 	end
 	local buf = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
