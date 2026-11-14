@@ -36,7 +36,7 @@ require("ask_agent").setup({
   picker = "map",                -- "map" | "list"
   list_impl = "auto",            -- "auto" | "ui_menu" | "vim_ui"
   layout = nil,                  -- layout adapter id (default: first usable one)
-  keys = {},                     -- dashboard key overrides, see *ask-agent-dashboard*
+  keys = {},                     -- dashboard key overrides, see |ask-agent-dashboard|
   show_stale = true,             -- list exited instances too, marked "not running"
   spinner = { "⠋", "⠙", "⠹" },      -- frames for the busy icon (default: braille)
   tick = 90,                     -- animation interval in ms (default 90)
@@ -64,6 +64,16 @@ require("ask_agent").setup({
                                  -- "dash" | "pulse" | "static" | "off"
   task_limit = 5,                -- rows per agent before "… N older tasks"
                                  -- (false shows every stored task)
+  groups = true,                 -- "needs you" / "working" / "idle & done"
+                                 -- sections with a count (40+ columns)
+  rail = true,                   -- state rail down the left edge (56+ columns)
+  hl = {                         -- colours per state (rail, column, glyph)
+    blocked = "DiagnosticWarn",
+    working = "DiagnosticInfo",
+    done = "DiagnosticOk",
+    error = "DiagnosticError",
+    idle = "Comment",
+  },
   task_ttl = 24 * 3600 * 1000,   -- prune finished tasks older than this (ms);
                                  -- the newest task per agent always stays
   persist = true,                -- keep tasks/unread marks in the journal (default true)
@@ -665,13 +675,34 @@ the agent handed the answer back.
 ==============================================================================
 11. DASHBOARD                                        *ask-agent-dashboard*
 
-|:AskAgentDashboard| opens a sidebar tree on the right (40 columns; pass
-`{ pos = "left", width = 30 }` to `ask.dashboard()` to move or resize it). Top
-level: agent instances, most urgent first. Children: that agent's tasks — questions still queued for it (`◐`) and
-turns already sent (spinner running, `✓` done, `✗` failed). Agent glyphs: `●`
-idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown, `○` exited.
-Tasks are connected to their agent with `│ ├ └` lines (`tree_lines`, default
-true); the rail below the fold marker keeps that connection continuous.
+|:AskAgentDashboard| opens a sidebar on the right (40 columns; pass
+`{ pos = "left", width = 30 }` to `ask.dashboard()` to move or resize it). It
+reads as a table: a state rail down the left edge, a section per mood, and
+columns that line up, so "does anything need me?" is one glance at the top left.
+
+  >text
+  NEEDS YOU  1
+  ▌ ▾ ⚠ reviewer (1)          perm                    2m
+  ▌ │ └─ ⠹ run the test suite sent   tests/a.lua:12    41s
+
+  WORKING  1
+  ▌ ▾ ⠹ worker-2 (2)          busy                   12s
+  ▌ │ ├─ ◐ add the retry path queued src/retry.lua:88
+  ▌ │ └─ ⠹ port the parser    sent   parser/a.lua:41   12s
+  <
+Left to right: the rail is the agent's state colour, the glyph is the state, the
+name is the agent (or the question), the state column says it in a word (`perm`,
+`ask`, `busy`, `sent`, `queued`, `done`), and the right edge carries the place a
+task row is about plus its age — how long the turn took once it is finished.
+Finished agents are drawn dim: history, not a call to action.
+
+Sections (`groups`, 40+ columns) run most urgent first, each with a count; `f`
+still narrows the view to the first one. Below 40 columns the headings go away,
+below 56 the rail and the anchor column too, leaving name / state / age. Agent
+glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown,
+`○` exited. Tasks are connected to their agent with `│ ├ └` lines (`tree_lines`,
+default true); the rail keeps that block continuous. Group headings use
+`AskAgentGroup`.
 The path from an agent to the task it is running right now is green: `running_line`
 defaults to `"dash"`, a dashed line whose bright cells march down one step per
 spinner frame; `"pulse"` sends a single bright cell with a trailing mid shade,
@@ -725,8 +756,8 @@ next match, `r` refreshes, `y` yanks, `d` deletes/dismisses, `v` views a diff,
 
 The winbar counts what wants you (`⚠2 ✓1 ◐3`) and lists the sort order in the
 `?` help: blocked/error, done, working, idle. A freshly opened sidebar grows once
-(up to 48 columns) when a row would be truncated; below 44 columns the backend
-column is dropped before the message is cut. Finished tasks show how long the turn
+(up to 48 columns) when a row would be truncated; narrow sidebars drop the
+anchor column, then the backend column, before the message is cut. Finished tasks show how long the turn
 took; running ones show how long it has been going. A long list keeps the newest
 `task_limit` rows and folds the rest into `… N older tasks  ⏎ show` (`<CR>` or
 `<Tab>` on that row expands it; folding the agent resets the slice). Finished

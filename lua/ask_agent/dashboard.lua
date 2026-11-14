@@ -34,7 +34,15 @@ local context = require("ask_agent.context")
 local M = {}
 
 local NS = vim.api.nvim_create_namespace("ask_agent.dashboard")
-local HL = { blocked = "DiagnosticWarn", done = "DiagnosticOk", error = "DiagnosticError", working = "DiagnosticInfo" }
+local HL = {
+	blocked = "DiagnosticWarn",
+	done = "DiagnosticOk",
+	error = "DiagnosticError",
+	working = "DiagnosticInfo",
+	idle = "Comment",
+	unknown = "Comment",
+	gone = "Comment",
+}
 local TASK_HL = { queued = "DiagnosticInfo", done = "DiagnosticOk", error = "DiagnosticError" }
 local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 
@@ -44,7 +52,25 @@ local TASK_ORDER = { running = 1, queued = 2, error = 3, done = 4 }
 -- agent down to the task that is running right now. Narrow sidebars fall back to
 -- plain indentation so the text keeps its room.
 local TREE_MIN_WIDTH = 20
-local cfg = { tree_lines = true, running_line = "dash", task_limit = 5, keys = {} }
+-- Wide sidebars get a coloured rail, group headings and a column for where a
+-- question came from; middle ones keep the headings, narrow ones go plain.
+local WIDE_WIDTH = 56
+local MID_WIDTH = 40
+local RAIL = "▌"
+
+-- short words for the state column: the row is a table, not a sentence
+local KIND_SHORT = { permission = "perm", question = "ask", auth = "auth" }
+local STATE_SHORT = {
+	working = "busy",
+	idle = "idle",
+	done = "done",
+	error = "error",
+	unknown = "?",
+	gone = "gone",
+}
+local TASK_SHORT = { queued = "queued", running = "sent", done = "done", error = "error" }
+
+local cfg = { tree_lines = true, running_line = "dash", task_limit = 5, groups = true, rail = true, keys = {} }
 
 -- declared here because render() (above the key table) draws the winbar hint
 local KEYS, keys_of, key_label
@@ -55,6 +81,7 @@ local tree_hl_ready = false
 
 local ensure_tree_hl
 local ensure_run_hl
+local run_shade -- task rows draw the running path; defined with the other hl helpers
 
 local buf, win, api, opts
 local rows = {} -- line number -> node
@@ -124,19 +151,65 @@ local function pad(text, w)
 	return text .. string.rep(" ", w - have)
 end
 
----Left column flushed left, right column flushed right, the gap absorbs the slack.
+---Left block flushed left, optional middle column, right column flushed right.
+---The middle column is dropped when the sidebar is too narrow to keep both, so
+---the name never gets squeezed down to nothing.
 ---@param left string
+---@param mid string|nil
 ---@param right string
 ---@param width integer
 ---@return string
-local function columns(left, right, width)
+local function place(left, mid, right, width)
 	local rw = vim.fn.strdisplaywidth(right)
-	if rw >= width then
-		return fit(right, width)
-	end
+	local mw = mid and vim.fn.strdisplaywidth(mid) or 0
 	local room = width - rw - 1
-	local l = vim.fn.strdisplaywidth(left) > room and fit(left, room) or left
-	return l .. string.rep(" ", math.max(1, width - vim.fn.strdisplaywidth(l) - rw)) .. right
+	if mw > 0 then
+		if room - mw - 2 < 10 then
+			mid, mw = nil, 0
+		else
+			room = room - mw - 2
+		end
+	end
+	local l = fit(left, math.max(0, room))
+	local gap = width - vim.fn.strdisplaywidth(l) - rw - mw - (mw > 0 and 2 or 0)
+	local out = l .. string.rep(" ", math.max(1, gap))
+	if mid and mw > 0 then
+		out = out .. mid .. "  "
+	end
+	-- the gap is padding, not content: keep it out of the buffer
+	return (out .. right):gsub("%s+$", "")
+end
+
+---A row built piece by piece, so every highlight knows its byte range.
+---@return table
+local function row()
+	local self = { parts = {}, marks = {}, size = 0 }
+	function self.add(text, hl, from, to)
+		local start = self.size
+		self.parts[#self.parts + 1] = text
+		self.size = self.size + #text
+		if hl then
+			self.marks[#self.marks + 1] = { start + (from or 0), start + (to or #text), hl }
+		end
+		return start
+	end
+	function self.text()
+		return table.concat(self.parts)
+	end
+	return self
+end
+
+---The word in the state column for an agent row.
+---@param rec table
+---@return string
+local function agent_state_text(rec)
+	if rec.state == "blocked" then
+		return KIND_SHORT[rec.kind] or "blocked"
+	end
+	if rec.msg and rec.msg ~= "" then
+		return rec.msg
+	end
+	return STATE_SHORT[rec.state] or rec.state
 end
 
 ---Queue entries per agent, so one render scans the queue once.
@@ -181,47 +254,43 @@ local function tasks_of(rec, queued)
 end
 
 ---@param rec table
----@param name_w integer
----@param show_backend boolean
+---@param L table layout (see render)
 ---@param now integer
 ---@param n integer tasks below this agent
----@return string line, table[] marks, integer fold_bytes
-local function agent_line(rec, name_w, show_backend, now, n)
+---@return string line, table[] marks, integer fold_start, integer fold_stop
+local function agent_line(rec, L, now, n)
 	local fold = n == 0 and icons.ui("tree", "leaf")
 		or (collapsed[rec.key] and icons.ui("tree", "collapsed") or icons.ui("tree", "expanded"))
+	local hl = HL[rec.state] or "Comment"
 	local glyph = rec.state == "working" and icons.spin(frame) or (icons.ui("state", rec.state) or "?")
-	local glyph_start = #fold + 1
-	local name_start = glyph_start + #glyph + 1
 	local name = state.name(rec)
 	if n > 0 then
 		name = name .. (" (%d)"):format(n)
 	end
-	local drawn = fit(name, name_w)
-	local left = ("%s %s %s"):format(fold, glyph, pad(drawn, name_w))
-	local msg = rec.msg or (rec.gone and "exited" or rec.state)
-	if rec.kind then
-		msg = msg .. " · " .. rec.kind
-	elseif rec.state == "done" and rec.source == "heuristic" then
-		-- nobody reported the state: the turn simply stopped looking busy
-		msg = msg .. " · inferred"
+	local r = row()
+	if L.rail then
+		r.add(RAIL .. " ", hl)
 	end
-	local msg_start = #left + 2
-	left = left .. "  " .. msg
+	local fold_start = r.add(fold)
+	r.add(" ")
+	r.add(glyph, hl)
+	r.add(" ")
+	local accent = rec.target and icons.accent_hl(icons.key(rec.target)) or "Bold"
+	r.add(pad(fit(name, L.name_w), L.name_w), accent)
+	if L.show_state then
+		r.add(" " .. pad(fit(agent_state_text(rec), L.state_w), L.state_w), "Comment")
+	end
 	local right = age(now - (rec.since or now))
-	if show_backend then
+	if L.backend then
 		right = rec.backend .. "  " .. right
 	end
-	local marks = {
-		{ glyph_start, glyph_start + #glyph, HL[rec.state] or "Comment" },
-		{ msg_start, msg_start + #msg, "Comment" },
-	}
-	local accent = rec.target and icons.accent_hl(icons.key(rec.target))
-	if accent then
-		marks[#marks + 1] = { name_start, name_start + #drawn, accent }
-	else
-		marks[#marks + 1] = { name_start, name_start + #drawn, "Bold" }
+	local line = place(r.text(), nil, right, L.width)
+	local marks = r.marks
+	if rec.state == "done" and not rec.unread then
+		-- read and finished: it stays visible, but it stops asking for attention
+		marks[#marks + 1] = { 0, #line, "Comment" }
 	end
-	return columns(left, right, inner_width()), marks, #fold
+	return line, marks, fold_start, fold_start + #fold
 end
 
 ---@param key string
@@ -237,15 +306,19 @@ end
 ---@param i integer 1-based sibling index
 ---@param n integer number of siblings
 ---@param use_lines boolean
+---@param i integer row index among the visible tasks
+---@param n integer how many tasks are visible
+---@param L table layout
 ---@return string prefix, integer branch_bytes, integer horiz_bytes
-local function task_prefix(i, n, use_lines)
-	if not use_lines then
-		return "  ", 0, 0
+local function task_prefix(i, n, L)
+	local gut = L.rail and (RAIL .. " ") or ""
+	if not L.lines then
+		return gut .. "  ", 0, 0
 	end
 	local rail = tree_glyph("vertical", "│") .. " "
 	local branch = (i == n) and tree_glyph("corner", "└") or tree_glyph("branch", "├")
 	local horiz = tree_glyph("horizontal", "─")
-	return rail .. branch .. horiz .. " ", #rail + #branch, #horiz
+	return gut .. rail .. branch .. horiz .. " ", #gut + #rail + #branch, #horiz
 end
 
 ---"file.lua:42" for a row that can be jumped to, or nil.
@@ -263,26 +336,21 @@ local function anchor_label(a)
 end
 
 ---@param node table
+---@param L table layout
 ---@param now integer
----@param prefix string tree prefix (spaces when tree lines are off)
+---@param i integer row index among the visible tasks
+---@param n integer how many tasks are visible
+---@param run { at: integer, total: integer }|nil the running task's path
 ---@return string line, table[] marks
-local function task_line(node, now, prefix)
-	local glyph, text, right, hl
+local function task_line(node, L, now, i, n, run)
+	local glyph, text, word, hl
 	if node.kind == "queued" then
-		glyph, text, right, hl = icons.ui("task", "queued"), node.entry.prompt, "queued", TASK_HL.queued
+		glyph, text, word, hl = icons.ui("task", "queued"), node.entry.prompt, TASK_SHORT.queued, TASK_HL.queued
 	else
 		local task = node.task
 		glyph = node.kind == "running" and icons.spin(frame)
 			or (icons.ui("task", node.kind) or icons.ui("tree", "leaf"))
-		text, right, hl = task.text, node.kind, TASK_HL[node.kind] or "DiagnosticInfo"
-		if task.ts then
-			if (node.kind == "done" or node.kind == "error") and task.finish then
-				-- a finished turn should say how long it took, not how long ago it was
-				right = right .. "  " .. duration(task.finish - task.ts)
-			else
-				right = right .. "  " .. age(now - task.ts)
-			end
-		end
+		text, word, hl = task.text, TASK_SHORT[node.kind] or node.kind, TASK_HL[node.kind] or "DiagnosticInfo"
 	end
 	local first = vim.split(text or "", "\n")[1] or ""
 	-- where the question came from (todo2, a plugin, ...), so the row is traceable
@@ -293,16 +361,48 @@ local function task_line(node, now, prefix)
 	if key then
 		tag = (c.plugin and c.plugin ~= "todo2") and ("[%s:%s] "):format(c.plugin, key) or ("[%s] "):format(key)
 	end
-	-- the code the row is about, so `<CR>`/`o` are predictable before pressing them
-	local place = anchor_label(node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor))
-	if place then
-		right = place .. "  " .. right
-	end
-	local start = #prefix
-	local line = columns(prefix .. ("%s %s%s"):format(glyph, tag, first), right, inner_width())
-	local marks = { { start, start + #glyph, hl } }
+	local prefix, branch_bytes, horiz_bytes = task_prefix(i, n, L)
+	local r = row()
+	r.add(prefix)
+	r.add(glyph, hl)
+	r.add(" ")
 	if tag ~= "" then
-		marks[#marks + 1] = { start + #glyph + 1, start + #glyph + 1 + #tag, "Comment" }
+		r.add(tag, "Comment")
+	end
+	local tag_w = vim.fn.strdisplaywidth(tag)
+	r.add(pad(fit(first, L.name_w - tag_w), L.name_w - tag_w))
+	if L.show_state then
+		r.add(" " .. pad(fit(word, L.state_w), L.state_w), "Comment")
+	end
+	local right = ""
+	if node.task and node.task.ts then
+		if (node.kind == "done" or node.kind == "error") and node.task.finish then
+			-- a finished turn should say how long it took, not how long ago it was
+			right = duration(node.task.finish - node.task.ts)
+		else
+			right = age(now - node.task.ts)
+		end
+	elseif node.kind == "queued" then
+		right = ""
+	end
+	-- the code the row is about, so `<CR>`/`o` are predictable before pressing them
+	local mid
+	if L.anchor_w > 0 then
+		local where = anchor_label(node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor))
+		mid = pad(fit(where or "", L.anchor_w), L.anchor_w)
+	end
+	local line = place(r.text(), mid, right, L.width)
+	local marks = r.marks
+	if L.lines then
+		if run and i <= run.at then
+			-- the pulse walks from the agent's fold cell down to the task
+			marks[#marks + 1] = { 0, branch_bytes, run_shade(i, run.total) }
+			if i == run.at and horiz_bytes > 0 then
+				marks[#marks + 1] = { branch_bytes, branch_bytes + horiz_bytes, run_shade(i + 1, run.total) }
+			end
+		else
+			marks[#marks + 1] = { 0, branch_bytes + horiz_bytes, "AskAgentTree" }
+		end
 	end
 	if node.kind == "done" or node.kind == "error" then
 		marks[#marks + 1] = { 0, #line, "Comment" }
@@ -316,6 +416,7 @@ function ensure_tree_hl()
 	end
 	tree_hl_ready = true
 	vim.api.nvim_set_hl(0, "AskAgentTree", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AskAgentGroup", { link = "Comment", bold = true, default = true })
 end
 
 ---Build the green shades for the running connector. Returns whether truecolor is
@@ -342,7 +443,7 @@ end
 ---@param i integer 0-based cell index (0 = the agent's fold glyph)
 ---@param n integer total cells on the path
 ---@return string hl
-local function run_shade(i, n)
+function run_shade(i, n)
 	if not ensure_run_hl() then
 		return "AskAgentRun"
 	end
@@ -382,42 +483,78 @@ local function render()
 		end
 	end
 
-	-- name column: as wide as the longest name shown, but never wider than a third of the view
-	local name_w = 8
-	local backends_seen = {}
+	-- what this width can afford
+	local L = {
+		width = width,
+		rail = cfg.rail and width >= WIDE_WIDTH,
+		groups = cfg.groups and width >= MID_WIDTH and not only_needs,
+		show_state = true,
+		backend = false,
+		lines = cfg.tree_lines and width >= TREE_MIN_WIDTH,
+		name_w = 8,
+		state_w = 0,
+		anchor_w = 0,
+	}
+
+	-- columns: as wide as the content needs, but never wider than half the view
+	local counts, backends_seen, anchors = {}, {}, {}
 	local seen = 0
-	local counts = {}
 	for _, rec in ipairs(shown) do
-		counts[rec.key] = #tasks_of(rec, queued)
+		local children = tasks_of(rec, queued)
+		counts[rec.key] = #children
 		local name = state.name(rec)
-		if counts[rec.key] > 0 then
-			name = name .. (" (%d)"):format(counts[rec.key])
+		if #children > 0 then
+			name = name .. (" (%d)"):format(#children)
 		end
-		name_w = math.max(name_w, vim.fn.strdisplaywidth(name))
+		L.name_w = math.max(L.name_w, vim.fn.strdisplaywidth(name))
+		L.state_w = math.max(L.state_w, vim.fn.strdisplaywidth(agent_state_text(rec)))
 		if not backends_seen[rec.backend] then
 			backends_seen[rec.backend] = true
 			seen = seen + 1
 		end
+		for _, node in ipairs(children) do
+			local where = anchor_label(node.kind == "queued" and node.entry.anchor or (node.task and node.task.anchor))
+			if where then
+				anchors[#anchors + 1] = where
+			end
+			-- one width for both columns, or "queued" would be cut to "que…"
+			local word = TASK_SHORT[node.kind] or node.kind
+			L.state_w = math.max(L.state_w, vim.fn.strdisplaywidth(word))
+		end
 	end
-	name_w = math.min(name_w, math.max(8, math.floor(width / 2) - 6))
-
-	local use_lines = cfg.tree_lines and width >= TREE_MIN_WIDTH
-	if use_lines then
+	L.backend = seen > 1 and width >= 44
+	-- where the question came from gets its own column once there is room for it
+	if width >= WIDE_WIDTH and #anchors > 0 then
+		local w = 8
+		for _, a in ipairs(anchors) do
+			w = math.max(w, vim.fn.strdisplaywidth(a))
+		end
+		L.anchor_w = math.min(w, width >= WIDE_WIDTH and 18 or 12)
+	end
+	local room = width - (L.rail and 2 or 0)
+	local overhead = (L.lines and 4 or 2) + 2 + (L.show_state and (1 + L.state_w) or 0) + 1
+	local right_w = 5 + (L.backend and 10 or 0)
+	local budget = room - overhead - right_w - (L.anchor_w > 0 and (L.anchor_w + 2) or 0)
+	L.state_w = math.max(4, L.state_w)
+	-- the column is a fixed slot: a long question should not push the state
+	-- column around, so spend the whole budget instead of hugging the names
+	L.name_w = math.max(6, math.min(budget, 32))
+	if L.lines then
 		ensure_tree_hl()
 	end
 
 	local lines, map, marks = {}, {}, {}
 	local working = false
-	for _, rec in ipairs(shown) do
+	local function add_agent(rec)
 		working = working or rec.state == "working"
 		local children = tasks_of(rec, queued)
 		local show_children = not collapsed[rec.key]
-		local line, m, fold_bytes = agent_line(rec, name_w, seen > 1 and width >= 44, now, counts[rec.key])
+		local line, m, fold_start, fold_stop = agent_line(rec, L, now, counts[rec.key])
 		-- The running task sorts first, so the path is usually just the agent's
 		-- fold cell plus that one row's branch; it still reads as a link because
 		-- the pulse travels between them.
 		local running
-		if use_lines and cfg.running_line ~= "off" and show_children then
+		if L.lines and cfg.running_line ~= "off" and show_children then
 			for i, node in ipairs(children) do
 				if node.kind == "running" then
 					running = i
@@ -425,49 +562,62 @@ local function render()
 				end
 			end
 		end
-		local run_total = running and (running + 2) or 0 -- fold + per-row branch + horizontal
+		local run_total = running and (running + 2) or 0
 		if running then
-			m[#m + 1] = { 0, fold_bytes, run_shade(0, run_total) }
+			m[#m + 1] = { fold_start, fold_stop, run_shade(0, run_total) }
 		end
 		lines[#lines + 1], map[#map + 1], marks[#marks + 1] = line, { kind = "agent", rec = rec }, m
-		if show_children then
-			local visible = children
-			local hidden = 0
-			if not expanded_tasks[rec.key] and cfg.task_limit and #children > cfg.task_limit then
-				hidden = #children - cfg.task_limit
-				visible = {}
-				for i = 1, cfg.task_limit do
-					visible[i] = children[i]
-				end
+		if not show_children then
+			return
+		end
+		local visible, hidden = children, 0
+		if not expanded_tasks[rec.key] and cfg.task_limit and #children > cfg.task_limit then
+			hidden = #children - cfg.task_limit
+			visible = {}
+			for i = 1, cfg.task_limit do
+				visible[i] = children[i]
 			end
-			local n = #visible
-			for i, node in ipairs(visible) do
-				node.rec = rec
-				local prefix, branch_bytes, horiz_bytes = task_prefix(i, n, use_lines)
-				local tline, tm = task_line(node, now, prefix)
-				if use_lines then
-					if running and i <= running then
-						local cell = i
-						tm[#tm + 1] = { 0, branch_bytes, run_shade(cell, run_total) }
-						if i == running and horiz_bytes > 0 then
-							tm[#tm + 1] = {
-								branch_bytes,
-								branch_bytes + horiz_bytes,
-								run_shade(cell + 1, run_total),
-							}
-						end
-					else
-						tm[#tm + 1] = { 0, branch_bytes + horiz_bytes, "AskAgentTree" }
-					end
-				end
-				lines[#lines + 1], map[#map + 1], marks[#marks + 1] = tline, node, tm
-				working = working or node.kind == "running"
+		end
+		local n = #visible
+		local run = running and { at = running, total = run_total } or nil
+		for i, node in ipairs(visible) do
+			node.rec = rec
+			local tline, tm = task_line(node, L, now, i, n, run)
+			lines[#lines + 1], map[#map + 1], marks[#marks + 1] = tline, node, tm
+			working = working or node.kind == "running"
+		end
+		if hidden > 0 then
+			local more = ("  … %d older task%s  ⏎ show"):format(hidden, hidden == 1 and "" or "s")
+			lines[#lines + 1] = fit(more, width)
+			map[#map + 1] = { kind = "more", rec = rec, hidden = hidden }
+			marks[#marks + 1] = { { 2, #more, "Comment" } }
+		end
+	end
+
+	-- "needs you" first: it is the only group that wants something from the reader
+	local buckets = { { title = nil, recs = shown } }
+	if L.groups then
+		buckets = {
+			{ title = "needs you", recs = {} },
+			{ title = "working", recs = {} },
+			{ title = "idle & done", recs = {} },
+		}
+		for _, rec in ipairs(shown) do
+			table.insert(buckets[needs_you(rec) and 1 or (rec.state == "working" and 2 or 3)].recs, rec)
+		end
+	end
+	for _, bucket in ipairs(buckets) do
+		if #bucket.recs > 0 then
+			if #lines > 0 then
+				lines[#lines + 1], map[#map + 1], marks[#marks + 1] = "", false, {}
 			end
-			if hidden > 0 then
-				local more = ("  … %d older task%s  ⏎ show"):format(hidden, hidden == 1 and "" or "s")
-				lines[#lines + 1] = columns(more, "", inner_width())
-				map[#map + 1] = { kind = "more", rec = rec, hidden = hidden }
-				marks[#marks + 1] = { { 2, #more, "Comment" } }
+			if bucket.title then
+				local title = ("%s  %d"):format(bucket.title:upper(), #bucket.recs)
+				lines[#lines + 1], map[#map + 1], marks[#marks + 1] =
+					fit(title, width), false, { { 0, #title, "AskAgentGroup" } }
+			end
+			for _, rec in ipairs(bucket.recs) do
+				add_agent(rec)
 			end
 		end
 	end
@@ -1006,6 +1156,7 @@ end
 
 ---Dashboard appearance knobs (setup-level; per-call :AskAgentDashboard opts win).
 ---@param o { tree_lines?: boolean, running_line?: "dash"|"pulse"|"static"|"off", task_limit?: integer,
+---          groups?: boolean, rail?: boolean, hl?: table<string, string>,
 ---          keys?: table<string, string|string[]|false> }|nil
 function M.configure(o)
 	if type(o) ~= "table" then
@@ -1021,6 +1172,20 @@ function M.configure(o)
 	if o.task_limit ~= nil then
 		local n = math.floor(tonumber(o.task_limit) or 0)
 		cfg.task_limit = (n and n > 0) and n or false
+	end
+	if o.groups ~= nil then
+		cfg.groups = o.groups ~= false
+	end
+	if o.rail ~= nil then
+		cfg.rail = o.rail ~= false
+	end
+	if type(o.hl) == "table" then
+		-- one place to restyle the whole panel: state words, not colour literals
+		for state, group in pairs(o.hl) do
+			if HL[state] and type(group) == "string" then
+				HL[state] = group
+			end
+		end
 	end
 	if type(o.keys) == "table" then
 		-- merge, so a per-call :AskAgentDashboard keys = {...} does not wipe setup()

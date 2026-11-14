@@ -64,21 +64,41 @@ dashboard.open({
 
 local buf = vim.api.nvim_get_current_buf()
 local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+-- the panel is grouped now: find rows by what they say, not by their index
+local function row(pattern)
+	for i, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+		if l:find(pattern) then
+			return i, l
+		end
+	end
+end
+
 assert(vim.bo[buf].filetype == "ask-agent-dashboard", "sidebar buffer")
-assert(#lines == 4, "two agents + two tasks, got " .. #lines .. ": " .. vim.inspect(lines))
-assert(lines[1]:match("alpha"), "agent name on the top-level row: " .. lines[1])
-assert(lines[4]:match("^· "), "no tasks, no fold marker: " .. lines[4])
-assert(lines[4]:match("quiet%-instance"), "the name column fits the longest name: " .. lines[4])
+local alpha_row, alpha_row_text = row("alpha")
+local quiet_row_text = select(2, row("quiet%-instance"))
+local sent_row, sent_text = row("sent question")
+local queued_row_text = select(2, row("queued question"))
+assert(alpha_row_text and sent_text and queued_row_text, "every row is there: " .. vim.inspect(lines))
+assert(quiet_row_text and quiet_row_text:match("^· "), "no tasks, no fold marker: " .. tostring(quiet_row_text))
+assert(alpha_row_text:match("busy"), "the state column carries the word: " .. alpha_row_text)
+assert(sent_text:match("sent"), "a running turn says sent: " .. sent_text)
+assert(queued_row_text:match("queued"), "a queued question says queued: " .. queued_row_text)
+assert(sent_row and sent_row > alpha_row, "tasks sit under their agent")
+-- the panel groups by what it wants from you: working first, idle last
+assert(lines[1]:match("WORKING"), "the working group comes first: " .. lines[1])
+for _, l in ipairs(lines) do
+	if l:match("^IDLE & DONE") then
+		assert(vim.fn.strdisplaywidth(l) > 0)
+	end
+end
 assert(vim.wo[vim.api.nvim_get_current_win()].winbar:match("ask%-agent · 2"), "winbar counts the agents")
-assert(lines[1]:match("working"), "agent state on the row: " .. lines[1])
-assert(lines[2]:match("sent question") and lines[2]:match("running"), "running task first: " .. lines[2])
-assert(lines[3]:match("queued question") and lines[3]:match("queued"), "queued task: " .. lines[3])
 -- tree lines: first child branches, the last one corners
 -- a rail under the fold glyph keeps the agent -> tasks connection continuous
 local rail = "\u{2502} "
 local branch, corner = rail .. "\u{251c}\u{2500} ", rail .. "\u{2514}\u{2500} "
-assert(lines[2]:sub(1, #branch) == branch, "first task branches off the agent: " .. lines[2])
-assert(lines[3]:sub(1, #corner) == corner, "last task corners: " .. lines[3])
+assert(sent_text:sub(1, #branch) == branch, "first task branches off the agent: " .. sent_text)
+assert(queued_row_text:sub(1, #corner) == corner, "last task corners: " .. queued_row_text)
 -- the path from the working agent to its running task is green
 local green = false
 for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, { 1, 0 }, { 1, -1 }, { details = true })) do
@@ -95,10 +115,10 @@ vim.wait(20)
 for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, { 0, 0 }, { -1, -1 }, { details = true })) do
 	assert(not (m[4].hl_group or ""):match("^AskAgentRun"), "running_line=off paints no green")
 end
-assert(vim.api.nvim_buf_get_lines(buf, 1, 2, false)[1]:sub(1, #branch) == branch, "tree lines stay")
+assert(select(2, row("sent question")):sub(1, #branch) == branch, "tree lines stay")
 dashboard.open(nil, { tree_lines = false })
 vim.wait(20)
-assert(vim.api.nvim_buf_get_lines(buf, 1, 2, false)[1]:sub(1, 2) == "  ", "tree_lines=false indents only")
+assert(select(2, row("sent question")):sub(1, 2) == "  ", "tree_lines=false indents only")
 dashboard.open(nil, { tree_lines = true, running_line = "pulse" })
 vim.wait(20)
 assert(vim.wo[vim.api.nvim_get_current_win()].winfixwidth, "sidebar keeps its width")
@@ -108,13 +128,13 @@ local real_input = vim.ui.input
 vim.ui.input = function(_, cb)
 	cb("api-worker")
 end
-vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_win_set_cursor(0, { row("alpha"), 0 })
 vim.api.nvim_feedkeys("R", "x", false)
 vim.wait(30)
 vim.ui.input = real_input
 -- the two fake agents share a fallback name, so the panel numbers them (·1/·2)
 assert(state.name(state.get("fake:a")):match("^api%-worker"), "the sidebar renamed the agent")
-assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("api%-worker"), "the row redrew")
+assert(row("api%-worker"), "the row redrew")
 vim.fn.delete("/tmp/ask-agent-dashboard-aliases.json")
 
 -- keys are configurable, and `n` is not a rename: the list keeps `n`/`N` free
@@ -148,12 +168,12 @@ ask.diff = function(o)
 	reviewed = o
 	return true
 end
-vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.api.nvim_win_set_cursor(0, { row("sent question"), 0 })
 vim.api.nvim_feedkeys("v", "x", false)
 vim.wait(20)
 assert(reviewed and reviewed.correlation and reviewed.correlation.key == 7, "v opens the task's turn")
 ask.diff = real_diff
-vim.api.nvim_win_set_cursor(0, { 3, 0 })
+vim.api.nvim_win_set_cursor(0, { row("queued question"), 0 })
 vim.api.nvim_feedkeys("y", "x", false)
 vim.wait(20)
 assert(vim.fn.getreg('"') == "queued question", "y copies the task text: " .. vim.fn.getreg('"'))
@@ -162,11 +182,13 @@ vim.wait(20)
 assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("nothing needs you"), "f hides busy agents")
 vim.api.nvim_feedkeys("f", "x", false)
 vim.wait(20)
-assert(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]:match("api%-worker"), "f is a toggle")
+assert(row("api%-worker"), "f is a toggle")
 
 -- a turn dispatched by another plugin shows where it came from
 state.dispatch("fake", "b", "from the todo list", { correlation = { plugin = "todo2", key = "t42" } })
-dashboard.open(nil)
+-- the place a row points at gets its own column, which a wide sidebar pays for
+pcall(vim.api.nvim_win_close, 0, true)
+dashboard.open(nil, { width = 62 })
 vim.wait(20)
 local tagged
 for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
@@ -195,6 +217,7 @@ view.open = function(target)
 	shown = target
 	return true
 end
+pcall(vim.api.nvim_win_close, 0, true)
 dashboard.open({
 	goto_anchor = function(a)
 		jumps[#jumps + 1] = a
@@ -202,7 +225,7 @@ dashboard.open({
 	end,
 }, { width = 50 })
 vim.wait(20)
-vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.api.nvim_win_set_cursor(0, { row("sent question"), 0 })
 vim.api.nvim_feedkeys("\r", "x", false)
 vim.wait(20)
 assert(#jumps == 1 and jumps[1].line == 2, "a dispatched task jumps to its anchor")
@@ -210,6 +233,7 @@ assert(shown == nil, "…and does not open the agent")
 state.dispatch("fake", "b", "talk about the design", {
 	anchor = { buf = vim.api.nvim_get_current_buf(), line = 3 },
 })
+pcall(vim.api.nvim_win_close, 0, true)
 dashboard.open({
 	goto_anchor = function(a)
 		jumps[#jumps + 1] = a
@@ -239,11 +263,11 @@ jump.focus = function(target)
 	focused = target
 	return true
 end
-vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_win_set_cursor(0, { row("api%-worker"), 0 })
 vim.api.nvim_feedkeys("J", "x", false)
 vim.wait(20)
 assert(focused and focused.id == "a", "J jumps to the agent on the cursor row")
-vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.api.nvim_win_set_cursor(0, { row("sent question") or 1, 0 })
 focused = nil
 vim.api.nvim_feedkeys("J", "x", false)
 vim.wait(20)
@@ -389,9 +413,11 @@ for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
 end
 assert(vim.api.nvim_buf_get_lines(0, 1, 2, false)[1]:sub(1, 2) == "  ", "narrow sidebar drops tree lines")
 vim.api.nvim_win_set_width(0, 50)
+dashboard.open(nil) -- redraw: the narrow pass truncated the text
+vim.wait(20)
 
 -- <CR> on a task jumps to its anchor instead of the agent window
-vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.api.nvim_win_set_cursor(0, { row("queued question"), 0 })
 vim.api.nvim_feedkeys("\r", "x", false)
 vim.wait(50)
 assert(queue.count() == 1, "jumping does not consume the queued question")
@@ -404,7 +430,7 @@ view.open = function(target)
 	viewed = target
 	return true
 end
-vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vim.api.nvim_win_set_cursor(0, { row("api%-worker"), 0 })
 vim.api.nvim_feedkeys("\r", "x", false)
 vim.wait(30)
 view.open = real_view
@@ -498,17 +524,17 @@ assert(vim.api.nvim_get_current_win() == first and vim.fn.tabpagenr() == 1, "cro
 
 -- an agent with questions still routed to it cannot be dismissed
 vim.api.nvim_set_current_win(first)
-vim.api.nvim_win_set_cursor(first, { 1, 0 })
+vim.api.nvim_win_set_cursor(first, { row("api%-worker"), 0 })
 vim.api.nvim_feedkeys("d", "x", false)
 vim.wait(30)
 assert(state.get("fake:a"), "dismiss refused while work is queued")
 
 -- delete the queued task, then the agent can be dismissed and the view empties
-vim.api.nvim_win_set_cursor(first, { 3, 0 })
+vim.api.nvim_win_set_cursor(first, { row("queued question"), 0 })
 vim.api.nvim_feedkeys("d", "x", false)
 vim.wait(30)
 assert(queue.count() == 0, "task deleted")
-vim.api.nvim_win_set_cursor(first, { 1, 0 })
+vim.api.nvim_win_set_cursor(first, { row("api%-worker"), 0 })
 vim.api.nvim_feedkeys("d", "x", false)
 vim.wait(30)
 assert(state.get("fake:a") == nil, "agent dismissed")

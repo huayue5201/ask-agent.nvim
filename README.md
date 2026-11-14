@@ -367,6 +367,22 @@ require("ask_agent").setup({
   -- false shows every stored task)
   task_limit = 5,
 
+  -- split the list into "needs you" / "working" / "idle & done" sections with
+  -- a heading and a count (default true; needs a sidebar of 40+ columns)
+  groups = true,
+
+  -- the 2-column state rail down the left edge (default true; needs 56+)
+  rail = true,
+
+  -- colours for the rail, the state column and the glyph of each state
+  hl = {
+    blocked = "DiagnosticWarn",
+    working = "DiagnosticInfo",
+    done = "DiagnosticOk",
+    error = "DiagnosticError",
+    idle = "Comment",
+  },
+
   -- drop finished tasks older than this from the journal, in ms (default 24h);
   -- the newest task of every agent always stays
   task_ttl = 24 * 3600 * 1000,
@@ -1039,41 +1055,63 @@ are looking at.
 ## Dashboard
 
 `:AskAgentDashboard` opens a sidebar on the right (40 columns; `:lua
-require("ask_agent").dashboard({ pos = "left", width = 30 })` moves/resizes it): a
-tree whose top level is the agents (most urgent first) and whose children are that
-agent's tasks — the questions still queued for it and the turns already sent to it:
+require("ask_agent").dashboard({ pos = "left", width = 30 })` moves/resizes it).
+It is a table, not a log: a rail down the left edge, a section per mood, and
+columns that line up, so the answer to "does anything need me?" is one glance at
+the top-left corner.
 
 ```
-▾ ⚠ reviewer (2)  claude  needs permission: run the test suite?  2m
-│ ├─ ◐ add the retry path  queued  3m
-│ └─ ⠹ run the test suite  running  41s
-▾ ✓ worker-1 (1)  pi      done: 12 files changed  1m
-│ └─ ✓ update the docs  done  38s
-▾ ◐ worker-2  pi      busy  12s
-  └─ ⠹ port the parser  running  12s
+NEEDS YOU  1
+▌ ▾ ⚠ reviewer (1)             perm                         2m
+▌ │ └─ ⠹ run the test suite    sent      tests/a.lua:12     41s
+
+WORKING  1
+▌ ▾ ⠹ worker-2 (2)             busy                        12s
+▌ │ ├─ ◐ add the retry path    queued    src/retry.lua:88
+▌ │ └─ ⠹ port the parser       sent      parser/a.lua:41    12s
+
+IDLE & DONE  2
+▌ · ✓ worker-1                 done                         1m
+▌ ▾ ○ explorer                 gone                         3h
+▌ │ └─ ✓ update the docs       done                        38s
 ```
 
-Tasks hang off their agent with `│ ├ └` connectors (`tree_lines`); the rail under
-the fold marker keeps the agent → tasks connection continuous. The path from
-an agent down to the task it is running right now is green and animated as a
-marching dashed line: one bright cell every three, shifted down one step per
-spinner frame (`running_line = "dash"`). `"pulse"` sends a single bright cell with
-a trailing mid shade instead, `"static"` keeps a dim→bright gradient, and `"off"`
-draws plain tree lines. Sidebars narrower than 20 columns drop the connectors and
-keep the old indentation.
+Reading a row, left to right: the **rail** is the state colour of the agent it
+belongs to (and the group above tells you why it is there), the **glyph** is the
+state, the **name** is the agent (or the question it was asked), the **state
+column** is the same thing in a word (`perm`, `ask`, `busy`, `sent`, `queued`,
+`done`), and the right edge is the place the row is about (a task row) plus age —
+or, for a finished task, how long the turn took. A finished agent's rows are drawn
+dim: they are history, not a call to action.
+
+Sections (`groups`) run most urgent first — "needs you", "working", "idle & done" —
+each with a count, so a full sidebar scans top-down. `f` still narrows everything
+to the first section. Below 40 columns the headings go away; below 56 the rail and
+the anchor column go too, leaving name / state / age, which is what fits.
+
+Tasks hang off their agent with `│ ├ └` connectors (`tree_lines`) and the rail
+`▌` keeps the agent → tasks block continuous. The path from an agent down to the
+task it is running right now is green and animated as a marching dashed line: one
+bright cell every three, shifted down one step per spinner frame (`running_line =
+"dash"`). `"pulse"` sends a single bright cell with a trailing mid shade instead,
+`"static"` keeps a dim→bright gradient, and `"off"` draws plain tree lines.
+Sidebars narrower than 20 columns drop the connectors and keep plain indentation.
 
 The winbar counts what wants you (`⚠2 ✓1 ◐3`) and the sidebar grows once on open
-(up to 48 columns) when a row would be truncated; narrow sidebars drop the backend
-column before they cut the message. Finished tasks show how long the turn took
-(`38s`), running ones how long it has been going; the sort order is blocked/error,
-done, working, idle (also in the `?` help). A long task list shows the newest
-`task_limit` (5) rows and collapses the rest into `… N older tasks  ⏎ show`
-(`<CR>` on that row expands it; folding the agent with `<Tab>` resets the slice).
-Finished tasks older than `task_ttl` (24h) leave the journal on the next save, and
-loading a journal drops them too — the newest task per agent is always kept.
-A turn that another tool dispatched (todo2, a plugin) carries its key on the row,
-dim in brackets: `[t42]`, so several sources can share one agent and still be told
-apart; `:AskAgentHistory` shows the same as `todo2 t42` in the record line.
+(up to 48 columns) when a row would be truncated; narrow sidebars drop the anchor
+column, then the backend column, before they cut the message. The sort order is
+blocked/error, done, working, idle (also in the `?` help). Colours come from the
+diagnostic palette (`hl`); the glyph of every state is the same one the statusline
+uses, so the sidebar and the statusline speak the same language.
+
+A long task list shows the newest `task_limit` (5) rows and collapses the rest into
+`… N older tasks  ⏎ show` (`<CR>` on that row expands it; folding the agent with
+`<Tab>` resets the slice). Finished tasks older than `task_ttl` (24h) leave the
+journal on the next save, and loading a journal drops them too — the newest task
+per agent is always kept. A turn that another tool dispatched (todo2, a plugin)
+carries its key on the row, dim in brackets: `[t42]`, so several sources can share
+one agent and still be told apart; `:AskAgentHistory` shows the same as `todo2 t42`
+in the record line.
 
 Agent glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌`
 unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `✗` failed.
