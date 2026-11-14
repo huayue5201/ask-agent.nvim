@@ -478,7 +478,9 @@ local function render()
 	local width = inner_width()
 	local shown = {}
 	for _, rec in ipairs(list) do
-		if not only_needs or needs_you(rec) then
+		-- a stopped agent leaves the panel as soon as the poll notices (the WARN has
+		-- already told you); keeping the row only invited a <CR> on a dead target
+		if not rec.gone and (not only_needs or needs_you(rec)) then
 			shown[#shown + 1] = rec
 		end
 	end

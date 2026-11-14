@@ -188,6 +188,9 @@ state.persist = false
 
 -- notifications: blocked always reports, done/error throttle, exits report while working
 targets = { targets[1] }
+-- two passes: an exit is only believed after two misses (see GONE_MISSES), so the
+-- notifications for the records that just went away land on the second one
+state.refresh()
 state.refresh()
 local notes = {}
 local save_notify = vim.notify
@@ -227,8 +230,11 @@ state.refresh()
 notes = {}
 targets = {}
 state.refresh()
+assert(#notes == 0 and not state.get("fake:a").gone, "one missed poll is not an exit")
+state.refresh()
 assert(#notes == 1 and notes[1].msg:find("exited while working", 1, true), "an exit while working notifies")
 assert(state.get("fake:b").gone, "unseen instance is gone")
+assert(state.get("fake:b").state == "gone", "a record that vanished while working says so")
 
 -- Two agents whose name falls back to the same directory must still be told
 -- apart in the panel: identical rows would look like one agent shown twice.

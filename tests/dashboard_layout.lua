@@ -19,6 +19,7 @@ local targets = {
 	{ id = "b", cwd = "/tmp/layout-b", label = "worker" },
 	{ id = "c", cwd = "/tmp/layout-c", label = "explorer" },
 	{ id = "d", cwd = "/tmp/layout-d", label = "archivist" },
+	{ id = "e", cwd = "/tmp/layout-e", label = "ghost" },
 }
 backends.register({
 	id = "fake",
@@ -33,10 +34,10 @@ backends.register({
 		if t.id == "b" then
 			return { running = true, state = "working", msg = "busy" }
 		end
-		if t.id == "c" then
-			return { running = true, state = "idle", msg = "idle" }
+		if t.id == "e" then
+			return { running = false, state = "gone" }
 		end
-		return { running = false, state = "unknown" }
+		return { running = true, state = "idle", msg = "idle" }
 	end,
 	available = function()
 		return true
@@ -83,7 +84,7 @@ local expected = {
 		"",
 		"IDLE & DONE  2",
 		"▌ · ● explorer                  idle                       0s",
-		"▌ ▾ ○ archivist (1)             gone                       0s",
+		"▌ ▾ ● archivist (1)             idle                       0s",
 		"▌ │ └─ ✓ update the docs for the … done     api.txt:120    1m",
 	},
 	[40] = {
@@ -93,7 +94,7 @@ local expected = {
 		"│ ├─ ⠋ run the test suite   sent     0s",
 		"│ └─ ◐ explain the rex pro… queued",
 		"· ● explorer             idle        0s",
-		"▾ ○ archivist (1)        gone        0s",
+		"▾ ● archivist (1)        idle        0s",
 		"│ └─ ✓ update the docs for… done     1m",
 	},
 	[26] = {
@@ -103,7 +104,7 @@ local expected = {
 		"│ ├─ ⠋ run t… sent     0s",
 		"│ └─ ◐ expla… queued",
 		"· ● explo… idle        0s",
-		"▾ ○ archi… gone        0s",
+		"▾ ● archi… idle        0s",
 		"│ └─ ✓ updat… done     1m",
 	},
 }
@@ -128,5 +129,9 @@ for _, width in ipairs({ 62, 40, 26 }) do
 		assert(vim.fn.strdisplaywidth(line) <= width, "row wider than the sidebar: " .. line)
 	end
 end
+
+local ghost = state.get("fake:e")
+assert(ghost and ghost.gone, "the fixture's dead agent is known to the state layer")
+assert(not table.concat(render(62), "\n"):find("ghost", 1, true), "a stopped agent leaves the panel")
 
 print("DASHBOARD LAYOUT OK")

@@ -41,6 +41,10 @@ local timer, refreshing = nil, false
 local ORDER = { blocked = 1, done = 2, error = 3, working = 4, unknown = 5, idle = 6, gone = 7 }
 local KIND = { permission = 0, question = 1, auth = 2 }
 local PRUNE_MS = 600000
+---A record is only believed gone after two consecutive misses: one failed probe
+---(a tmux call that timed out, a herdr list that raced a restart) used to make a
+---live agent disappear from the panel and send a WARN about it.
+local GONE_MISSES = 2
 local TASK_KEEP = 20
 ---Finished tasks older than this are dropped from the journal; one per agent stays
 ---so a restart can still show what the instance did last.
@@ -651,6 +655,7 @@ function poll()
 			for _, t in ipairs(ok and targets or {}) do
 				local rec = ensure(mod, t)
 				seen[rec.key] = true
+				rec.misses = nil
 				local st = backends.probe(mod, t)
 				apply(rec, {
 					state = st.state,
@@ -683,14 +688,15 @@ function poll()
 	-- a copy: M.dismiss removes from `order` while we iterate, which would skip the next key
 	for _, key in ipairs(vim.list_slice(order)) do
 		local rec = agents[key]
-		if rec and not seen[key] and not rec.gone then
-			apply(rec, { state = rec.state, kind = rec.kind, msg = rec.msg, gone = true })
-		elseif
-			rec
-			and rec.gone
-			and (rec.state == "idle" or rec.state == "unknown")
-			and now - (rec.gone_at or rec.since or 0) > PRUNE_MS
-		then
+		if rec and not seen[key] then
+			rec.misses = (rec.misses or 0) + 1
+			if not rec.gone and rec.misses >= GONE_MISSES then
+				-- say `gone` instead of keeping the state it died in: a record that
+				-- vanished while `working` or `done` used to be pruned only when it
+				-- happened to be idle/unknown, so it lingered in the panel forever
+				apply(rec, { state = "gone", kind = rec.kind, msg = rec.msg, gone = true })
+			end
+		elseif rec and rec.gone and now - (rec.gone_at or 0) > PRUNE_MS then
 			M.dismiss(key)
 		end
 	end

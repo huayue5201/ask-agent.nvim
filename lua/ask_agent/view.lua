@@ -303,6 +303,13 @@ function M.open(target, opts)
 	if key then
 		local ok, state = pcall(require, "ask_agent.state")
 		local rec = ok and state.get(key) or nil
+		if rec and not rec.gone and ok and state.refresh then
+			-- the record can be up to one poll interval stale, and then the float
+			-- would open only to close itself a moment later -- a visible flash on
+			-- a dead agent. Ask the backends once, synchronously, before opening.
+			pcall(state.refresh)
+			rec = state.get(key) or rec
+		end
 		if rec and rec.gone then
 			return false, ("%s has exited"):format(rec.label or label(target))
 		end
