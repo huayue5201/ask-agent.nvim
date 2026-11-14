@@ -1176,7 +1176,8 @@ A long task list shows the newest `task_limit` (5) rows and collapses the rest i
 `… N older tasks  ⏎ show` (`<CR>` on that row expands it; folding the agent with
 `<Tab>` resets the slice). Finished tasks older than `task_ttl` (24h) leave the
 journal on the next save, and loading a journal drops them too — the newest task
-per agent is always kept. A turn that another tool dispatched (todo2, a plugin)
+per agent is always kept. A turn that another tool dispatched
+([todo2](https://github.com/huayue5201/todo2), a plugin)
 carries its key on the row, dim in brackets: `[t42]`, so several sources can share
 one agent and still be told apart; `:AskAgentHistory` shows the same as `todo2 t42`
 in the record line.
