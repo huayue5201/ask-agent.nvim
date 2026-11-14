@@ -84,8 +84,10 @@ the same agent is mirrored into a float, terminal mode, `<C-q>` to close.
 - **Change review** — `:AskAgentDiff` shows what an agent actually changed. The plugin
   captures a git tree at the turn boundaries (before the send, when the turn ends) and
   diffs the two: an immutable interval you can re-run with plain `git diff <a> <b>`, not
-  a heuristic. Rendered by whichever viewer you already have (diffbandit, Neovim 0.12's
-  builtin `nvim.difftool`, codediff), with a dependency-free diff buffer as the fallback.
+  a heuristic. Rendered by whichever viewer you already have
+  ([diffbandit.nvim](https://github.com/CoreyKaylor/diffbandit.nvim), Neovim 0.12's
+  builtin `nvim.difftool`, [codediff.nvim](https://github.com/esmuellert/codediff.nvim)),
+  with a dependency-free diff buffer as the fallback.
 - **Question history** — every question the plugin delivers is recorded with its
   anchor, target and text, across sessions. `:AskAgentHistory` searches it (full text,
   path, label), then re-asks, copies, or jumps back to the exact line — even after a
@@ -115,7 +117,7 @@ the same agent is mirrored into a float, terminal mode, `<C-q>` to close.
   `layouts/generic.lua` has a tmux factory; anything else can be plugged in (see
   [Layout adapters](#layout-adapters)).
 - At least one agent backend (see [Backends](#backends)).
-- Optional: `git` for change review ([Change review](#change-review)). Without a
+- Optional: [`git`](https://git-scm.com) for change review ([Change review](#change-review)). Without a
   repository the feature is unavailable, and every other feature keeps working.
 
 ## Install
@@ -1425,9 +1427,9 @@ starting a new one.
 
 | Backend | Used when | Notes |
 | --- | --- | --- |
-| `diffbandit` | installed | folder diff with its full rendering; unsaved buffers included |
-| `nvim.difftool` | Neovim 0.12+ | zero install (`:packadd nvim.difftool`), rename detection |
-| `codediff` | installed | trees are wrapped in ref-less commits, since it expects revisions |
+| [`diffbandit`](https://github.com/CoreyKaylor/diffbandit.nvim) | installed | folder diff with its full rendering; unsaved buffers included |
+| [`nvim.difftool`](https://neovim.io/doc/user/difftool.html) | Neovim 0.12+ | zero install (`:packadd nvim.difftool`), rename detection |
+| [`codediff`](https://github.com/esmuellert/codediff.nvim) | installed | trees are wrapped in ref-less commits, since it expects revisions |
 | `builtin` | always | one `filetype=diff` buffer + quickfix of changed files; no dependencies |
 
 Set `review.backend` to pin one, or pass `{ backend = ... }` per call. With

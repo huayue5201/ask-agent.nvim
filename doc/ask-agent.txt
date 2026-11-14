@@ -362,10 +362,11 @@ instead of absent. They can never be chosen: picking one only warns and nothing
 is sent. Disable with `show_stale = false`. The map and the dashboard show
 running instances only.
 
-The list prefers ui-menu.nvim when it is installed (`list_impl = "auto"`, the
-default) because that is what provides screen-centering, spinner animation and
-<Tab> back to the map. It is recommended, not required: without ui-menu the list
-falls back to |vim.ui.select|, and `list_impl = "vim_ui"` forces that fallback.
+The list prefers ui-menu.nvim (https://github.com/huayue5201/ui-menu.nvim) when it
+is installed (`list_impl = "auto"`, the default) because that is what provides
+screen-centering, spinner animation and <Tab> back to the map. It is recommended,
+not required: without ui-menu the list falls back to |vim.ui.select|, and
+`list_impl = "vim_ui"` forces that fallback.
 
 The map is the primary picker even for a single locatable candidate. Without a
 layout adapter, or when no candidate can be located on screen, it falls back to
@@ -700,13 +701,16 @@ Finished agents are drawn dim: history, not a call to action.
 Sections (`groups`, 40+ columns) run most urgent first, each with a count; `f`
 still narrows the view to the first one. Below 40 columns the headings go away,
 below 56 the rail and the anchor column too, leaving name / state / age. Agent
-glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌` unknown.
+glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌`
+unknown. Tasks are connected to their agent with `│ ├ └` lines (`tree_lines`,
+default true); the rail keeps that block continuous. Group headings use
+`AskAgentGroup`.
+
 A stopped agent does not linger: the panel drops it as soon as two consecutive
 polls agree it is gone (one missed probe is not an exit) and the `WARN` has
 already said why. `<CR>` probes once more before opening, so a dead agent answers
-`… has exited` instead of flashing a float that closes itself again. Tasks are connected to their agent with `│ ├ └` lines (`tree_lines`,
-default true); the rail keeps that block continuous. Group headings use
-`AskAgentGroup`.
+`… has exited` instead of flashing a float that closes itself again.
+
 The path from an agent to the task it is running right now is green: `running_line`
 defaults to `"dash"`, a dashed line whose bright cells march down one step per
 spinner frame; `"pulse"` sends a single bright cell with a trailing mid shade,
@@ -941,8 +945,10 @@ indistinguishable from the agent's; `blocked` does not close a turn; a second
 question sent while a turn is open widens the same window instead of starting a
 new one.
 
-Viewers are adapters, picked in order: `diffbandit` (installed), `nvim.difftool`
-(Neovim 0.12+, zero install), `codediff` (installed; trees wrapped in ref-less
+Viewers are adapters, picked in order: `diffbandit` (installed,
+https://github.com/CoreyKaylor/diffbandit.nvim), `nvim.difftool` (Neovim 0.12+,
+zero install, `:packadd nvim.difftool`), `codediff` (installed,
+https://github.com/esmuellert/codediff.nvim; trees wrapped in ref-less
 commits), `builtin` (always: one `filetype=diff` buffer plus a quickfix list of
 changed files). Pin one with `review.backend`. With `include_unsaved` (default)
 modified buffers are written into a throwaway copy of the end tree, so the
