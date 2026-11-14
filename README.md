@@ -1,4 +1,14 @@
+<p align="center">
+  <img src="assets/logo.svg" width="128" height="128" alt="ask-agent.nvim">
+</p>
+
 # ask-agent.nvim
+
+<p align="center">
+  <a href="https://github.com/huayue5201/ask-agent.nvim/actions/workflows/ci.yml"><img src="https://github.com/huayue5201/ask-agent.nvim/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/neovim-0.10%2B-57A143.svg" alt="Neovim 0.10+">
+</p>
 
 Write a question in a floating window and send it — together with a precise anchor
 (cwd, tab, file, line, repository and branch, cursor-line diagnostics, visual
@@ -16,6 +26,15 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
                    + anchor       │        │                        │
         └────────────────────────┘        └────────────────────────┘
 ```
+
+## Screenshots
+
+| The dashboard: every agent, its state, its turns | The viewer: the agent live, inside Neovim |
+| --- | --- |
+| ![dashboard](assets/dashboard.png) | ![viewer](assets/viewer.png) |
+
+The left half is Neovim (source, LSP, and the ask-agent sidebar); on the right
+the same agent is mirrored into a float, terminal mode, `<C-q>` to close.
 
 ## Features
 
@@ -40,7 +59,8 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
   flips between them. Every row shows the agent's state: `●` idle, `◐` working (the question is queued
   behind the running task, same as typing into pi while it works), `⚠` waiting for you,
   `✓` finished, `✗` failed, `○` not running (process gone, socket missing, pane fell
-  back to the shell). `show_stale = false` hides the exited ones.
+  back to the shell). `show_stale = false` hides the exited ones from the list
+  picker; the dashboard drops them itself, right after the poll says so.
 - **A sidebar for every agent** — `:AskAgentDashboard` opens a tree: agents on top
   (most urgent first: permission > question > finished > error > working > idle), their
   tasks below — the questions still queued for that agent (`◐`) and the turns already
@@ -1072,7 +1092,7 @@ WORKING  1
 
 IDLE & DONE  2
 ▌ · ✓ worker-1                 done                         1m
-▌ ▾ ○ explorer                 gone                         3h
+▌ ▾ ● explorer                 idle                         3h
 ▌ │ └─ ✓ update the docs       done                        38s
 ```
 
@@ -1114,7 +1134,11 @@ one agent and still be told apart; `:AskAgentHistory` shows the same as `todo2 t
 in the record line.
 
 Agent glyphs: `●` idle, spinner working, `⚠` blocked, `✓` done, `✗` error, `◌`
-unknown, `○` exited. Task glyphs: spinner running, `◐` queued, `✓` done, `✗` failed.
+unknown. Tasks: spinner running, `◐` queued, `✓` done, `✗` failed. An agent that
+exits does not linger: the panel drops it as soon as two consecutive polls agree
+it is gone (one missed probe is not an exit), and the `WARN` already said why.
+`<CR>` probes once more before opening, so a dead agent answers `… has exited`
+instead of flashing a float that closes itself again.
 
 | Key | On an agent | On a task |
 | --- | --- | --- |
@@ -1259,6 +1283,22 @@ a keypress echoes in ~25 ms instead of waiting for a poll tick. The helper still
 repaints once a second as a safety net, and polls the block's process to exit
 (closing the float) when the block closes, when its program exits, or when the
 agent exited but the block's shell survived.
+
+**Scrollback is the terminal's job.** The float is a preview of the agent, not a
+reimplementation of its pane: whatever the terminal layer already gives is used
+as-is, and whatever it does not give is absent rather than faked. In tmux that
+means `attach-session` is a real client, so scrollback, search and copy are
+tmux's own (`prefix + [`), unchanged. Under herdr, `herdr agent attach` is
+rendered by herdr, so history is herdr's (`herdr pane read --source
+recent|recent-unwrapped`) and the float adds nothing on top. Rex has neither, so
+its mirror shows the one screen it is handed. Deliberately not done: scrollback
+emulation inside the float, forwarding scroll keys to the agent, scraping history
+into a scratch buffer — a mirror that pretends to have history is worse than one
+that admits it does not, because the picture silently stops at the top. One limit
+no viewer escapes: while a full-screen TUI owns the alternate screen the terminal
+records no scrollback, so pi or claude in full-screen mode show one screen in
+every case, tmux included; asking the agent to scroll its own transcript is the
+only way back, and that is the agent's input, not this float.
 
 ### Jumping out to the agent
 
@@ -1440,6 +1480,20 @@ standalone Lua file executed with `nvim --headless --clean -l`, so a failure nam
 the file and the assertion. Tests never touch your cache: they stub backends and
 turn the journal off, except the one test that writes it to `/tmp`.
 
+## Contributing
+
+Issues and PRs are welcome. Before sending a patch:
+
+```sh
+sh tests/run.sh          # must stay green
+stylua --check .        # the repo's style (stylua.toml)
+```
+
+Two rules reviewers will ask about: nothing in the plugin touches a mapping by
+default (commands only), and anything that shortens user-visible text goes
+through `lua/ask_agent/text.lua`, which counts display cells so a cut never
+lands inside a CJK character or a wide glyph.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

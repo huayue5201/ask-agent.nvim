@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ask-agent.nvim">
+  <title>ask-agent.nvim</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b2434"/>
+      <stop offset="1" stop-color="#04121b"/>
+    </linearGradient>
+    <linearGradient id="ask" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#153847"/>
+      <stop offset="1" stop-color="#0c2634"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f3c184"/>
+      <stop offset="1" stop-color="#cf8840"/>
+    </linearGradient>
+    <clipPath id="round">
+      <rect x="16" y="16" width="480" height="480" rx="108"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#round)">
+    <rect x="16" y="16" width="480" height="480" fill="url(#bg)"/>
+
+    <!-- the floating ask window -->
+    <rect x="96" y="78" width="320" height="150" rx="24" fill="url(#ask)" stroke="url(#amber)" stroke-width="6"/>
+    <path d="M142 122l26 19-26 19" fill="none" stroke="#eeb87a" stroke-width="12"
+          stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+    <path d="M196 122h150" stroke="#7ea6b8" stroke-width="12" stroke-linecap="round" opacity=".5"/>
+
+    <!-- the anchor: the question knows which line it is about -->
+    <g fill="#eeb87a">
+      <circle cx="256" cy="242" r="6"/>
+      <circle cx="256" cy="264" r="6"/>
+      <circle cx="256" cy="286" r="6"/>
+    </g>
+    <path d="M256 300l13 22h-26z" fill="#eeb87a"/>
+
+    <!-- the agent's terminal, below -->
+    <rect x="86" y="330" width="340" height="120" rx="20" fill="#0d2634" stroke="#2b4a5c" stroke-width="3"/>
+    <g stroke="#5d8496" stroke-width="9" stroke-linecap="round" opacity=".8">
+      <path d="M118 368h84"/>
+      <path d="M118 400h150"/>
+    </g>
+    <rect x="286" y="386" width="104" height="14" rx="7" fill="#3a6376"/>
+    <circle cx="394" cy="393" r="10" fill="url(#amber)"/>
+  </g>
+
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="none" stroke="#1d3a4a" stroke-width="4"/>
+</svg>
