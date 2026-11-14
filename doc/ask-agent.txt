@@ -662,7 +662,10 @@ A blocked instance is only reported: the sidebar and statusline show it, and
 `<CR>` jumps to its terminal. It is answered in that terminal, not from Neovim.
 Tasks and unread marks are journaled to
 `<cache>/ask-agent/journal.json` (1 s debounce, week-old tasks dropped, disable
-with `persist = false`), so a restart keeps pending work visible.
+with `persist = false`), so a restart keeps pending work visible. A save *merges*
+with the file: entries for agents this instance has not seen (another Neovim, a
+backend that is not up yet) are kept, so one nvim quitting with nothing to say
+cannot erase another one's tasks. Only `d` in the panel deletes an entry.
 
 `rec.dispatch = { ts, correlation, task_id }` records when we last sent, the
 opaque correlation table given to `ask.send(text, { correlation = { plugin, key } })`,

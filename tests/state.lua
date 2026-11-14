@@ -184,6 +184,31 @@ assert(state.complete_task("t-1", "done") == true, "closing twice is harmless")
 assert(state.complete_task("nope") == false, "an unknown id closes nothing")
 assert(state.task_by_id("nope") == nil, "an unknown id attaches to nothing")
 assert(state.task_by_id(nil) == nil, "no id is not a lookup")
+
+-- a save merges with the file on disk. Without the merge, one nvim quitting with
+-- nothing to say (a second instance that never saw an agent, a restart in flight)
+-- wrote an empty journal over the tasks another instance had just recorded -- which
+-- is how every task disappeared after a restart.
+state.flush()
+local on_disk = vim.json.decode(table.concat(vim.fn.readfile(state.journal_path), "\n"))
+on_disk.agents["fake:elsewhere"] = {
+	backend = "fake",
+	id = "elsewhere",
+	unread = false,
+	tasks = { { text = "from the other nvim", ts = state.now(), status = "running" } },
+}
+vim.fn.writefile({ vim.json.encode(on_disk) }, state.journal_path)
+state.dispatch("fake", "a", "written after the foreign entry")
+state.flush()
+local merged = vim.json.decode(table.concat(vim.fn.readfile(state.journal_path), "\n"))
+assert(merged.agents["fake:elsewhere"], "a foreign entry survives our save")
+assert(merged.agents["fake:a"], "our own entry is written")
+-- dismiss is the one thing that no longer merges: `d` must clear the entry on disk too
+state.dismiss("fake:a")
+state.flush()
+merged = vim.json.decode(table.concat(vim.fn.readfile(state.journal_path), "\n"))
+assert(merged.agents["fake:a"] == nil, "a dismissed agent leaves the journal")
+assert(merged.agents["fake:elsewhere"], "dismissing one entry keeps the others")
 state.persist = false
 
 -- notifications: blocked always reports, done/error throttle, exits report while working

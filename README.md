@@ -140,12 +140,6 @@ lazy.nvim:
 }
 ```
 
-Local checkout (development):
-
-```lua
-vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
-```
-
 Recommended companion (optional, not required):
 [ui-menu.nvim](https://github.com/huayue5201/ui-menu.nvim) — screen-centered list,
 animated spinner and a real `<Tab>` round-trip between the map and the list.
@@ -436,7 +430,8 @@ require("ask_agent").setup({
 	},
 
 	-- drop finished tasks older than this from the journal, in ms (default 24h);
-	-- the newest task of every agent always stays
+	-- the newest task of every agent always stays. Saves merge with the journal,
+	-- so a second Neovim quitting never erases tasks it did not record itself
 	task_ttl = 24 * 3600 * 1000,
 
 	-- turn snapshots for change review; `false` disables the feature entirely.
@@ -884,7 +879,7 @@ speaks MCP (Claude Desktop, another agent) gets tools without any Lua:
 {
   "mcpServers": {
     "ask-agent": {
-      "command": "/Users/you/neovim-plugins/ask-agent.nvim/bin/ask-agent-mcp"
+      "command": "/path/to/ask-agent.nvim/bin/ask-agent-mcp"
     }
   }
 }
@@ -1532,8 +1527,10 @@ stylua --check . # formatting
 
 `tests/run.sh` is what CI runs (`.github/workflows/ci.yml`): each test is a
 standalone Lua file executed with `nvim --headless --clean -l`, so a failure names
-the file and the assertion. Tests never touch your cache: they stub backends and
-turn the journal off, except the one test that writes it to `/tmp`.
+the file and the assertion. Tests never touch your cache: `XDG_CACHE_HOME` points at a
+throwaway temp dir, and the one test that exercises the journal writes it to `/tmp`.
+(It did not always: a send in `tests/pick.lua` wrote the real
+`<cache>/ask-agent/history.json`.)
 
 ## Contributing
 

@@ -447,6 +447,9 @@ end
 ----------------------------------------------------------------------
 
 local restored, restored_loaded
+---Keys this session forgot on purpose (`d` in the panel). A merge must not bring them
+---back from the copy still on disk.
+local dismissed = {}
 
 ---@return string
 local function journal_file()
@@ -482,6 +485,35 @@ local function stale_task(task, cutoff)
 	return finished and type(at) == "number" and at < cutoff
 end
 
+---What the file on disk already knows, filtered like `load_journal` does.
+---Saves merge into this instead of replacing it: one nvim quitting with nothing to say
+---(a second instance that never saw an agent, a restart in progress) used to write an
+---empty journal over the tasks another instance had just recorded.
+---@return table<string, table>
+local function journal_base()
+	local data = require("ask_agent.journal").read(journal_file())
+	if type(data) ~= "table" or type(data.agents) ~= "table" then
+		return {}
+	end
+	local cutoff, task_cutoff = M.now() - JOURNAL_TTL, M.now() - M.task_ttl
+	local base = {}
+	for key, entry in pairs(data.agents) do
+		if type(entry) == "table" and type(key) == "string" and not dismissed[key] then
+			local tasks = {}
+			for i, task in ipairs(entry.tasks or {}) do
+				if type(task.ts) == "number" and task.ts > cutoff and (i == 1 or not stale_task(task, task_cutoff)) then
+					tasks[#tasks + 1] = task
+				end
+			end
+			if #tasks > 0 then
+				entry.tasks = tasks
+				base[key] = entry
+			end
+		end
+	end
+	return base
+end
+
 local function save_journal()
 	if journal_timer then
 		journal_timer:stop()
@@ -491,7 +523,7 @@ local function save_journal()
 	if not M.persist then
 		return
 	end
-	local out = { version = 1, agents = {} }
+	local out = { version = 1, agents = journal_base() }
 	local cutoff = M.now() - M.task_ttl
 	for _, key in ipairs(order) do
 		local rec = agents[key]
@@ -1064,6 +1096,12 @@ function M.dismiss(key)
 	local rec = agents[key]
 	if not rec then
 		return
+	end
+	-- forget it on disk too: the merge in save_journal would keep whatever the file
+	-- still holds for this key
+	dismissed[key] = true
+	if restored then
+		restored[key] = nil
 	end
 	agents[key] = nil
 	name_cache = nil

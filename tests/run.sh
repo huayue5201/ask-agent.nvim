@@ -4,6 +4,14 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
+# Tests must never touch the real cache. Several of them call ask.setup() and send a
+# question, and a send writes the question ledger: the suite used to overwrite
+# ~/.cache/nvim/ask-agent/history.json (the user's actual history) with fixtures.
+cache=$(mktemp -d)
+trap 'rm -rf "$cache"' EXIT
+XDG_CACHE_HOME="$cache"
+export XDG_CACHE_HOME
+
 fail=0
 for test in tests/*.lua; do
 	name=$(basename "$test" .lua)
