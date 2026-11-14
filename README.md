@@ -22,16 +22,16 @@ The point is the *anchor*: agents launched outside Neovim only see disk snapshot
 ```
         ┌── nvim ────────────────┐        ┌── pi / claude / tmux ──┐
   :AskAgent                      │        │                        │
-  ──────────────►  floating ask  ─── socket/cmd ───►  agent session │
-                   + anchor       │        │                        │
+  ──────────────►  floating ask  ─── socket/cmd ───►  agent session│
+                   + anchor      │        │                        │
         └────────────────────────┘        └────────────────────────┘
 ```
 
 ## Screenshots
 
 | The dashboard: every agent, its state, its turns | The viewer: the agent live, inside Neovim |
-| --- | --- |
-| ![dashboard](assets/dashboard.png) | ![viewer](assets/viewer.png) |
+| ------------------------------------------------ | ----------------------------------------- |
+| ![dashboard](assets/dashboard.png)               | ![viewer](assets/viewer.png)              |
 
 The left half is Neovim (source, LSP, and the ask-agent sidebar); on the right
 the same agent is mirrored into a float, terminal mode, `<C-q>` to close.
@@ -103,8 +103,9 @@ the same agent is mirrored into a float, terminal mode, `<C-q>` to close.
 ## Requirements
 
 - Neovim 0.10+ (uses `vim.json`, `vim.uv`).
-- List mode prefers **ui-menu.nvim** when it is installed: that is what makes the
-  list screen-centered, animates the spinner, and gives a real `<Tab>` round-trip
+- List mode prefers [**ui-menu.nvim**](https://github.com/huayue5201/ui-menu.nvim) when
+  it is installed: that is what makes the list screen-centered, animates the
+  spinner, and gives a real `<Tab>` round-trip
   back to the map. It is recommended but **not required** — without it (or with
   `list_impl = "vim_ui"`) the list goes through `vim.ui.select`, so whichever
   plugin overrides it (dropbar, telescope, fzf-lua, snacks, mini.pick …) is what
@@ -143,6 +144,14 @@ Local checkout (development):
 vim.pack.add({ { src = "~/code/ask-agent.nvim" } })
 ```
 
+Recommended companion (optional, not required):
+[ui-menu.nvim](https://github.com/huayue5201/ui-menu.nvim) — screen-centered list,
+animated spinner and a real `<Tab>` round-trip between the map and the list.
+
+```lua
+{ "huayue5201/ui-menu.nvim" }
+```
+
 ## Usage
 
 | Command | Description |
@@ -173,10 +182,10 @@ No keymaps are installed: the plugin only defines commands. Map them yourself, e
 
 ```lua
 vim.keymap.set({ "n", "v" }, "<leader>aq", function()
-  require("ask_agent").ask({ visual = vim.fn.mode() ~= "n" })
+	require("ask_agent").ask({ visual = vim.fn.mode() ~= "n" })
 end, { desc = "Ask agent" })
 vim.keymap.set({ "n", "v" }, "<leader>ab", function()
-  require("ask_agent").batch_ask({ visual = vim.fn.mode() ~= "n" })
+	require("ask_agent").batch_ask({ visual = vim.fn.mode() ~= "n" })
 end, { desc = "Ask agent: queue" })
 vim.keymap.set("n", "<leader>aB", "<cmd>AskAgentBatchSend<cr>", { desc = "Ask agent: send queue" })
 vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentRename<cr>", { desc = "Ask agent: rename" })
@@ -226,12 +235,12 @@ a round of `find`/`grep` — a few hundred tokens instead of a few thousand.
 
 ```lua
 require("ask_agent").setup({
-  project = {
-    enabled = true,     -- attach the digest when project-overview.nvim is installed
-    wait_ms = 1500,     -- how long a cold first collect may take; after that it is cached
-    full = false,       -- also include deps / conventions / size detail
-    ttl = 300,          -- seconds a digest is reused
-  },
+	project = {
+		enabled = true, -- attach the digest when project-overview.nvim is installed
+		wait_ms = 1500, -- how long a cold first collect may take; after that it is cached
+		full = false, -- also include deps / conventions / size detail
+		ttl = 300, -- seconds a digest is reused
+	},
 })
 ```
 
@@ -259,9 +268,9 @@ capped (200 lines / 8 KB by default, with a `(clipped)` marker) and the snippet 
 
 ```lua
 require("ask_agent").setup({
-  context_lines = 20,        -- lines of source around the cursor, 0 turns it off
-  max_selection = 200,       -- lines of selected text that travel inline
-  max_selection_bytes = 8192,
+	context_lines = 20, -- lines of source around the cursor, 0 turns it off
+	max_selection = 200, -- lines of selected text that travel inline
+	max_selection_bytes = 8192,
 })
 ```
 
@@ -274,13 +283,34 @@ The journal keeps the coordinate, not the source: `anchor` fields `context`,
 `pi` receives the question in `text` and the anchor as JSON:
 
 ```json
-{"text": "why does this loop skip the last item?",
- "task_id": "1763031057113-42",
- "anchor": {"cwd": "/home/me/proj", "root": "/home/me/proj", "rel": "src/parser.rs",
-            "line": 42, "branch": "main", "tab": 1, "modified": true,
-            "diagnostics": [{"line": 42, "severity": "error", "source": "rust-analyzer",
-                             "message": "mismatched types"}],
-            "context": {"start_line": 22, "end_line": 62, "lines": ["…"]}}}
+{
+  "text": "why does this loop skip the last item?",
+  "task_id": "1763031057113-42",
+  "anchor": {
+    "cwd": "/home/me/proj",
+    "root": "/home/me/proj",
+    "rel": "src/parser.rs",
+    "line": 42,
+    "branch": "main",
+    "tab": 1,
+    "modified": true,
+    "diagnostics": [
+      {
+        "line": 42,
+        "severity": "error",
+        "source": "rust-analyzer",
+        "message": "mismatched types"
+      }
+    ],
+    "context": {
+      "start_line": 22,
+      "end_line": 62,
+      "lines": [
+        "…"
+      ]
+    }
+  }
+}
 ```
 
 The extension renders the `<nvim-context>` block itself (`renderBlock` in
@@ -294,212 +324,212 @@ pi extension still parses the legacy `{prompt, anchor}` payload.
 
 ```lua
 require("ask_agent").setup({
-  -- "exact" (default) = only instances whose cwd equals yours; "related" also allows
-  -- parent/child directories; "single" = if only one instance exists, use it
-  matching = "exact",
+	-- "exact" (default) = only instances whose cwd equals yours; "related" also allows
+	-- parent/child directories; "single" = if only one instance exists, use it
+	matching = "exact",
 
-  -- "map" (split-layout map, default) or "list"
-  picker = "map",
+	-- "map" (split-layout map, default) or "list"
+	picker = "map",
 
-  -- map canvas and labels: the size is a share of the editor clamped to a range of
-  -- cells, and only the selected cell is widened into the agent's name
-  map = {
-    width = 0.25,       -- share of the editor width
-    min_width = 12,     -- clamp, in cells (a 12x3 map is still readable)
-    max_width = 32,
-    height = 0.20,      -- share of the editor height
-    min_height = 3,
-    max_height = 9,
-    name = true,        -- false keeps the map to letters only
-    name_min = 3,       -- fewest columns a shortened name may take
-    name_over_badge = true, -- drop the state badge rather than cut the name to nothing
-  },
+	-- map canvas and labels: the size is a share of the editor clamped to a range of
+	-- cells, and only the selected cell is widened into the agent's name
+	map = {
+		width = 0.25, -- share of the editor width
+		min_width = 12, -- clamp, in cells (a 12x3 map is still readable)
+		max_width = 32,
+		height = 0.20, -- share of the editor height
+		min_height = 3,
+		max_height = 9,
+		name = true, -- false keeps the map to letters only
+		name_min = 3, -- fewest columns a shortened name may take
+		name_over_badge = true, -- drop the state badge rather than cut the name to nothing
+	},
 
-  -- list implementation: "auto" (ui-menu if installed, else vim.ui.select),
-  -- "ui_menu" (require it), or "vim_ui". ui-menu gives centering, spinner
-  -- animation and <Tab> back to the map; it is recommended, not required.
-  list_impl = "auto",
+	-- list implementation: "auto" (ui-menu if installed, else vim.ui.select),
+	-- "ui_menu" (require it), or "vim_ui". ui-menu gives centering, spinner
+	-- animation and <Tab> back to the map; it is recommended, not required.
+	list_impl = "auto",
 
-  -- layout adapter for the map picker (default: the first usable one, see "Layouts")
-  layout = nil,
+	-- layout adapter for the map picker (default: the first usable one, see "Layouts")
+	layout = nil,
 
-  -- rebind (or unbind, with false) any dashboard key: `keys = { rename = "R" }`
-  keys = {},
+	-- rebind (or unbind, with false) any dashboard key: `keys = { rename = "R" }`
+	keys = {},
 
-  -- also list exited instances in the list picker as "not running" (default true)
-  show_stale = true,
+	-- also list exited instances in the list picker as "not running" (default true)
+	show_stale = true,
 
-  -- frames for the busy icon (default: a 10-frame braille spinner). Point it at the
-  -- spinner your picker already uses, e.g. require("ui_menu").frames, and both the
-  -- list and the map animate with the same glyphs.
-  spinner = { "⠋", "⠙", "⠹", "⠸" },
+	-- frames for the busy icon (default: a 10-frame braille spinner). Point it at the
+	-- spinner your picker already uses, e.g. require("ui_menu").frames, and both the
+	-- list and the map animate with the same glyphs.
+	spinner = { "⠋", "⠙", "⠹", "⠸" },
 
-  -- animation interval for the busy icon, in ms (default 90); match your picker's tick
-  tick = 90,
+	-- animation interval for the busy icon, in ms (default 90); match your picker's tick
+	tick = 90,
 
-  -- how often the state layer polls every backend, in ms (default 2000)
-  state_interval = 2000,
+	-- how often the state layer polls every backend, in ms (default 2000)
+	state_interval = 2000,
 
-  -- report finished/blocked agents through vim.notify (default true)
-  state_notify = true,
+	-- report finished/blocked agents through vim.notify (default true)
+	state_notify = true,
 
-  -- notification house style: bold text in the level's diagnostic colour
-  -- (default true; a notification plugin such as nvim-notify keeps its own look)
-  notify_style = true,
+	-- notification house style: bold text in the level's diagnostic colour
+	-- (default true; a notification plugin such as nvim-notify keeps its own look)
+	notify_style = true,
 
-  -- make a sound with every notification (default false); the plugin's own
-  -- switches are the mute, so Neovim's default `belloff=all` does not silence it
-  notify_sound = false,
-  -- play this instead of the terminal bell (most terminals are silent by default)
-  notify_sound_cmd = { "afplay", "/System/Library/Sounds/Glass.aiff" },
-  -- show state notifications as a small card in the corner (default false):
-  -- a cmdline line is redrawn away by the next keystroke, a card is not
-  notify_popup = false, -- this block shows the defaults; set true for the corner card
-  notify_popup_ms = 3000,
+	-- make a sound with every notification (default false); the plugin's own
+	-- switches are the mute, so Neovim's default `belloff=all` does not silence it
+	notify_sound = false,
+	-- play this instead of the terminal bell (most terminals are silent by default)
+	notify_sound_cmd = { "afplay", "/System/Library/Sounds/Glass.aiff" },
+	-- show state notifications as a small card in the corner (default false):
+	-- a cmdline line is redrawn away by the next keystroke, a card is not
+	notify_popup = false, -- this block shows the defaults; set true for the corner card
+	notify_popup_ms = 3000,
 
-  -- per-state notification copy, level and bell (see "Notification copy");
-  -- a state set to false is silent, a string replaces only the text
-  notify = {
-    done = { text = "[{backend}] {name} finished{msg}", sound = true },
-    blocked = { text = "[{backend}] {name} is waiting for you{msg}" },
-    permission = { text = "[{backend}] {name} needs your permission{msg}" },
-    question = { text = "[{backend}] {name} is waiting for your answer{msg}" },
-    auth = { text = "[{backend}] {name} is waiting for credentials{msg}" },
-    error = { text = "[{backend}] {name} failed{msg}", level = "ERROR" },
-    gone = { text = "[{backend}] {name} exited while {was}" },
-  },
+	-- per-state notification copy, level and bell (see "Notification copy");
+	-- a state set to false is silent, a string replaces only the text
+	notify = {
+		done = { text = "[{backend}] {name} finished{msg}", sound = true },
+		blocked = { text = "[{backend}] {name} is waiting for you{msg}" },
+		permission = { text = "[{backend}] {name} needs your permission{msg}" },
+		question = { text = "[{backend}] {name} is waiting for your answer{msg}" },
+		auth = { text = "[{backend}] {name} is waiting for credentials{msg}" },
+		error = { text = "[{backend}] {name} failed{msg}", level = "ERROR" },
+		gone = { text = "[{backend}] {name} exited while {was}" },
+	},
 
-  -- minimum ms between two `done`/`error`/`gone` notifications for one agent
-  -- (default 30000; a blocked transition is never throttled)
-  notify_gap = 30000,
+	-- minimum ms between two `done`/`error`/`gone` notifications for one agent
+	-- (default 30000; a blocked transition is never throttled)
+	notify_gap = 30000,
 
-  -- draw │ ├ └ between an agent and its tasks (default true); sidebars
-  -- narrower than 20 columns fall back to plain indentation
-  tree_lines = true,
+	-- draw │ ├ └ between an agent and its tasks (default true); sidebars
+	-- narrower than 20 columns fall back to plain indentation
+	tree_lines = true,
 
-  -- light the path from an agent to the task running right now: "dash"
-  -- (default; bright cells march down it), "pulse" (one bright cell with a
-  -- trailing mid shade), "static" (dim→bright), or "off". Without
-  -- truecolor it degrades to a single flat green.
-  running_line = "dash",
+	-- light the path from an agent to the task running right now: "dash"
+	-- (default; bright cells march down it), "pulse" (one bright cell with a
+	-- trailing mid shade), "static" (dim→bright), or "off". Without
+	-- truecolor it degrades to a single flat green.
+	running_line = "dash",
 
-  -- task rows shown per agent before the "… N older tasks" row (default 5;
-  -- false shows every stored task)
-  task_limit = 5,
+	-- task rows shown per agent before the "… N older tasks" row (default 5;
+	-- false shows every stored task)
+	task_limit = 5,
 
-  -- split the list into "needs you" / "working" / "idle & done" sections with
-  -- a heading and a count (default true; needs a sidebar of 40+ columns)
-  groups = true,
+	-- split the list into "needs you" / "working" / "idle & done" sections with
+	-- a heading and a count (default true; needs a sidebar of 40+ columns)
+	groups = true,
 
-  -- the 2-column state rail down the left edge (default true; needs 56+)
-  rail = true,
+	-- the 2-column state rail down the left edge (default true; needs 56+)
+	rail = true,
 
-  -- colours for the rail, the state column and the glyph of each state
-  hl = {
-    blocked = "DiagnosticWarn",
-    working = "DiagnosticInfo",
-    done = "DiagnosticOk",
-    error = "DiagnosticError",
-    idle = "Comment",
-  },
+	-- colours for the rail, the state column and the glyph of each state
+	hl = {
+		blocked = "DiagnosticWarn",
+		working = "DiagnosticInfo",
+		done = "DiagnosticOk",
+		error = "DiagnosticError",
+		idle = "Comment",
+	},
 
-  -- drop finished tasks older than this from the journal, in ms (default 24h);
-  -- the newest task of every agent always stays
-  task_ttl = 24 * 3600 * 1000,
+	-- drop finished tasks older than this from the journal, in ms (default 24h);
+	-- the newest task of every agent always stays
+	task_ttl = 24 * 3600 * 1000,
 
-  -- turn snapshots for change review; `false` disables the feature entirely.
-  -- Every sent question (and, with trigger_state, every working→done turn) records
-  -- two git trees under the cache dir. keep = newest turns retained,
-  -- ttl = max age in ms. Trees are immutable, so review always works offline.
-  snapshots = { enabled = true, keep = 50, ttl = 7 * 24 * 3600 * 1000, trigger_state = true },
+	-- turn snapshots for change review; `false` disables the feature entirely.
+	-- Every sent question (and, with trigger_state, every working→done turn) records
+	-- two git trees under the cache dir. keep = newest turns retained,
+	-- ttl = max age in ms. Trees are immutable, so review always works offline.
+	snapshots = { enabled = true, keep = 50, ttl = 7 * 24 * 3600 * 1000, trigger_state = true },
 
-  -- how :AskAgentDiff renders: "auto" picks the best installed viewer
-  -- (diffbandit → nvim.difftool → codediff → builtin). include_unsaved folds
-  -- modified buffers into the end side, so an in-flight edit is reviewable too.
-  review = { backend = "auto", include_unsaved = true },
+	-- how :AskAgentDiff renders: "auto" picks the best installed viewer
+	-- (diffbandit → nvim.difftool → codediff → builtin). include_unsaved folds
+	-- modified buffers into the end side, so an in-flight edit is reviewable too.
+	review = { backend = "auto", include_unsaved = true },
 
-  -- `:AskAgentDashboard` <CR> opens the agent in a float; readonly refuses input
-  -- (tmux -r, the rex mirror drops stdin). width/height are fractions of the
-  -- editor and cap a viewer that knows the agent's own grid (an agent bigger
-  -- than the screen gets this share of it; 1 fills the screen).
-  view = { readonly = false, width = 0.85, height = 0.75 },
+	-- `:AskAgentDashboard` <CR> opens the agent in a float; readonly refuses input
+	-- (tmux -r, the rex mirror drops stdin). width/height are fractions of the
+	-- editor and cap a viewer that knows the agent's own grid (an agent bigger
+	-- than the screen gets this share of it; 1 fills the screen).
+	view = { readonly = false, width = 0.85, height = 0.75 },
 
-  -- delivered questions, newest 200, with their anchors; `false` records nothing.
-  -- path moves the journal; max_text caps one record (a huge paste is truncated).
-  history = { enabled = true, keep = 200, max_text = 20000 },
+	-- delivered questions, newest 200, with their anchors; `false` records nothing.
+	-- path moves the journal; max_text caps one record (a huge paste is truncated).
+	history = { enabled = true, keep = 200, max_text = 20000 },
 
-  -- true also keeps the agent's final answer on the record (`o` in the dashboard,
-  -- ask.answer()). Off by default: the ledger promises questions, not a transcript.
-  -- pi quotes the task id back live; hooks can drop JSON into the results mailbox.
-  results = false,
+	-- true also keeps the agent's final answer on the record (`o` in the dashboard,
+	-- ask.answer()). Off by default: the ledger promises questions, not a transcript.
+	-- pi quotes the task id back live; hooks can drop JSON into the results mailbox.
+	results = false,
 
-  -- prompt templates: global_path is the user file, project_file is looked up under
-  -- the git root (or the nearest ancestor with .ask-agent) and may be committed.
-  prompts = {
-    global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json",
-    project_file = ".ask-agent/prompts.json", -- relative to the project root
-  },
+	-- prompt templates: global_path is the user file, project_file is looked up under
+	-- the git root (or the nearest ancestor with .ask-agent) and may be committed.
+	prompts = {
+		global_path = vim.fn.stdpath("cache") .. "/ask-agent/prompts.json",
+		project_file = ".ask-agent/prompts.json", -- relative to the project root
+	},
 
-  -- what the agent learns about the code you are looking at: how many lines of a
-  -- dirty buffer travel with the question, and the caps on a visual selection
-  context_lines = 20,
-  max_selection = 200,
-  max_selection_bytes = 8192,
+	-- what the agent learns about the code you are looking at: how many lines of a
+	-- dirty buffer travel with the question, and the caps on a visual selection
+	context_lines = 20,
+	max_selection = 200,
+	max_selection_bytes = 8192,
 
-  -- the <project-overview> digest that rides along with every question (see
-  -- "What a question carries"); set `enabled = false` to send coordinates only
-  project = { enabled = true, wait_ms = 1500, full = false, ttl = 300 },
+	-- the <project-overview> digest that rides along with every question (see
+	-- "What a question carries"); set `enabled = false` to send coordinates only
+	project = { enabled = true, wait_ms = 1500, full = false, ttl = 300 },
 
-  -- keep tasks and unread marks across restarts (default true);
-  -- persist = { path = ".../journal.json", enabled = false } moves or disables it
-  persist = true,
+	-- keep tasks and unread marks across restarts (default true);
+	-- persist = { path = ".../journal.json", enabled = false } moves or disables it
+	persist = true,
 
-  -- default backend id
-  default = "pi",
+	-- default backend id
+	default = "pi",
 
-  -- extra backends declared inline (see Backends); they are registered at setup time
-  extra = {},
+	-- extra backends declared inline (see Backends); they are registered at setup time
+	extra = {},
 
-  -- every glyph in the plugin: a flat key is an agent icon (backend or instance id),
-  -- the `ui` group styles the interface. This block is the default, verbatim.
-  icons = {
-    pi = "π",
-    claude = vim.fn.nr2char(0x273B),
-    generic = vim.fn.nr2char(0xF120),
-    fallback = vim.fn.nr2char(0xF06A9), -- unknown agents
-    ui = {
-      header = vim.fn.nr2char(0xF06A9), -- dashboard winbar / notification prefix
-      state = {
-        blocked = "⚠",
-        done = "✓",
-        error = "✗",
-        working = "◐",
-        idle = "●",
-        unknown = "◌",
-        gone = "○",
-      },
-      task = { queued = "◐", done = "✓", error = "✗" },
-      tree = {
-        collapsed = "▸",
-        expanded = "▾",
-        leaf = "·",
-        vertical = "│",
-        branch = "├",
-        corner = "└",
-        horizontal = "─",
-      },
-      spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
-    },
-  },
+	-- every glyph in the plugin: a flat key is an agent icon (backend or instance id),
+	-- the `ui` group styles the interface. This block is the default, verbatim.
+	icons = {
+		pi = "π",
+		claude = vim.fn.nr2char(0x273B),
+		generic = vim.fn.nr2char(0xF120),
+		fallback = vim.fn.nr2char(0xF06A9), -- unknown agents
+		ui = {
+			header = vim.fn.nr2char(0xF06A9), -- dashboard winbar / notification prefix
+			state = {
+				blocked = "⚠",
+				done = "✓",
+				error = "✗",
+				working = "◐",
+				idle = "●",
+				unknown = "◌",
+				gone = "○",
+			},
+			task = { queued = "◐", done = "✓", error = "✗" },
+			tree = {
+				collapsed = "▸",
+				expanded = "▾",
+				leaf = "·",
+				vertical = "│",
+				branch = "├",
+				corner = "└",
+				horizontal = "─",
+			},
+			spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
+		},
+	},
 
-  -- brand colors, keyed like agent icons
-  icon_colors = { claude = "#d97757" },
+	-- brand colors, keyed like agent icons
+	icon_colors = { claude = "#d97757" },
 
-  -- instance names live here by default
-  aliases = { file = vim.fn.stdpath("cache") .. "/ask-agent/aliases.json" },
+	-- instance names live here by default
+	aliases = { file = vim.fn.stdpath("cache") .. "/ask-agent/aliases.json" },
 
-  -- live-context RPC bridge; `false` disables it entirely
-  bridge = { dir = vim.fn.stdpath("cache") .. "/pi-ctx" },
+	-- live-context RPC bridge; `false` disables it entirely
+	bridge = { dir = vim.fn.stdpath("cache") .. "/pi-ctx" },
 })
 ```
 
@@ -511,18 +541,18 @@ the busy spinner and the header. Override them in one place:
 
 ```lua
 require("ask_agent").setup({
-  icons = {
-    claude = "",                      -- agent icon
-    fallback = "",                    -- unknown agent
-    ui = {
-      header = "",                     -- dashboard / notifications
-      state = { done = "" },           -- only the keys you want to change
-      task = { queued = "…" },
-      tree = { collapsed = "▸" },
-      spinner = { "1", "2", "3" },      -- a frame list replaces the default entirely
-    },
-  },
-  icon_colors = { claude = "#d97757" }, -- brand colors
+	icons = {
+		claude = "", -- agent icon
+		fallback = "", -- unknown agent
+		ui = {
+			header = "", -- dashboard / notifications
+			state = { done = "" }, -- only the keys you want to change
+			task = { queued = "…" },
+			tree = { collapsed = "▸" },
+			spinner = { "1", "2", "3" }, -- a frame list replaces the default entirely
+		},
+	},
+	icon_colors = { claude = "#d97757" }, -- brand colors
 })
 ```
 
@@ -570,18 +600,18 @@ file, no plugin change:
 local generic = require("ask_agent.backends.generic")
 
 require("ask_agent").setup({
-  extra = {
-    generic.tmux({
-      id = "claude",
-      label = "Claude Code",
-      -- which panes host it (command name, Lua pattern)
-      panes = generic.tmux_panes_by_cmd("claude"),
-      -- optional: a different key than Enter, e.g. "C-m" or "Escape"
-      keys_after = "Enter",
-      -- optional: how to know it is mid-turn (see below)
-      busy = generic.state_file("~/.cache/ask-agent/claude", { field = "cwd" }),
-    }),
-  },
+	extra = {
+		generic.tmux({
+			id = "claude",
+			label = "Claude Code",
+			-- which panes host it (command name, Lua pattern)
+			panes = generic.tmux_panes_by_cmd("claude"),
+			-- optional: a different key than Enter, e.g. "C-m" or "Escape"
+			keys_after = "Enter",
+			-- optional: how to know it is mid-turn (see below)
+			busy = generic.state_file("~/.cache/ask-agent/claude", { field = "cwd" }),
+		}),
+	},
 })
 ```
 
@@ -653,7 +683,11 @@ the same state the terminal would display, and `blocked`/`done` then behave exac
 like rex-reported ones (unread marks and notifications):
 
 ```json
-{"state": "blocked", "kind": "permission", "msg": "run the test suite?"}
+{
+  "state": "blocked",
+  "kind": "permission",
+  "msg": "run the test suite?"
+}
 ```
 
 ```sh
@@ -814,8 +848,8 @@ visual selection, LSP diagnostics and the quickfix list — instead of reading d
 Call it one-shot, no client state needed:
 
 ```sh
-nvim --server <sock> --remote-expr \
-  'v:lua.require("ask_agent.bridge").handle("<base64(json)>")'
+nvim --server \
+  'v:lua.require("ask_agent.bridge").handle("<base64(json)>")' <sock >--remote-expr
 ```
 
 Requests: `state`, `buffer`, `diagnostics`, `quickfix`, `list`, `project`,
@@ -828,7 +862,7 @@ throw. Register your own actions from your config:
 
 ```lua
 require("ask_agent.bridge").extend("project", function(req)
-  return { ok = true, text = my_project_summary(req.root) }
+	return { ok = true, text = my_project_summary(req.root) }
 end)
 ```
 
@@ -845,7 +879,13 @@ the `state`/`buffer`/`diagnostics`/`quickfix` tools to the agent.
 speaks MCP (Claude Desktop, another agent) gets tools without any Lua:
 
 ```json
-{"mcpServers": {"ask-agent": {"command": "/Users/you/neovim-plugins/ask-agent.nvim/bin/ask-agent-mcp"}}}
+{
+  "mcpServers": {
+    "ask-agent": {
+      "command": "/Users/you/neovim-plugins/ask-agent.nvim/bin/ask-agent-mcp"
+    }
+  }
+}
 ```
 
 Tools: `agents`, `ask`, `task`, `status` — the same actions as the
@@ -965,8 +1005,10 @@ stops as soon as nothing is working.
 
 ```lua
 vim.api.nvim_create_autocmd("User", {
-  pattern = "AskAgentStatuslineTick",
-  callback = function() vim.o.statusline = build() end, -- or rebuild only the AI segment
+	pattern = "AskAgentStatuslineTick",
+	callback = function()
+		vim.o.statusline = build()
+	end, -- or rebuild only the AI segment
 })
 ```
 
@@ -993,13 +1035,17 @@ stays as the fallback for everything else.
 ```lua
 local ask = require("ask_agent")
 
-ask.agents({ state = "blocked" })          -- what needs me right now
+ask.agents({ state = "blocked" }) -- what needs me right now
 ask.wait("pi:91841", "done", 600000, function(rec)
-  if rec then print("done:", rec.msg) end
+	if rec then
+		print("done:", rec.msg)
+	end
 end)
-ask.on("done", function(rec)                -- or: react without polling
-  local c = rec.dispatch and rec.dispatch.correlation
-  if c and c.plugin == "todo2" then require("todo2").complete_by_key(c.key) end
+ask.on("done", function(rec) -- or: react without polling
+	local c = rec.dispatch and rec.dispatch.correlation
+	if c and c.plugin == "todo2" then
+		require("todo2").complete_by_key(c.key)
+	end
 end)
 require("lua-line").add(ask.statusline)
 ```
@@ -1030,15 +1076,15 @@ and `gone` (an agent disappeared while it still owed you something). `working`,
 
 ```lua
 require("ask_agent").setup({
-  notify = {
-    done = "✅ {name} 完成{msg}",
-    blocked = { text = "⏸ {name} 等你 ({kind}){msg}", sound = true },
-    error = { text = "💥 {name} 失败{msg}", level = "ERROR", sound = true },
-    gone = false,                             -- never report exits
-  },
-  notify_gap = 10000,
+	notify = {
+		done = "✅ {name} 完成{msg}",
+		blocked = { text = "⏸ {name} 等你 ({kind}){msg}", sound = true },
+		error = { text = "💥 {name} 失败{msg}", level = "ERROR", sound = true },
+		gone = false, -- never report exits
+	},
+	notify_gap = 10000,
 })
-require("ask_agent.state").configure({ messages = { done = "…" } })  -- or at runtime
+require("ask_agent.state").configure({ messages = { done = "…" } }) -- or at runtime
 ```
 
 Placeholders: `{backend}`, `{name}` (the instance name), `{msg}` (already prefixed
@@ -1159,11 +1205,11 @@ Every one of them is renameable, and `false` takes it off the buffer entirely:
 
 ```lua
 require("ask_agent").setup({
-  keys = {
-    rename = "R",        -- names: open, jump, send, send_queue, ack, dismiss,
-    answer = false,      -- rename, diff, answer, copy, filter, fold, refresh,
-    fold = { "<Tab>", "za" }, -- close, help
-  },
+	keys = {
+		rename = "R", -- names: open, jump, send, send_queue, ack, dismiss,
+		answer = false, -- rename, diff, answer, copy, filter, fold, refresh,
+		fold = { "<Tab>", "za" }, -- close, help
+	},
 })
 ```
 
@@ -1209,12 +1255,14 @@ a provider contract — rex, tmux and herdr ship built in:
 
 ```lua
 require("ask_agent").register_view({
-  id = "herdr",
-  priority = 10,                          -- higher wins when several providers match
-  can = function(target) return target.herdr ~= nil end,
-  cmd = function(target, opts)
-    return { cmd = { "herdr", "agent", "attach", target.herdr.id } }
-  end,
+	id = "herdr",
+	priority = 10, -- higher wins when several providers match
+	can = function(target)
+		return target.herdr ~= nil
+	end,
+	cmd = function(target, opts)
+		return { cmd = { "herdr", "agent", "attach", target.herdr.id } }
+	end,
 })
 ```
 
@@ -1308,10 +1356,14 @@ through a jump adapter — the same contract idea one level down:
 
 ```lua
 require("ask_agent").register_jump({
-  id = "kitty",
-  priority = 10,                          -- higher wins when several adapters match
-  can = function(target) return target.kitty ~= nil end,
-  focus = function(target) vim.system({ "kitty", "@", "focus-window", "--match", target.kitty }) end,
+	id = "kitty",
+	priority = 10, -- higher wins when several adapters match
+	can = function(target)
+		return target.kitty ~= nil
+	end,
+	focus = function(target)
+		vim.system({ "kitty", "@", "focus-window", "--match", target.kitty })
+	end,
 })
 ```
 
@@ -1402,9 +1454,9 @@ fresh anchor), copy, jump to the code, delete. Records survive restarts; `jump` 
 back to opening the file by path when the original buffer is gone.
 
 ```lua
-ask.history({ query = "rename", limit = 10 })  -- newest first, filter by cwd/backend too
-ask.answer(task_id)          -- the agent's final answer to that task, or nil
-ask.show_answer(task)        -- question + answer in a float (the dashboard's `o`)
+ask.history({ query = "rename", limit = 10 }) -- newest first, filter by cwd/backend too
+ask.answer(task_id) -- the agent's final answer to that task, or nil
+ask.show_answer(task) -- question + answer in a float (the dashboard's `o`)
 ```
 
 **Answers** are opt-in (`results = true`, off by default) because they change the
@@ -1471,8 +1523,8 @@ which layout adapters are usable, which `vim.ui.select` implementation was detec
 ## Development
 
 ```sh
-sh tests/run.sh          # every headless test, one PASS/FAIL line each
-stylua --check .         # formatting
+sh tests/run.sh  # every headless test, one PASS/FAIL line each
+stylua --check . # formatting
 ```
 
 `tests/run.sh` is what CI runs (`.github/workflows/ci.yml`): each test is a
@@ -1485,8 +1537,8 @@ turn the journal off, except the one test that writes it to `/tmp`.
 Issues and PRs are welcome. Before sending a patch:
 
 ```sh
-sh tests/run.sh          # must stay green
-stylua --check .        # the repo's style (stylua.toml)
+sh tests/run.sh  # must stay green
+stylua --check . # the repo's style (stylua.toml)
 ```
 
 Two rules reviewers will ask about: nothing in the plugin touches a mapping by
