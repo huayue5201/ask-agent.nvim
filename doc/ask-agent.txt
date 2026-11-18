@@ -102,6 +102,7 @@ require("ask_agent").setup({
     name = true,                 -- selected cell shows the agent name
     name_min = 3,                -- fewest columns a shortened name may take
     name_over_badge = true,      -- drop the badge before cutting the name further
+    fit = true,                  -- grow canvas so a dense layout keeps cells
   },
   history = {                    -- delivered questions; false disables
     enabled = true,
@@ -281,7 +282,8 @@ vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentRename<cr>", { desc = "Ask agent
 <
 
 In the ask window: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` inserts a newline.
-In the map: a letter picks that pane, `<Tab>` switches to the list.
+In the map: a letter picks that pane, a number (`1`–`9`) switches to that
+window's tab, `<Tab>` switches to the list.
 In the list: a number (`<M-a>`… past 9) picks where the implementation offers
 those; `<Tab>` returns to the map unless the implementation already maps `<Tab>`.
 
@@ -289,11 +291,17 @@ those; `<Tab>` returns to the map unless the implementation already maps `<Tab>`
 5. PICKERS                                                 *ask-agent-pickers*
 
 `map` draws the split layout of your terminal multiplexer and puts a bold letter
-in every pane that hosts an agent. It only covers the window nvim lives in: the
-map's value is that a cell's position mirrors the real pane position, which is
-lost once other windows (tabs) are mixed in. Agents in other windows are picked
-from the list (<Tab>). Zoom does not collapse the map: the full split tree is
-used, so an agent in a zoomed-away pane still gets a cell.
+in every pane that hosts an agent. Every window of the session is a tab on the
+same canvas: a one-row bar on top names them (`1 dev  2 logs`), a number
+switches the drawn window, and a dot marks a tab that has a busy agent.
+Letters are assigned once over the whole candidate list and never reassigned,
+so a letter always means the same agent — switching tabs only changes which
+cells are drawn. A number never picks an agent; picking is a letter, `<CR>` or
+a click. The picker opens on the window nvim itself lives in (the first tab
+with an agent when that one has none), and does not remember a tab between
+opens. With a single window there is no bar and no number handling. Zoom does
+not collapse the map: the full split tree is used, so an agent in a
+zoomed-away pane still gets a cell.
 A pane covered by a floating window still gets its letter — placed on a visible
 cell of that same pane, so nothing is painted over the floating window. Blocks
 are laid out compactly (no gaps) and the map is centered on screen.
@@ -303,10 +311,12 @@ agent's name instead of the letter, shortened with "…" when the visible part o
 is narrow, and kept as a letter when fewer than `name_min` columns fit. Other cells stay
 letters, so long names never crowd the map.
 
-The canvas is a share of the editor clamped to a range of cells. Defaults:
+The canvas is a share of the editor clamped to a range of cells; it also grows to
+fit a dense layout (three columns per split band), and a tab bar adds one row so
+the layout keeps the rows it would have had. Defaults:
   width = 0.25, min_width = 12, max_width = 32,
   height = 0.20, min_height = 3, max_height = 9,
-  name = true, name_min = 3, name_over_badge = true
+  name = true, name_min = 3, name_over_badge = true, fit = true
 All of them are set through `map` in setup:
 >lua
   require("ask_agent").setup({
@@ -314,10 +324,21 @@ All of them are set through `map` in setup:
   })
 <
 `name = false` keeps the map to letters only; `name_over_badge = false` always keeps the
-state badge next to a name (which then gets cut shorter).
+state badge next to a name (which then gets cut shorter); `fit = false` keeps the
+canvas at its configured size and rounds panes into shared cells instead.
 
-`list` is a plain list of every instance, including ones in other tabs and
-windows (the map never shows those), shown through `vim.ui.select` — so it is whatever your config provides
+Pane edges are rounded to cells, not pane sizes: adjacent panes share the exact
+same boundary, so a 30/70 split never leaves a one-cell gap and proportions
+cannot drift as the canvas shrinks. When that is still not enough — more bands
+than cells, or a pane whose visible remainder is one row and one column — the
+first row reads `clipped N` instead of letting those agents vanish silently.
+
+Agents that belong to no window of this session (another session, another host)
+are picked from the list.
+
+`list` is a plain list of every instance, including ones in other windows
+(the map only shows the current session), shown through `vim.ui.select` — so
+it is whatever your config provides
 (dropbar, telescope, fzf-lua, snacks, …), with no hard dependency. Each entry
 shows the instance glyph in its own stable color, the name, and the cwd. Float
 menus are centered rather than attached to the cursor.
@@ -492,11 +513,12 @@ The map needs to know where each instance sits, which is multiplexer-specific:
   id            unique id, e.g. "zellij"
   available()   -> ok, reason?
   window()      -> win, data          "the window nvim itself lives in"
+  windows(data) optional -> { { id, label, panes = { ... }, cursor }, ... }
+                  every window as a map tab; without it the map has a single tab
   panes(win)    -> { { id, rect = { x, y, w, h }, kind = "tiled"|"float" }, ... }
                   rect is normalised 0..1, y from the top, later entries paint on top
   match(target) -> pane id|nil        which pane hosts this instance
   cursor()      optional -> pane id   where nvim is focused
-  labels(data)  optional -> pane id -> label
 
 Register with `ask.register_layout(mod)`, choose a default with
 `setup({ layout = "zellij" })`, or read/set it with `ask.layout()`.

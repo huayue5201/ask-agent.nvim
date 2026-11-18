@@ -150,4 +150,61 @@ assert(#zp == 2, "a zoomed window keeps its full split tree")
 assert(zp[1].id == "z" and zp[2].id == "other", "both panes remain placeable")
 assert(zp[1].rect[3] == 0.5 and zp[2].rect[1] == 0.5, "pane geometry is the real split, not the zoom")
 
+-- Every window of the session shares one canvas: digits switch the drawn window, and a letter
+-- keeps pointing at the same agent on every tab (it is assigned once, over the global order).
+map.setup({ width = 0.5, height = 0.5, min_width = 16, max_width = 32, min_height = 4, max_height = 9 })
+local side_by_side = {
+	{ id = "t1", rect = { 0, 0, 0.5, 1 }, kind = "tiled" },
+	{ id = "t2", rect = { 0.5, 0, 0.5, 1 }, kind = "tiled" },
+}
+local stacked = {
+	{ id = "t3", rect = { 0, 0, 1, 0.5 }, kind = "tiled" },
+	{ id = "t4", rect = { 0, 0.5, 1, 0.5 }, kind = "tiled" },
+}
+local tab_items = {
+	{ pane_id = "t1", target = { label = "one" }, name = "one", icon = "" },
+	{ pane_id = "t2", target = { label = "two" }, name = "two", icon = "" },
+	{ pane_id = "t3", target = { label = "three" }, name = "three", icon = "" },
+}
+map.select({
+	windows = {
+		{ id = "w1", panes = side_by_side },
+		{ id = "w2", panes = stacked, label = "logs" },
+	},
+	active = "w1",
+	items = tab_items,
+})
+local function map_lines()
+	return table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+end
+-- The selected cell shows its name, the others their letters: `one` + `b` on tab 1.
+local tab1 = map_lines()
+assert(tab1:find("one", 1, true) and tab1:find("b", 1, true), "the tab nvim lives in draws its own agents")
+assert(not tab1:find("three", 1, true), "an agent on another tab is not drawn")
+assert(tab1:find("2 logs", 1, true), "the strip names tabs that rex has a name for")
+vim.api.nvim_feedkeys("2", "x", false)
+local tab2 = map_lines()
+assert(tab2:find("three", 1, true), "a digit switches the drawn window")
+assert(not tab2:find("b", 1, true) and not tab2:find("one", 1, true), "the previous tab is no longer drawn")
+assert(vim.api.nvim_win_is_valid(0) and vim.api.nvim_win_get_config(0).relative ~= "", "a digit never picks an agent")
+vim.api.nvim_feedkeys("1", "x", false)
+local tab1_again = map_lines()
+assert(tab1_again:find("one", 1, true) and not tab1_again:find("three", 1, true), "switching back restores the first tab")
+vim.api.nvim_buf_delete(0, { force = true })
+
+-- A canvas too small for its layout reports what it cannot show instead of dropping agents silently
+map.setup({ min_width = 12, max_width = 12, min_height = 2, max_height = 2, fit = false })
+local dense, dense_items = {}, {}
+for i = 1, 30 do
+	local id = "d" .. i
+	dense[i] = { id = id, rect = { (i - 1) / 30, 0, 1 / 30, 1 }, kind = "tiled" }
+	dense_items[i] = { pane_id = id, target = { label = id }, name = id, icon = "" }
+end
+map.select({ panes = dense, items = dense_items })
+assert(
+	map_lines():find("clipped", 1, true),
+	"a canvas too small for its layout says how many agents it cannot show"
+)
+vim.api.nvim_buf_delete(0, { force = true })
+
 print("MAP OK")

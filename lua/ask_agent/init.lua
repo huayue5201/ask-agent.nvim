@@ -508,28 +508,45 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		return false
 	end
 
-	-- The map is a picture of the window nvim lives in: a letter's position only
-	-- means something inside that split layout. Agents in other Rex windows have
-	-- no position on this canvas, so they are left out of `items` (the list is
-	-- the picker for those, reachable through <Tab>).
+	-- The map draws every window of the session as a tab: one `session inspect` already
+	-- returns them all, so switching tabs costs nothing. Agents in panes that belong to no
+	-- window here (another session, another host) have no position on the canvas and stay
+	-- list-only (<Tab>).
 	local map = require("ask_agent.map")
-	local panes = layout.panes(window)
-	if #panes == 0 then
-		return false
+	local windows
+	if type(layout.windows) == "function" then
+		local ok, got = pcall(layout.windows, data)
+		if ok and type(got) == "table" and #got > 0 then
+			windows = got
+		end
+	end
+	if not windows then
+		local panes = layout.panes(window)
+		if #panes == 0 then
+			return false
+		end
+		windows = { { id = window.window_id or "window", panes = panes } }
 	end
 
-	local in_window = {}
-	for _, pane in ipairs(panes) do
-		in_window[pane.id] = true
+	local pane_win = {}
+	local placeable = 0
+	for i, w in ipairs(windows) do
+		w.panes = w.panes or {}
+		for _, p in ipairs(w.panes) do
+			pane_win[p.id] = i
+			placeable = placeable + 1
+		end
+	end
+	if placeable == 0 then
+		return false
 	end
 
 	local items, animate = {}, false
 	for i, c in ipairs(cands) do
 		-- The map cannot grey a cell out, so exited instances are list-only.
-		-- Candidates outside this window's panes are list-only too: they have
-		-- nowhere to be drawn, and cross-window letters would only confuse.
+		-- Candidates with no pane in any window have nowhere to be drawn.
 		local pane_id = (not c.stale) and layout.match(c.target) or nil
-		if not c.stale and pane_id and in_window[pane_id] then
+		if not c.stale and pane_id and pane_win[pane_id] then
 			local t = c.target
 			local st = candidate_status(mod, c)
 			local busy = st.running and (st.busy == true or st.state == "working")
@@ -558,17 +575,17 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 			})
 		end
 	end
-	-- Nothing in this window: there is no cell to draw, so open the list, which
-	-- is the only picker that reaches agents in other windows.
+	-- Nothing in any window: no cell to draw, so open the list.
 	if #items == 0 then
 		return false
 	end
 
 	map.select({
 		tick = animate and tick or nil,
-		panes = panes,
-		labels = type(layout.labels) == "function" and layout.labels(data) or {},
+		windows = windows,
 		items = items,
+		-- The tab to open on: the window nvim itself lives in
+		active = window.window_id,
 		cursor_pane = layout.cursor and layout.cursor() or nil,
 		on_choose = function(item)
 			if not item then

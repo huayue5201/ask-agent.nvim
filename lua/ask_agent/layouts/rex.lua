@@ -113,27 +113,6 @@ function M.panes(window)
 	return out
 end
 
----block_id -> label (things like "lively-prairie") lookup table.
----@param data table
----@return table<string, string>
-function M.labels(data)
-	local out = {}
-	local function collect(blocks)
-		for _, b in ipairs(blocks or {}) do
-			if b.block_id then
-				out[b.block_id] = b.label
-			end
-		end
-	end
-	collect(data.blocks)
-	for _, w in ipairs(data.windows or {}) do
-		for _, layer in ipairs(w.layers or {}) do
-			collect(layer.blocks)
-		end
-	end
-	return out
-end
-
 ---Pane id nvim is focused on (the "cursor" of the map).
 ---@return string|nil
 function M.cursor()
@@ -192,6 +171,33 @@ function M.current_window(session)
 		end
 	end
 	return (data.windows or {})[1], data
+end
+
+---Every window of the session, in the order rex reports them.
+--
+-- One `session inspect` already returns all windows, so the map can offer tabs without a
+-- second call: switching tabs only changes which window's panes are drawn.
+-- Unnamed windows are auto-labelled "Window ec7db867" by rex; that is noise on a strip one
+-- cell tall, so those come back with `label = nil` and the map shows the tab number instead.
+---@param data? table inspect result (fetched when omitted)
+---@return table[] { { id, label?, panes, cursor?, active } }
+function M.windows(data)
+	data = data or select(1, M.inspect())
+	local out = {}
+	for i, w in ipairs((data or {}).windows or {}) do
+		local label = w.label
+		if type(label) ~= "string" or label == "" or label:match("^Window %x+$") then
+			label = nil
+		end
+		table.insert(out, {
+			id = w.window_id or ("window-" .. i),
+			label = label,
+			panes = M.panes(w),
+			cursor = w.focused_block_id,
+			active = w.window_id == (data or {}).active_window_id,
+		})
+	end
+	return out
 end
 
 require("ask_agent.layouts").register(M)

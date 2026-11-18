@@ -15,7 +15,7 @@
 --                    array order is stacking order (later entries are painted on top)
 --   match(t)      -> pane id|nil  -- which pane hosts the agent instance `t`
 --   cursor()      -> pane id|nil  -- the pane nvim is focused on (optional)
---   labels(data)  -> table<string, string>  -- pane id -> human label (optional)
+--   windows(data) -> { { id, label, panes, cursor, active } }  -- every window as a map tab (optional)
 --
 -- Adapters register themselves (rex does it on require); extra ones can be added
 -- from a config with `require("ask_agent").register_layout(mod)`.

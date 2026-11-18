@@ -6,6 +6,9 @@
 --lua/ask_agent/layouts/init.lua); otherwise the caller falls back to vim.ui.select.
 -- Interaction: each cell shows "icon + letter" (a, b, c... in candidate order); press the letter to pick directly;
 -- h/j/k/l move to the adjacent cell in that direction; a click on a cell also works; q or <Esc> cancels.
+-- Several layout windows (rex tabs) become tabs on one canvas: digits 1-9 switch the drawn layout, letters keep
+-- pointing at the same agent on every tab, and the header row names the tabs (the active one, and which have a busy
+-- agent). Digits never pick an agent: picking is always a letter or <CR>.
 -- The canvas is a read-only static image: no cursor (Cursor is mapped to the background color), no footer help text.
 -- Labels are centered in the area still visible after floating panes cover part of their cell; when too narrow, only the letter remains.
 local api = vim.api
@@ -32,6 +35,9 @@ local conf = {
 	name_min = 3,
 	-- When true the state badge is dropped before the name is cut to `name_min`
 	name_over_badge = true,
+	-- Grow the canvas so every split band still gets a cell (see M.size); `false` keeps the
+	-- fixed fraction of the editor
+	fit = true,
 }
 
 --- Configure the map canvas and its labels (all fields optional).
@@ -125,6 +131,10 @@ local function define_hl()
 		"AiMapFloatSel",
 		{ bg = blend(blend(chip_bg, chip_fg, 0.12), green, 0.34), fg = green, bold = true }
 	)
+	-- Tab strip: one row above the layout. The active tab borrows the selection color, so
+	-- "where I am" reads the same as "what I picked"; a busy tab carries a dot.
+	api.nvim_set_hl(0, "AiMapTab", { bg = bar_strip, fg = chip_fg })
+	api.nvim_set_hl(0, "AiMapTabActive", { bg = blend(chip_bg, green, 0.34), fg = green, bold = true })
 	-- Status badge colors: foreground only, layered on top of the cell background
 	local function state_fg(names, fallback)
 		for _, name in ipairs(names) do
@@ -263,11 +273,11 @@ end
 -- Layout → canvas
 ----------------------------------------------------------------------
 
--- Candidates → keys: a, b, c… 22 of them (h/j/k/l are reserved); past that the first
--- nine cells also answer to 1-9.
+-- Candidates → keys: a, b, c… 22 of them (h/j/k/l are reserved). Digits are tabs now, so a
+-- 23rd candidate gets no letter (its cell keeps icon and badge and is reachable by cursor/click).
 local ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 -- h/j/k/l are reserved for directional movement: with more than 7 candidates the 8th candidate's letter would be h
--- and collide with "move left", so skip those four when assigning letters. Beyond 22 candidates, use numbers.
+-- and collide with "move left", so skip those four when assigning letters.
 local RESERVED = { h = true, j = true, k = true, l = true }
 local LETTERS = {}
 for i = 1, #ALPHABET do
@@ -277,15 +287,18 @@ for i = 1, #ALPHABET do
 	end
 end
 
+--- Rectangle → character cells (1-based, inclusive, y grows downward).
+--
+-- Edges are rounded, not sizes: two adjacent panes then share the exact same boundary, so a
+-- 30/70 split never leaves a one-cell gap or overlap and the proportions cannot drift as the
+-- canvas shrinks. Rounding widths independently (the old way) made `x1` of one pane and `x` of
+-- its neighbour two unrelated numbers.
 local function cells_of(rect, W, H)
-	local x = math.floor(rect[1] * W + 0.5) + 1
-	local y = math.floor(rect[2] * H + 0.5) + 1
-	local w = math.max(1, math.floor(rect[3] * W + 0.5))
-	local h = math.max(1, math.floor(rect[4] * H + 0.5))
-	-- No gaps: adjacent blocks touch directly, keeping the map compact (previously 1 cell was reserved left/right/top/bottom for separator gaps)
-	local x1 = math.min(x + w - 1, W)
-	local y1 = math.min(y + h - 1, H)
-	return x, math.min(y, H), math.max(x1, x), math.max(y1, y)
+	local x = math.min(math.max(math.floor(rect[1] * W + 0.5) + 1, 1), W)
+	local y = math.min(math.max(math.floor(rect[2] * H + 0.5) + 1, 1), H)
+	local x1 = math.min(math.max(math.floor((rect[1] + rect[3]) * W + 0.5), x), W)
+	local y1 = math.min(math.max(math.floor((rect[2] + rect[4]) * H + 0.5), y), H)
+	return x, y, x1, y1
 end
 
 --- Put only a letter in the cell; panes without a candidate stay empty and express layout through background color and seams
@@ -293,7 +306,7 @@ local function pane_label(item)
 	if not item then
 		return ""
 	end
-	return item.letter or tostring(item.index)
+	return item.letter or ""
 end
 
 --- Center a piece of text in a cell (place nothing if it does not fit)
@@ -358,41 +371,106 @@ local function place_label(t, owner, need)
 	return best[1], best[2], best[3]
 end
 
---- Convert adapter leaf geometry into character cells (1-based, bottom-left inclusive), marking those "too small for a label"
+--- Convert adapter leaf geometry into character cells (1-based, top-left inclusive), marking those "too small for a label"
 ---@param panes table[]
 ---@param by_pane table<string, table>
 ---@param W integer
 ---@param H integer
+---@param yoff? integer rows reserved above the layout (the tab strip); shifting here keeps every
+---other pass (fill, owner, labels, hit) working on one coordinate space
 ---@return table[] geom  { { pane, item, x0, y0, x1, y1 } }
-local function geometry(panes, by_pane, W, H)
+local function geometry(panes, by_pane, W, H, yoff)
+	yoff = yoff or 0
 	local out = {}
 	for _, pane in ipairs(panes) do
 		local item = by_pane[pane.id]
 		local x0, y0, x1, y1 = cells_of(pane.rect, W, H)
-		table.insert(out, { pane = pane, item = item, x0 = x0, y0 = y0, x1 = x1, y1 = y1 })
+		table.insert(out, {
+			pane = pane,
+			item = item,
+			x0 = x0,
+			y0 = y0 + yoff,
+			x1 = x1,
+			y1 = y1 + yoff,
+		})
 	end
 	return out
 end
 
+--- Draw the header row: either the tab strip or a clipping notice. Returns the cell → tab
+--- map so a click on a tab switches to it (the strip is the only discoverable part of the map).
+---@param g table canvas
+---@param header table { tabs = table[] } or { notice = string }
+---@param W integer
+---@return table<integer, integer>|nil tab_at
+local function draw_header(g, header, W)
+	if header.notice then
+		text(g, 1, 1, W, header.notice, "AiMapTab")
+		return nil
+	end
+	local tab_at = {}
+	local x = 1
+	for i, tab in ipairs(header.tabs or {}) do
+		if i > 9 then
+			break
+		end
+		-- Tab number, then the window name when rex has one; the dot says "a busy agent lives here"
+		local chunk = tostring(tab.n) .. (tab.label and (" " .. tab.label) or "")
+		local w = vim.fn.strdisplaywidth(chunk)
+		local dot_w = tab.busy and 2 or 0
+		if x + w + dot_w - 1 > W then
+			-- Out of room: mark the cut. The remaining tabs are still reachable by their digit.
+			if x <= W then
+				text(g, 1, x, W, "…", "AiMapTab")
+			end
+			break
+		end
+		local group = tab.active and "AiMapTabActive" or "AiMapTab"
+		text(g, 1, x, x + w + dot_w - 1, chunk, group)
+		for xx = x, x + w + dot_w - 1 do
+			tab_at[xx] = i
+		end
+		x = x + w
+		if tab.busy then
+			-- Foreground only: the tab background stays, the dot borrows the running color
+			text(g, 1, x, x + 1, " ●", hl(group, "AiMapWorking"))
+			x = x + 2
+		end
+		x = x + 1 -- one blank column between tabs
+	end
+	return tab_at
+end
+
 --- Draw one frame. The whole area is cells, with no footer — content is fixed and does not jump with candidate count.
 ---@param frame? integer animation frame (0,1,2,...): items carrying `status_frames` swap their icon per frame
-local function paint(panes, by_pane, W, H, sel, frame)
-	local geom = geometry(panes, by_pane, W, H)
+---@param header? table row 1 content (tabs or notice), see draw_header
+--- Background group of one pane cell: selected agent / agent / floating pane / empty pane.
+---@param t table geometry entry (pane + item)
+---@param sel table|nil selected item
+---@return string
+local function cell_group(t, sel)
+	local float = t.pane.kind == "floating"
+	if not t.item then
+		return float and "AiMapFloat" or "AiMapPane"
+	end
+	if sel == t.item then
+		return float and "AiMapFloatSel" or "AiMapSel"
+	end
+	return "AiMapAgent"
+end
+
+local function paint(panes, by_pane, W, H, sel, frame, header)
+	local yoff = header and 1 or 0
+	local geom = geometry(panes, by_pane, W, math.max(1, H - yoff), yoff)
 	local g = grid_new(W, H)
+	local tab_hit
+	if header then
+		tab_hit = draw_header(g, header, W)
+	end
 	local hit, owner = {}, {}
+	local clipped = 0
 	for _, t in ipairs(geom) do
-		local float = t.pane.kind == "floating"
-		local group
-		if t.item then
-			if sel == t.item then
-				group = float and "AiMapFloatSel" or "AiMapSel"
-			else
-				group = "AiMapAgent"
-			end
-		else
-			group = float and "AiMapFloat" or "AiMapPane"
-		end
-		fill(g, t.y0, t.y1, t.x0, t.x1, group)
+		fill(g, t.y0, t.y1, t.x0, t.x1, cell_group(t, sel))
 		for y = t.y0, t.y1 do
 			hit[y] = hit[y] or {}
 			owner[y] = owner[y] or {}
@@ -408,18 +486,10 @@ local function paint(panes, by_pane, W, H, sel, frame)
 	-- own background color, and center the label within that visible area.
 	for _, t in ipairs(geom) do
 		local letter = pane_label(t.item)
-		if letter ~= "" then
-			local float = t.pane.kind == "floating"
-			local group
-			if t.item then
-				if sel == t.item then
-					group = float and "AiMapFloatSel" or "AiMapSel"
-				else
-					group = "AiMapAgent"
-				end
-			else
-				group = float and "AiMapFloat" or "AiMapPane"
-			end
+		-- A cell without a letter (past the alphabet) still draws its icon and badge; only an
+		-- empty pane has nothing to place.
+		if t.item or letter ~= "" then
+			local group = cell_group(t, sel)
 			-- Cell content: agent glyph + space + text + space + status badge.
 			-- The badge is a spinner for a running turn and a state glyph otherwise.
 			local icon = t.item and t.item.icon or nil
@@ -469,6 +539,11 @@ local function paint(panes, by_pane, W, H, sel, frame)
 				if status then
 					need = need + 1 + status_w
 				end
+				-- A bare badge-less cell still needs one column, otherwise "fits" would be true
+				-- for a pane with no room at all and clipping would go unreported
+				if need < 1 then
+					need = 1
+				end
 				y, x, stop = place_label(t, owner, need)
 				if not y and status then
 					-- Narrow pane: the state badge is the first thing to drop
@@ -517,12 +592,16 @@ local function paint(panes, by_pane, W, H, sel, frame)
 				if status then
 					text(g, y, cx + 1, stop, status, hl(group, state_group(t.item.status_state)))
 				end
+			elseif t.item then
+				-- No contiguous run wide enough for even a letter: this agent has no cell to
+				-- be pointed at, and the header says so instead of letting it vanish.
+				clipped = clipped + 1
 			end
 		end
 	end
 
 	local rows, segs = rows_of(g, W, H)
-	return { rows, segs, hit }
+	return { lines = rows, segs = segs, hit = hit, tab_hit = tab_hit, clipped = clipped }
 end
 
 ---Is `inner` entirely inside `outer` (a floating pane over a tiled one)?
@@ -616,49 +695,138 @@ local function neighbour(panes, from, dir)
 	return best
 end
 
+--- Number of one-cell-wide bands along each axis, ignoring floating panes (their edges are
+--- decoration, not columns). The canvas needs at least three columns per band, or several panes
+--- are rounded into the same cell and become unreachable.
+---@param windows table[]
+---@return integer columns, integer rows
+local function bands(windows)
+	local xs, ys = {}, {}
+	for _, w in ipairs(windows) do
+		for _, p in ipairs(w.panes or {}) do
+			if p.rect and p.kind ~= "floating" then
+				xs[math.floor(p.rect[1] * 1000 + 0.5)] = true
+				xs[math.floor((p.rect[1] + p.rect[3]) * 1000 + 0.5)] = true
+				ys[math.floor(p.rect[2] * 1000 + 0.5)] = true
+				ys[math.floor((p.rect[2] + p.rect[4]) * 1000 + 0.5)] = true
+			end
+		end
+	end
+	local function count(t)
+		local n = 0
+		for _ in pairs(t) do
+			n = n + 1
+		end
+		return math.max(1, n - 1)
+	end
+	return count(xs), count(ys)
+end
+
 --- Size of the map canvas, in cells.
+---@param windows? table[] layout windows (see M.select); omitted = the configured size only
 ---@return integer W, integer H
-function M.size()
+function M.size(windows)
 	local W = math.floor(vim.o.columns * conf.width + 0.5)
 	local H = math.floor(vim.o.lines * conf.height + 0.5)
+	-- Fit the layout instead of asking the user to resize a map that has no keys for it: a
+	-- complex split grows the canvas, and the min/max bounds still have the final say.
+	if conf.fit and windows then
+		local cols, rows = bands(windows)
+		W = math.max(W, 3 * cols)
+		H = math.max(H, rows)
+	end
 	W = math.min(math.max(W, conf.min_width), math.max(conf.min_width, conf.max_width))
 	H = math.min(math.max(H, conf.min_height), math.max(conf.min_height, conf.max_height))
 	return W, H
 end
 
 --- Open the map picker
----@param opts { panes: table[], items: table[], cursor_pane?: string, on_choose: fun(item: table|nil), on_switch?: fun() }
+---@param opts { panes?: table[], windows?: table[], items: table[], cursor_pane?: string, active?: string, on_choose: fun(item: table|nil), on_switch?: fun() }
 function M.select(opts)
-	local panes = opts.panes or {}
 	local items = opts.items or {}
 	define_hl()
 
-	-- Letters are assigned only to candidates this canvas can show: the map is
-	-- current-window-only, and agents elsewhere are chosen from the list (<Tab>).
-	local by_pane = {}
+	-- Windows are the canvas' tabs: each one carries its own split layout. An adapter that
+	-- knows a single window passes `panes`, which is the same thing with one tab.
+	local windows = {}
+	for i, w in ipairs(opts.windows or {}) do
+		local panes = w.panes or {}
+		if #panes > 0 then
+			windows[#windows + 1] = {
+				id = w.id or ("window-" .. i),
+				label = w.label,
+				panes = panes,
+				cursor = w.cursor,
+				active = w.active == true,
+			}
+		end
+	end
+	if #windows == 0 then
+		local panes = opts.panes or {}
+		if #panes == 0 then
+			return false
+		end
+		windows[1] = { id = "window", panes = panes, cursor = opts.cursor_pane, active = true }
+	end
+
+	-- Letters are assigned once over the global candidate order and never reassigned: the
+	-- same letter means the same agent on every tab. Re-assigning per tab would make a tab
+	-- switch silently change who `a` sends to.
 	for i, it in ipairs(items) do
-		it.letter = LETTERS[i] -- nil past the last letter; numbers cover those
-		if it.pane_id then
-			by_pane[it.pane_id] = it
+		it.letter = LETTERS[i]
+	end
+
+	-- pane id → window, so an item knows which tab draws it
+	local win_of_pane, pane_by_id = {}, {}
+	for _, w in ipairs(windows) do
+		for _, p in ipairs(w.panes) do
+			win_of_pane[p.id] = w
+			pane_by_id[p.id] = p
 		end
 	end
 
-	-- Every item here has a pane on this canvas (callers filter to the current
-	-- window), so a letter always points at a visible cell.
-	local located = {}
+	for _, w in ipairs(windows) do
+		w.by_pane, w.located = {}, {}
+	end
+	local located = {} -- global order, for the default selection
 	for _, it in ipairs(items) do
-		if it.pane_id and by_pane[it.pane_id] == it then
-			for _, p in ipairs(panes) do
-				if p.id == it.pane_id then
-					table.insert(located, it)
-					break
-				end
+		local w = it.pane_id and win_of_pane[it.pane_id]
+		if w and not w.by_pane[it.pane_id] then
+			w.by_pane[it.pane_id] = it
+			w.located[#w.located + 1] = it
+			located[#located + 1] = it
+		end
+	end
+
+	-- Tab to open on: my own window (the one nvim lives in), unless it draws no agent — the
+	-- map exists to pick, so an empty own tab yields to the first tab that can show one.
+	local start = 1
+	if opts.active then
+		for i, w in ipairs(windows) do
+			if w.id == opts.active then
+				start = i
 			end
 		end
 	end
+	if #windows[start].located == 0 then
+		for i, w in ipairs(windows) do
+			if #w.located > 0 then
+				start = i
+				break
+			end
+		end
+	end
+	if #windows[start].located == 0 then
+		return false
+	end
 
-	-- Only one letter is needed, so make a small hint map: about a quarter screen; anything larger is empty
-	local W, H = M.size()
+	-- A small hint map: about a quarter screen, grown to fit a dense layout. A tab strip is
+	-- one extra row, so the layout keeps its rows instead of shrinking by one.
+	local W, H = M.size(windows)
+	local strip = #windows > 1
+	if strip then
+		H = math.min(H + 1, math.max(conf.min_height, conf.max_height))
+	end
 
 	-- The message area (above cmdheight) has a higher zindex than floating windows, so leftover messages can cover the map,
 	-- showing up as a vertical line or garbled characters in the middle. Clear the message area before opening the window.
@@ -672,43 +840,50 @@ function M.select(opts)
 	-- it would cover the map and show up as an extra vertical line in every pane.
 	vim.b[buf].miniindentscope_disable = true
 
-	local sel = nil
-	for _, it in ipairs(located) do
-		if it.pane_id == opts.cursor_pane then
-			sel = it
-		end
-	end
-	-- Nothing in my own pane (the usual case: the agent runs in a neighbour): pre-select the nearest one instead of the
-	-- first candidate in the list, so the highlighted cell is always the agent next door rather than a random one.
-	if not sel and opts.cursor_pane then
+	-- Selection is remembered per tab: switching away and back returns to the same cell instead
+	-- of re-deriving it, so "2 then 1" is a round trip.
+	local function nearest_to_cursor(w)
 		local origin
-		for _, p in ipairs(panes) do
-			if p.id == opts.cursor_pane and p.rect then
+		for _, p in ipairs(w.panes) do
+			if p.id == (opts.cursor_pane or w.cursor) and p.rect then
 				origin = p.rect
 			end
 		end
-		if origin then
-			local ox, oy = origin[1] + origin[3] / 2, origin[2] + origin[4] / 2
-			local best, best_d
-			for _, it in ipairs(located) do
-				for _, p in ipairs(panes) do
-					if p.id == it.pane_id and p.rect then
-						local dx = (p.rect[1] + p.rect[3] / 2) - ox
-						local dy = (p.rect[2] + p.rect[4] / 2) - oy
-						local d = dx * dx + dy * dy
-						if not best_d or d < best_d then
-							best, best_d = it, d
-						end
-					end
+		if not origin then
+			return w.located[1]
+		end
+		local ox, oy = origin[1] + origin[3] / 2, origin[2] + origin[4] / 2
+		local best, best_d
+		for _, it in ipairs(w.located) do
+			local p = pane_by_id[it.pane_id]
+			if p and p.rect then
+				local dx = (p.rect[1] + p.rect[3] / 2) - ox
+				local dy = (p.rect[2] + p.rect[4] / 2) - oy
+				local d = dx * dx + dy * dy
+				if not best_d or d < best_d then
+					best, best_d = it, d
 				end
 			end
-			sel = best
+		end
+		return best or w.located[1]
+	end
+
+	local sel_by_win = {}
+	for i, w in ipairs(windows) do
+		for _, it in ipairs(w.located) do
+			if it.pane_id == opts.cursor_pane then
+				sel_by_win[i] = it
+			end
 		end
 	end
-	sel = sel or located[1]
+	sel_by_win[start] = sel_by_win[start] or nearest_to_cursor(windows[start])
+	local tab = start
+	local cur = windows[start]
+	local sel = sel_by_win[tab]
 
-	local hit
+	local hit, tab_hit
 	local win
+	local notice -- "clipped N" once the layout cannot be drawn in cells; shown in row 1
 	-- Center the floating window: use the UI's real size, not vim.o.lines. vim.o.lines includes the bottom cmdline row,
 	-- and the editor area changes as the message area/cmdline height changes, so calculating from o.lines drifts.
 	local function editor_size()
@@ -737,15 +912,37 @@ function M.select(opts)
 	local timer
 
 	local function repaint()
-		local painted = paint(panes, by_pane, W, H, sel, frame)
-		local lines, segs, h = painted[1], painted[2], painted[3]
-		hit = h
+		local hdr
+		if strip then
+			local tabs = {}
+			for i, w in ipairs(windows) do
+				local busy = false
+				for _, it in ipairs(w.located) do
+					if it.busy then
+						busy = true
+						break
+					end
+				end
+				tabs[i] = { n = i, label = w.label, busy = busy, active = i == tab }
+			end
+			hdr = { tabs = tabs }
+		elseif notice then
+			hdr = { notice = notice }
+		end
+		local painted = paint(cur.panes, cur.by_pane, W, H, sel, frame, hdr)
+		-- A layout too dense for the cells: say so once, instead of letting agents disappear
+		-- silently. Costs one layout row, only when it actually happens.
+		if not strip and not notice and painted.clipped > 0 then
+			notice = ("clipped %d"):format(painted.clipped)
+			painted = paint(cur.panes, cur.by_pane, W, H, sel, frame, { notice = notice })
+		end
+		hit, tab_hit = painted.hit, painted.tab_hit
 		vim.bo[buf].modifiable = true
-		api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+		api.nvim_buf_set_lines(buf, 0, -1, false, painted.lines)
 		vim.bo[buf].modifiable = false
 		place()
 		api.nvim_buf_clear_namespace(buf, NS, 0, -1)
-		for y, list in ipairs(segs) do
+		for y, list in ipairs(painted.segs) do
 			for _, seg in ipairs(list) do
 				if seg[2] > seg[1] then
 					pcall(api.nvim_buf_set_extmark, buf, NS, y - 1, seg[1], {
@@ -826,8 +1023,8 @@ function M.select(opts)
 		end
 	end
 
-	local function move_to(item)
-		-- Land in the middle of the cell rather than the "first cell": cursor position stays stable when moving back and forth
+	--- All cells of one candidate, row-major
+	local function item_cells(item)
 		local cells = {}
 		for y, list in pairs(hit or {}) do
 			for x, it in pairs(list) do
@@ -836,17 +1033,79 @@ function M.select(opts)
 				end
 			end
 		end
-		if #cells == 0 then
-			return false
-		end
 		table.sort(cells, function(a, b)
 			if a[1] ~= b[1] then
 				return a[1] < b[1]
 			end
 			return a[2] < b[2]
 		end)
-		local mid = cells[math.floor((#cells + 1) / 2)]
-		pcall(api.nvim_win_set_cursor, win, { mid[1], mid[2] - 1 })
+		return cells
+	end
+
+	local function put(cell)
+		if not cell then
+			return false
+		end
+		pcall(api.nvim_win_set_cursor, win, { cell[1], cell[2] - 1 })
+		return true
+	end
+
+	local function middle(cells)
+		return cells[math.floor((#cells + 1) / 2)]
+	end
+
+	local function move_to(item)
+		-- Land in the middle of the cell rather than the "first cell": cursor position stays stable when moving back and forth
+		local cells = item_cells(item)
+		if #cells == 0 then
+			return false
+		end
+		return put(middle(cells))
+	end
+
+	--- Land on the cell of `item` closest to where the cursor already is.
+	--
+	-- This is what keeps directional movement from feeling like a teleport: the old fallback always
+	-- chose the row-major middle cell of the target, so moving down into a tall pane landed on its
+	-- center row no matter which row you came from. Landing next to the cursor reads as "slide the
+	-- highlight" instead.
+	local function move_near(item)
+		local cells = item_cells(item)
+		if #cells == 0 then
+			return false
+		end
+		local ok, pos = pcall(api.nvim_win_get_cursor, win)
+		if not (ok and pos) then
+			return put(middle(cells))
+		end
+		local cy, cx = pos[1], pos[2] + 1
+		local best, best_d
+		for _, cell in ipairs(cells) do
+			local d = math.abs(cell[1] - cy) + math.abs(cell[2] - cx)
+			if not best_d or d < best_d then
+				best, best_d = cell, d
+			end
+		end
+		return put(best)
+	end
+
+	--- Switch the drawn tab: digits do this and nothing else, so a number can never send to an agent.
+	---@param i integer
+	---@return boolean switched
+	local function switch_tab(i)
+		if not windows[i] or i == tab then
+			return false
+		end
+		sel_by_win[tab] = sel
+		tab = i
+		cur = windows[i]
+		sel = sel_by_win[tab] or nearest_to_cursor(cur)
+		sel_by_win[tab] = sel
+		-- Repaint first: `hit` belongs to the tab being drawn, and move_to reads it.
+		repaint()
+		if sel then
+			move_to(sel)
+		end
 		return true
 	end
 
@@ -861,26 +1120,17 @@ function M.select(opts)
 	})
 
 	local function at_current()
-		local row = api.nvim_win_get_cursor(win)[1]
-		local col = api.nvim_win_get_cursor(win)[2] + 1
-		local list = hit and hit[row]
-		return list and list[col] or nil
+		local pos = api.nvim_win_get_cursor(win)
+		local list = hit and hit[pos[1]]
+		return list and list[pos[2] + 1] or nil
 	end
 
 	local function current_pane()
-		local row = api.nvim_win_get_cursor(win)[1]
-		local col = api.nvim_win_get_cursor(win)[2] + 1
-		local list = hit and hit[row]
-		local item = list and list[col] or nil
-		if not item then
-			return nil
-		end
-		for _, p in ipairs(panes) do
-			if p.id == item.pane_id then
-				return p
-			end
-		end
-		return nil
+		local item = at_current()
+		local pane = item and pane_by_id[item.pane_id]
+		-- A pane of another tab cannot be the one the cursor sits on: `hit` is the drawn tab only,
+		-- so this can only mismatch while a repaint is pending.
+		return pane
 	end
 
 	-- Walk by screen: step outward cell by cell from the cursor cell; the first other pane encountered is the on-screen neighbour.
@@ -890,8 +1140,8 @@ function M.select(opts)
 	local function walk(dir)
 		local dy = (dir == "j" and 1) or (dir == "k" and -1) or 0
 		local dx = (dir == "l" and 1) or (dir == "h" and -1) or 0
-		local cur = api.nvim_win_get_cursor(win)
-		local y, x = cur[1], cur[2] + 1
+		local pos = api.nvim_win_get_cursor(win)
+		local y, x = pos[1], pos[2] + 1
 		local from = hit and hit[y] and hit[y][x]
 		while true do
 			y, x = y + dy, x + dx
@@ -909,18 +1159,23 @@ function M.select(opts)
 		vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true, desc = desc })
 	end
 
-	-- Mouse: click a cell to select it directly (no need to move the cursor first)
+	-- Mouse: click a tab on the strip to switch, or a cell to select it directly
 	map("<LeftMouse>", function()
 		local ok, pos = pcall(vim.fn.getmousepos)
 		if not (ok and pos and pos.winid == win) then
 			return
 		end
+		local col = pos.wincol or pos.column
+		if tab_hit and tab_hit[col] then
+			switch_tab(tab_hit[col])
+			return
+		end
 		local list = hit and hit[pos.line]
-		local item = list and (list[pos.wincol] or list[pos.column])
+		local item = list and (list[col] or list[pos.column])
 		if item then
 			close(item)
 		end
-	end, "Click a cell")
+	end, "Click a tab or a cell")
 	map("<CR>", function()
 		local item = at_current()
 		if item then
@@ -942,16 +1197,19 @@ function M.select(opts)
 		map(dir, function()
 			-- Walk by screen first; when that leaves the canvas (full-height pane moving up/down), fall back to rect neighbours
 			local item, y, x = walk(dir)
+			local exact = y ~= nil
 			if not item then
-				local pane = neighbour(panes, current_pane(), dir)
-				item = pane and by_pane[pane.id]
+				local pane = neighbour(cur.panes, current_pane(), dir)
+				item = pane and cur.by_pane[pane.id]
 			end
 			if item then
 				sel = item
-				if y then
+				sel_by_win[tab] = item
+				if exact then
 					pcall(api.nvim_win_set_cursor, win, { y, x - 1 })
 				else
-					move_to(item)
+					-- Leaving the canvas: land on the target's cell nearest the cursor, not its center
+					move_near(item)
 				end
 				repaint()
 			end
@@ -967,15 +1225,12 @@ function M.select(opts)
 			end
 		end
 	end
+	-- Digits switch the drawn window (tab). They never pick an agent: a number whose tab is
+	-- the current one does nothing, which is exactly the "I am already here" signal.
 	for i = 1, 9 do
 		map(tostring(i), function()
-			for _, it in ipairs(items) do
-				if it.index == i then
-					close(it)
-					return
-				end
-			end
-		end, "Jump to candidate " .. i)
+			switch_tab(i)
+		end, "Tab " .. i)
 	end
 
 	-- Animation: the map is callback-driven (no blocking read loop), so a plain uv timer repaints it.
