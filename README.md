@@ -751,8 +751,10 @@ window of the session becomes a **tab** on that canvas: a one-row strip names th
 marks a tab that has a busy agent. Letters are assigned once over the whole candidate list and
 never reassigned, so `c` is the same agent on every tab — switching a tab only changes which
 cells are drawn. Digits never pick an agent: picking is always a letter, `<CR>` or a click.
-The tab the picker opens on is the window nvim itself lives in (or the first tab that has an
-agent, when your own window has none); it is not remembered between opens. With one window
+The tab the picker opens on is always the window nvim itself lives in, even when that window
+holds no agent — the map is a complete picture of the tab you are in, so panes without an agent
+are drawn too, with the highlight resting inside the layout instead of on the strip. Agents in
+other windows are one digit away; it is not remembered between opens. With one window
 there is no strip and digits do nothing, so the map looks exactly as it did before. Zoom does
 not collapse
 the map: it always uses the full split tree, so an agent in a zoomed-away pane still gets a cell. Panes covered by a floating window are shown but never get the letter — the

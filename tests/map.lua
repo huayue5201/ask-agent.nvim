@@ -192,6 +192,32 @@ local tab1_again = map_lines()
 assert(tab1_again:find("one", 1, true) and not tab1_again:find("three", 1, true), "switching back restores the first tab")
 vim.api.nvim_buf_delete(0, { force = true })
 
+-- A tab without agents is still a complete map of that window's layout, and opening the map
+-- stays on the tab nvim lives in instead of jumping to a tab that has an agent.
+local empty_layout = {
+	{ id = "e1", rect = { 0, 0, 0.5, 1 }, kind = "tiled" },
+	{ id = "e2", rect = { 0.5, 0, 0.5, 0.5 }, kind = "tiled" },
+	{ id = "e3", rect = { 0.5, 0.5, 0.5, 0.5 }, kind = "tiled" },
+}
+map.setup({ width = 0.5, height = 0.5, min_width = 24, max_width = 24, min_height = 6, max_height = 6 })
+map.select({
+	windows = {
+		{ id = "w1", panes = empty_layout },
+		{ id = "w2", panes = { { id = "solo", rect = { 0, 0, 1, 1 }, kind = "tiled" } } },
+	},
+	active = "w1",
+	items = { { pane_id = "solo", target = { label = "solo" }, name = "solo", icon = "" } },
+})
+local empty = map_lines()
+assert(not empty:find("solo", 1, true), "an agent in another window is not drawn on my tab")
+assert(empty:find("1 2", 1, true), "the strip still lists every window")
+assert(vim.api.nvim_win_get_cursor(0)[1] > 1, "the cursor lands inside the panes even when the tab has no agent")
+vim.api.nvim_feedkeys("2", "x", false)
+assert(map_lines():find("solo", 1, true), "a digit reaches the tab that has the agent")
+vim.api.nvim_feedkeys("1", "x", false)
+assert(not map_lines():find("solo", 1, true), "switching back returns to the empty tab")
+vim.api.nvim_buf_delete(0, { force = true })
+
 -- A canvas too small for its layout reports what it cannot show instead of dropping agents silently
 map.setup({ min_width = 12, max_width = 12, min_height = 2, max_height = 2, fit = false })
 local dense, dense_items = {}, {}

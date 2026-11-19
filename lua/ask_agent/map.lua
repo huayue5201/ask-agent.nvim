@@ -798,8 +798,9 @@ function M.select(opts)
 		end
 	end
 
-	-- Tab to open on: my own window (the one nvim lives in), unless it draws no agent — the
-	-- map exists to pick, so an empty own tab yields to the first tab that can show one.
+	-- Tab to open on: always my own window (the one nvim lives in), even when it draws no agent.
+	-- The strip is what says where the agents are; jumping to another tab first would hide the
+	-- one position the map is supposed to be anchored to.
 	local start = 1
 	if opts.active then
 		for i, w in ipairs(windows) do
@@ -807,17 +808,6 @@ function M.select(opts)
 				start = i
 			end
 		end
-	end
-	if #windows[start].located == 0 then
-		for i, w in ipairs(windows) do
-			if #w.located > 0 then
-				start = i
-				break
-			end
-		end
-	end
-	if #windows[start].located == 0 then
-		return false
 	end
 
 	-- A small hint map: about a quarter screen, grown to fit a dense layout. A tab strip is
@@ -1089,6 +1079,35 @@ function M.select(opts)
 		return put(best)
 	end
 
+	--- Land the cursor inside the tab being drawn: the selected agent's cell, or the middle of the
+	--- biggest pane when the tab has no agent at all. A tab without agents must still read as a
+	--- complete map of its layout, so the highlight sits somewhere inside the panes rather than
+	--- staying on the strip row.
+	local function land()
+		if sel and move_to(sel) then
+			return true
+		end
+		local yoff = strip and 1 or 0
+		local best, best_area
+		for _, p in ipairs(cur.panes) do
+			if p.rect then
+				local area = p.rect[3] * p.rect[4]
+				local float = p.kind == "floating"
+				-- Tiled pans win over floating ones: a float usually covers the middle of its host, so
+				-- centering on it would hide the pane layout on first sight.
+				if not best or (best.float and not float) or (best.float == float and area > best_area) then
+					best, best_area = { rect = p.rect, float = float }, area
+				end
+			end
+		end
+		if not best then
+			return false
+		end
+		local x0, y0, x1, y1 = cells_of(best.rect, W, H - yoff)
+		y0, y1 = y0 + yoff, y1 + yoff
+		return put({ math.floor((y0 + y1) / 2), math.floor((x0 + x1) / 2) })
+	end
+
 	--- Switch the drawn tab: digits do this and nothing else, so a number can never send to an agent.
 	---@param i integer
 	---@return boolean switched
@@ -1103,15 +1122,11 @@ function M.select(opts)
 		sel_by_win[tab] = sel
 		-- Repaint first: `hit` belongs to the tab being drawn, and move_to reads it.
 		repaint()
-		if sel then
-			move_to(sel)
-		end
+		land()
 		return true
 	end
 
-	if sel then
-		move_to(sel)
-	end
+	land()
 
 	-- Current cell (the cursor is invisible, so this is expressed by highlight only): not counted when the cell has no candidate
 	api.nvim_create_autocmd("VimResized", {
