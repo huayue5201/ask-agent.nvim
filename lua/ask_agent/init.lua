@@ -99,6 +99,14 @@ local function icon_color(mod, t)
 	return icons.accent(icons.key(t)) or icons.color(t and t.id) or icons.color(mod and mod.id)
 end
 
+--- The backend a target belongs to. Pickers mix backends now (a desktop app has no pane of its
+--- own), so every target travels with its backend and this is the single place that resolves it.
+---@param t table|nil
+---@return table|nil
+local function mod_of(t)
+	return backends.get((t and t.backend) or current)
+end
+
 --- Name shown in lists: alias > instance label > id
 ---@param t table|nil
 ---@return string
@@ -177,39 +185,48 @@ end
 ---@param target_id string|nil
 ---@return table|nil mod, table|nil target, string|nil err
 local function resolve(id, target_id)
-	local mod = backends.get(id or current)
-	if not mod then
-		return nil, nil, ("No backend registered with id %s"):format(id or current)
+	-- id = a specific backend (scripted, :AskAgentPi). nil = "whichever agent this is": the pin
+	-- first, then the target id across every backend, then the fallback backend for bare sends.
+	local mod
+	if id then
+		mod = backends.get(id)
+		if not mod then
+			return nil, nil, ("No backend registered with id %s"):format(id)
+		end
 	end
-	-- Explicitly selected a managed instance (e.g. pi inside codecompanion): allowed, but explain the consequence first
-	local function note_avoid(t)
+	local function note_avoid(t, m)
 		if t and t.avoid then
-			notify.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
+			notify.notify(("[%s] %s"):format((m or mod).label or (m or mod).id, t.avoid), vim.log.levels.WARN)
 		end
 	end
 	if target_id then
-		for _, t in ipairs(mod.targets()) do
-			if tostring(t.id) == target_id then
-				note_avoid(t)
-				return mod, t
+		local want = tostring(target_id)
+		for _, m in ipairs(id and { mod } or backends.all()) do
+			for _, t in ipairs(m.targets()) do
+				if tostring(t.id) == want then
+					t.backend = t.backend or m.id
+					note_avoid(t, m)
+					return m, t
+				end
 			end
 		end
-		return nil,
-			nil,
-			("Target %s is not among the current instances of %s (it may have exited)"):format(
-				target_id,
-				mod.label or mod.id
-			)
+		return nil, nil, ("Target %s is not among the current instances (it may have exited)"):format(want)
 	end
 	-- Manual pin wins: if the pinned target is gone, treat it as no pin
-	if pinned and pinned.backend == mod.id then
-		for _, t in ipairs(mod.targets()) do
+	if pinned and (not id or pinned.backend == id) then
+		local m = backends.get(pinned.backend)
+		for _, t in ipairs(m and m.targets() or {}) do
 			if tostring(t.id) == tostring(pinned.target) then
-				note_avoid(t)
-				return mod, t
+				t.backend = t.backend or m.id
+				note_avoid(t, m)
+				return m, t
 			end
 		end
 		pinned = nil
+	end
+	mod = mod or backends.get(current)
+	if not mod then
+		return nil, nil, ("No backend registered with id %s"):format(current)
 	end
 	local target, err = backends.pick(mod, vim.fn.getcwd(), pick_opts())
 	if not target then
@@ -311,9 +328,8 @@ end
 --- state glyph with the state color (the list has no per-item highlight API).
 --- Menu name fields only allow a single highlight per line, so we set extmarks on the buffer ourselves.
 ---@param win integer
----@param mod table
 ---@param cands table[]
-local function paint_list(win, mod, cands)
+local function paint_list(win, cands)
 	if not vim.api.nvim_win_is_valid(win) then
 		return
 	end
@@ -327,8 +343,9 @@ local function paint_list(win, mod, cands)
 	vim.api.nvim_buf_clear_namespace(buf, NS_LIST, 0, -1)
 	for i, c in ipairs(cands) do
 		local t = c.target
+		local m = c.mod or mod_of(t)
 		local hl = icons.accent_hl(icons.key(t))
-		local glyph = icon_prefix(mod, t):gsub("%s+$", "")
+		local glyph = icon_prefix(m, t):gsub("%s+$", "")
 		local line = lines[i] or ""
 		local s, e = line:find(glyph, 1, true)
 		if hl and s then
@@ -345,7 +362,7 @@ local function paint_list(win, mod, cands)
 			if ch ~= "" then
 				pcall(vim.api.nvim_buf_set_extmark, buf, NS_LIST, i - 1, prefix_end, {
 					end_col = prefix_end + #ch,
-					hl_group = state_group(candidate_status(mod, c)),
+					hl_group = state_group(candidate_status(m, c)),
 					strict = false,
 				})
 			end
@@ -371,7 +388,7 @@ local function list_ui(items, opts, on_choice)
 	return vim.ui.select(items, opts, on_choice)
 end
 
-local function list_select(mod, cands, note_avoid, cb, back)
+local function list_select(restrict, cands, note_avoid, cb, back)
 	local before = float_wins()
 	-- Only record the choice here and hand it to cb *after* the post-processing below: on_choice fires before
 	-- vim.ui.select returns, so calling cb inside would open the next float (the ask input) while we are still
@@ -384,12 +401,13 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			cb(nil) -- cancelled: callers with a question to answer need to hear "no"
 			return
 		end
-		local st = candidate_status(mod, c)
+		local m = c.mod or mod_of(c.target)
+		local st = candidate_status(m, c)
 		if not st.running then
 			local mark, detail = status_mark(st)
 			notify.notify(
 				("[%s] %s is %s%s — not sent"):format(
-					mod.label or mod.id,
+					m.label or m.id,
 					name_of(c.target),
 					mark,
 					detail and (" (" .. detail .. ")") or ""
@@ -398,7 +416,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 			)
 			return
 		end
-		note_busy(mod, c.target, st)
+		note_busy(m, c.target, st)
 		note_avoid(c.target)
 		cb(c.target)
 	end
@@ -407,7 +425,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 	-- the first spinner frame instead of a rotating one.
 	local animate = false
 	for _, c in ipairs(cands) do
-		local st = candidate_status(mod, c)
+		local st = candidate_status(c.mod or mod_of(c.target), c)
 		if st.running and st.busy then
 			animate = true
 			break
@@ -415,8 +433,8 @@ local function list_select(mod, cands, note_avoid, cb, back)
 	end
 	list_ui(cands, {
 		prompt = ("Send to which %s%s? (:AskAgentTarget remembers the choice; <Tab> in the map also gets you here)"):format(
-			icon_prefix(mod),
-			mod.label or mod.id
+			icon_prefix(restrict),
+			restrict and (restrict.label or restrict.id) or "agent"
 		),
 		tick = animate and tick or nil,
 		-- ui-menu supports these; other implementations ignore unknown opts.
@@ -427,14 +445,15 @@ local function list_select(mod, cands, note_avoid, cb, back)
 		end or nil,
 		format_item = function(c, frame)
 			local t = c.target
-			local st = candidate_status(mod, c)
+			local m = c.mod or mod_of(t)
+			local st = candidate_status(m, c)
 			local mark, detail = status_mark(st)
 			if st.running and st.busy then
 				mark = spinner[(frame or 0) % #spinner + 1]
 			end
 			local parts = {
 				("#%d"):format(t.index or 0),
-				("%s %s%s"):format(mark, icon_prefix(mod, t), name_of(t)),
+				("%s %s%s"):format(mark, icon_prefix(m, t), name_of(t)),
 				vim.fn.fnamemodify(t.cwd or "?", ":~"),
 			}
 			if detail then
@@ -463,7 +482,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 	for w in pairs(float_wins()) do
 		if not before[w] and vim.api.nvim_win_is_valid(w) then
 			center_win(w)
-			paint_list(w, mod, cands)
+			paint_list(w, cands)
 			if back then
 				local buf = vim.api.nvim_win_get_buf(w)
 				if not bufs[buf] then
@@ -494,7 +513,7 @@ local function list_select(mod, cands, note_avoid, cb, back)
 	commit(chosen)
 end
 
-local function map_select(mod, cands, note_avoid, cb, switch)
+local function map_select(restrict, cands, note_avoid, cb, switch)
 	local layout = require("ask_agent.layouts").active(layout_id)
 	if not layout then
 		return false
@@ -541,29 +560,33 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		return false
 	end
 
-	local items, animate = {}, false
+	local items, rail, animate = {}, {}, false
 	for i, c in ipairs(cands) do
 		-- The map cannot grey a cell out, so exited instances are list-only.
-		-- Candidates with no pane in any window have nowhere to be drawn.
 		local pane_id = (not c.stale) and layout.match(c.target) or nil
-		if not c.stale and pane_id and pane_win[pane_id] then
+		-- A candidate without a pane (a desktop app, an agent in another session of another
+		-- host) still gets a letter: it goes on the rail below the canvas instead of vanishing.
+		local on_rail = (not c.stale) and pane_id == nil
+		if not c.stale and ((pane_id and pane_win[pane_id]) or on_rail) then
 			local t = c.target
-			local st = candidate_status(mod, c)
+			local m = c.mod or mod_of(t)
+			local st = candidate_status(m, c)
 			local busy = st.running and (st.busy == true or st.state == "working")
 			if busy then
 				animate = true
 			end
 			local mark = status_mark(st)
 			local state = (not st.running) and "gone" or (st.state or "idle")
-			table.insert(items, {
+			local item = {
 				index = i,
 				pane_id = pane_id,
 				target = t,
+				backend_label = m.label or m.id,
 				label = t.label,
 				-- The map draws letters, but the selected cell can afford the name
 				name = name_of(t),
-				icon = icon_prefix(mod, t):gsub("%s+$", ""),
-				icon_hl = icon_color(mod, t),
+				icon = icon_prefix(m, t):gsub("%s+$", ""),
+				icon_hl = icon_color(m, t),
 				-- The agent glyph stays put; a badge after the letter carries the state,
 				-- and a running turn animates that badge (map.lua repaints per frame).
 				status_glyph = mark,
@@ -572,10 +595,14 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 				tier = c.tier,
 				status = st,
 				busy = busy,
-			})
+			}
+			table.insert(items, item)
+			if on_rail then
+				rail[#rail + 1] = item
+			end
 		end
 	end
-	-- Nothing in any window: no cell to draw, so open the list.
+	-- Nothing in any window and nothing off-canvas: no cell to draw, so open the list.
 	if #items == 0 then
 		return false
 	end
@@ -584,6 +611,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 		tick = animate and tick or nil,
 		windows = windows,
 		items = items,
+		rail = rail,
 		-- The tab to open on: the window nvim itself lives in
 		active = window.window_id,
 		cursor_pane = layout.cursor and layout.cursor() or nil,
@@ -595,7 +623,7 @@ local function map_select(mod, cands, note_avoid, cb, switch)
 				local _, detail = status_mark(item.status)
 				notify.notify(
 					("[%s] %s is not running%s — not sent"):format(
-						mod.label or mod.id,
+						(item.backend_label or "agent"),
 						name_of(item.target),
 						detail and (" (" .. detail .. ")") or ""
 					),
@@ -616,33 +644,58 @@ end
 
 ---@param o { single_direct?: boolean }|nil single_direct: a sole same-cwd candidate
 ---  goes out without opening the picker, even when a picker would normally open
-local function choose_target(mod, cb, target_id, o)
+--- Pick a target for an interactive send. `restrict` limits the candidates to one backend
+--- (:AskAgentPi, ask.send({ backend = ... })); nil means every backend takes part, which is what
+--- makes `aq` a multi-agent picker rather than a "switch backend first" dance.
+---@param restrict table|nil backend module
+---@param cb fun(target: table|nil)
+---@param target_id string|nil
+---@param o { single_direct?: boolean }|nil
+local function choose_target(restrict, cb, target_id, o)
 	local function note_avoid(t)
+		local m = mod_of(t) or restrict
 		if t and t.avoid then
-			notify.notify(("[%s] %s"):format(mod.label or mod.id, t.avoid), vim.log.levels.WARN)
+			notify.notify(("[%s] %s"):format(m and (m.label or m.id) or "agent", t.avoid), vim.log.levels.WARN)
 		end
+	end
+	-- Every backend that takes part in this pick, in registration order
+	local function mods()
+		if restrict then
+			return { restrict }
+		end
+		local out = {}
+		for _, info in ipairs(backends.list()) do
+			local m = backends.get(info.id)
+			if m and info.available then
+				out[#out + 1] = m
+			end
+		end
+		return out
 	end
 	-- An explicitly requested instance skips both pin and picker: same semantics as
 	-- ask.send({ target = ... }), so scripts and prompts can name the agent.
 	if target_id ~= nil then
-		for _, t in ipairs(mod.targets()) do
-			if tostring(t.id) == tostring(target_id) then
-				note_avoid(t)
-				return cb(t)
+		for _, m in ipairs(mods()) do
+			for _, t in ipairs(m.targets()) do
+				if tostring(t.id) == tostring(target_id) then
+					t.backend = t.backend or m.id
+					note_avoid(t)
+					return cb(t)
+				end
 			end
 		end
 		notify.notify(
-			("[%s] Target %s is not among the current instances (it may have exited)"):format(
-				mod.label or mod.id,
-				tostring(target_id)
-			),
+			("Target %s is not among the current instances (it may have exited)"):format(tostring(target_id)),
 			vim.log.levels.WARN
 		)
 		return cb(nil)
 	end
-	if pinned and pinned.backend == mod.id then
-		for _, t in ipairs(mod.targets()) do
+	-- A pin is backend-qualified, so it survives a unified picker: "deck" stays deck.
+	if pinned and (not restrict or pinned.backend == restrict.id) then
+		local m = backends.get(pinned.backend)
+		for _, t in ipairs(m and m.targets() or {}) do
 			if tostring(t.id) == tostring(pinned.target) then
+				t.backend = t.backend or m.id
 				note_avoid(t)
 				return cb(t)
 			end
@@ -650,8 +703,14 @@ local function choose_target(mod, cb, target_id, o)
 		pinned = nil -- target exited, so the pin is naturally invalid
 	end
 
-	local cands =
-		backends.candidates(mod, vim.fn.getcwd(), vim.tbl_extend("force", pick_opts(), { include_stale = show_stale }))
+	local pick = vim.tbl_extend("force", pick_opts(), { include_stale = show_stale, prefer = current })
+	local cands = restrict and backends.candidates(restrict, vim.fn.getcwd(), pick)
+		or backends.all_candidates(vim.fn.getcwd(), pick)
+	-- Numbering + position on screen: the index stays consistent across list, map, and the send
+	-- notification (including the paths that send without opening either).
+	for i, c in ipairs(cands) do
+		c.target.index = i
+	end
 	local live = {}
 	for _, c in ipairs(cands) do
 		if not c.stale then
@@ -659,8 +718,25 @@ local function choose_target(mod, cb, target_id, o)
 		end
 	end
 	if #live == 0 then
-		local _, reason = backends.status(mod)
-		notify.notify(("[%s] %s"):format(mod.label or mod.id, reason or "no available instances"), vim.log.levels.WARN)
+		if restrict then
+			local _, reason = backends.status(restrict)
+			notify.notify(
+				("[%s] %s"):format(restrict.label or restrict.id, reason or "no available instances"),
+				vim.log.levels.WARN
+			)
+		else
+			local reasons = {}
+			for _, m in ipairs(mods()) do
+				local _, reason = backends.status(m)
+				if reason then
+					reasons[#reasons + 1] = ("%s: %s"):format(m.label or m.id, reason)
+				end
+			end
+			notify.notify(
+				"no agent to send to — " .. (#reasons > 0 and table.concat(reasons, "; ") or "nothing is running"),
+				vim.log.levels.WARN
+			)
+		end
 		return cb(nil)
 	end
 	-- When the map can open, a sole exact-cwd candidate still goes through it: the
@@ -671,17 +747,21 @@ local function choose_target(mod, cb, target_id, o)
 		local layout = require("ask_agent.layouts").active(layout_id)
 		map_ready = layout ~= nil and (type(layout.available) ~= "function" or layout.available() == true)
 	end
+	-- An explicitly named backend is an explicit answer to "which agent": asking again is noise
+	-- (a dedicated key for a desktop app must never open a picker).
+	if o and o.single_direct and restrict then
+		local best = live[1]
+		local m = best.mod or restrict
+		note_busy(m, best.target, candidate_status(m, best))
+		return cb(best.target)
+	end
 	if (not map_ready or (o and o.single_direct)) and #live == 1 and live[1].tier == 1 and not live[1].target.avoid then
-		local st = candidate_status(mod, live[1])
+		local m = live[1].mod or mod_of(live[1].target)
+		local st = candidate_status(m, live[1])
 		if st.running then
-			note_busy(mod, live[1].target, st)
+			note_busy(m, live[1].target, st)
 			return cb(live[1].target)
 		end
-	end
-
-	-- Numbering + position on screen: the index stays consistent across list, map, and the send notification
-	for i, c in ipairs(cands) do
-		c.target.index = i
 	end
 
 	-- Map ⇄ list: both have <Tab>, so switching back and forth does not require cancel + re-trigger
@@ -693,10 +773,10 @@ local function choose_target(mod, cb, target_id, o)
 		show_list() -- if the map cannot open this time (no layout adapter / candidates have no position), stay in the list
 	end
 	show_list = function()
-		list_select(mod, cands, note_avoid, cb, to_map)
+		list_select(restrict, cands, note_avoid, cb, to_map)
 	end
 	open_map = function()
-		local ok, opened = pcall(map_select, mod, cands, note_avoid, cb, show_list)
+		local ok, opened = pcall(map_select, restrict, cands, note_avoid, cb, show_list)
 		return ok and opened
 	end
 
@@ -708,12 +788,16 @@ local function choose_target(mod, cb, target_id, o)
 end
 
 ---One send that always records the dispatch: every path (ask, batch, API) goes through it.
----@param mod table backend
----@param target table instance
+---The backend comes from the target, so a target picked out of a mixed list still reaches its own agent.
+---@param target table instance (carries `backend`)
 ---@param text string
 ---@param opts { correlation?: table, anchor?: table }|nil
 ---@return boolean ok, string|nil err
-local function deliver_text(mod, target, text, opts)
+local function deliver_text(target, text, opts)
+	local mod = mod_of(target)
+	if not mod then
+		return false, ("No backend registered with id %s"):format(tostring(target and target.backend))
+	end
 	-- What the journal keeps is the coordinate, not the source the question inlined
 	-- (that is for the agent, and a task only needs somewhere to jump to).
 	local full = opts and opts.anchor
@@ -790,20 +874,24 @@ function M.send(text, opts)
 	-- anything ambiguous opens the picker. The send happens in its callback, so
 	-- this returns as soon as the question is on screen.
 	if opts.pick and opts.target == nil then
-		local mod = backends.get(opts.backend or current)
-		if not mod then
-			return false, ("No backend registered with id %s"):format(opts.backend or current)
+		local restrict
+		if opts.backend then
+			restrict = backends.get(opts.backend)
+			if not restrict then
+				return false, ("No backend registered with id %s"):format(opts.backend)
+			end
 		end
-		choose_target(mod, function(target)
+		choose_target(restrict, function(target)
 			if not target then
 				if opts.on_sent then
 					opts.on_sent(false, "no target chosen")
 				end
 				return
 			end
-			local ok, err = deliver_text(mod, target, text, opts)
+			local ok, err = deliver_text(target, text, opts)
+			local m = mod_of(target)
 			if not ok then
-				notify.notify(("[%s] %s"):format(mod.label or mod.id, tostring(err)), vim.log.levels.WARN)
+				notify.notify(("[%s] %s"):format(m and (m.label or m.id) or "agent", tostring(err)), vim.log.levels.WARN)
 			end
 			if opts.on_sent then
 				opts.on_sent(ok, err)
@@ -815,11 +903,35 @@ function M.send(text, opts)
 	if not mod then
 		return false, err
 	end
-	local ok, send_err = deliver_text(mod, target, text, { correlation = opts.correlation, anchor = opts.anchor })
+	local ok, send_err = deliver_text(target, text, { correlation = opts.correlation, anchor = opts.anchor })
 	if opts.on_sent then
 		opts.on_sent(ok, send_err)
 	end
 	return ok, send_err
+end
+
+---Cancel a running turn. Only backends that can reach into the agent implement
+---`cancel(target, cb)` (deck does; terminal agents usually have no such API).
+---Failures are reported through `cb`; the boolean only says "a cancel request was sent".
+---@param opts { backend?: string, target?: string, id?: string }|table|nil a record from agents() also works
+---@param cb fun(ok: boolean, err: string|nil)|nil
+---@return boolean started, string? err
+function M.cancel(opts, cb)
+	opts = opts or {}
+	local backend = opts.backend
+	local target_id = opts.target or opts.id
+	local mod, target, err = resolve(backend, target_id)
+	if not mod then
+		return false, err
+	end
+	if type(mod.cancel) ~= "function" then
+		return false, ("%s 不支持取消（它没有可直接控制的轮次）"):format(mod.label or mod.id)
+	end
+	local ok, started = mod.cancel(target, cb)
+	if ok == false then
+		return false, started
+	end
+	return true
 end
 
 ---The newest task handed to an agent: { text, ts, status, correlation, anchor }.
@@ -934,6 +1046,7 @@ function M.dashboard(opts)
 		batch_send = M.batch_send,
 		goto_anchor = M.goto_anchor,
 		view = M.view,
+		cancel = M.cancel,
 	}, opts)
 end
 
@@ -976,13 +1089,14 @@ end
 ---@param opts { visual?: boolean, backend?: string, target?: string|number, extension?: table, note?: string, default?: string, prompt_fn?: fun(anchor: table): string }|nil
 function M.ask(opts)
 	opts = opts or {}
-	local mod = backends.get(opts.backend or current)
-	if not mod then
-		notify.notify(
-			("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
-			vim.log.levels.WARN
-		)
-		return
+	-- nil = every backend is a candidate: the picker is where "which agent" gets decided.
+	local restrict
+	if opts.backend then
+		restrict = backends.get(opts.backend)
+		if not restrict then
+			notify.notify(("[ask_agent] No backend registered with id %s"):format(opts.backend), vim.log.levels.WARN)
+			return
+		end
 	end
 	-- The anchor must be captured before any UI: pickers and floating windows change the current window
 	local anchor = context.capture(opts.visual)
@@ -1000,13 +1114,16 @@ function M.ask(opts)
 			anchor[k] = v
 		end
 	end
-	choose_target(mod, function(target)
+	-- single_direct: "I already named the backend, do not ask me which instance" (a dedicated
+	-- key for a desktop app has exactly one thing it could mean).
+	choose_target(restrict, function(target)
 		if not target then
 			return
 		end
+		local mod = mod_of(target)
 		ui.input({
 			title = ("Ask %s (%s) · %s%s"):format(
-				mod.label,
+				mod and (mod.label or mod.id) or "agent",
 				name_of(target),
 				context.describe(anchor),
 				opts.note and (" · " .. opts.note) or ""
@@ -1014,19 +1131,24 @@ function M.ask(opts)
 			default = default,
 			on_submit = function(prompt)
 				local text = message.render(anchor, prompt)
-				local ok, send_err = deliver_text(mod, target, text, { anchor = anchor })
+				local ok, send_err = deliver_text(target, text, { anchor = anchor })
 				if not ok then
-					notify.notify(("[%s] %s"):format(mod.label, send_err), vim.log.levels.WARN)
+					notify.notify(("[%s] %s"):format(mod and (mod.label or mod.id) or "agent", send_err), vim.log.levels.WARN)
 					return
 				end
 				local where = target.cwd and vim.fn.fnamemodify(target.cwd, ":~") or "?"
 				notify.notify(
-					("[%s] Sent → #%d %s (%s)"):format(mod.label, target.index or 0, name_of(target), where),
+					("[%s] Sent → #%d %s (%s)"):format(
+						mod and (mod.label or mod.id) or "agent",
+						target.index or 0,
+						name_of(target),
+						where
+					),
 					vim.log.levels.INFO
 				)
 			end,
 		})
-	end, opts.target)
+	end, opts.target, { single_direct = opts.single_direct })
 end
 
 --- Queue a question for a later batch send instead of sending it now.
@@ -1107,7 +1229,9 @@ function M.pin(target_id)
 		pinned = nil
 		return true
 	end
-	local mod, target, err = resolve(current, target_id)
+	-- Across backends: the pin is backend-qualified, so `:AskAgentTarget deck` works no matter
+	-- which backend is the fallback.
+	local mod, target, err = resolve(nil, target_id)
 	if not target then
 		return false, err
 	end
@@ -1126,7 +1250,7 @@ end
 ---@return boolean ok
 function M.alias(target, name)
 	if type(target) ~= "table" then
-		local mod, found = resolve(current, target)
+		local mod, found = resolve(nil, target)
 		target = found or { id = tostring(target) }
 		if mod then
 			target.backend = mod.id
@@ -1353,6 +1477,8 @@ function M.setup(opts)
 	spinner = (type(opts.spinner) == "table" and #opts.spinner > 0) and opts.spinner
 		or require("ask_agent.icons").frames()
 	backends.register(require("ask_agent.backends.pi"))
+	-- deck: a running StudyDeck instance, reached over HTTP (see backends/deck.lua)
+	backends.register(require("ask_agent.backends.deck"))
 	for _, mod in ipairs(opts.extra or {}) do
 		backends.register(mod)
 	end

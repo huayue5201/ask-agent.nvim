@@ -441,6 +441,43 @@ local function draw_header(g, header, W)
 	return tab_at
 end
 
+--- Draw the rail: one row under the canvas for agents that have no position on it (a desktop
+--- app, an agent in another host). They keep the same letter they have in the list, so "a" means
+--- the same agent in the map, on the rail, and in the list; without this they would simply vanish
+--- from the map (and a map with a desktop app installed would look like the app was not running).
+---@param g table canvas
+---@param y integer row
+---@param W integer
+---@param rail table[] items with letter/icon/name
+---@param sel table|nil selected item
+---@return table<integer, table>|nil hit cell → item
+local function draw_rail(g, y, W, rail, sel)
+	local hit, x = nil, 1
+	local first = true
+	for _, it in ipairs(rail) do
+		local name = (type(it.name) == "string" and it.name) or tostring(it.label or "")
+		local glyph = (type(it.icon) == "string" and it.icon ~= "") and it.icon or nil
+		local body = (first and "" or " · ") .. (it.letter or "")
+		if glyph then
+			body = body .. " " .. glyph
+		end
+		body = body .. " " .. name
+		local w = vim.fn.strdisplaywidth(body)
+		if x + w - 1 > W then
+			return hit -- the rest does not fit; letters still work, so nothing is lost
+		end
+		local group = (sel == it) and "AiMapSel" or "AiMapAgent"
+		text(g, y, x, W, body, hl(group, "Bold"))
+		hit = hit or {}
+		for i = x, math.min(W, x + w - 1) do
+			hit[i] = it
+		end
+		x = x + w
+		first = false
+	end
+	return hit
+end
+
 --- Draw one frame. The whole area is cells, with no footer — content is fixed and does not jump with candidate count.
 ---@param frame? integer animation frame (0,1,2,...): items carrying `status_frames` swap their icon per frame
 ---@param header? table row 1 content (tabs or notice), see draw_header
@@ -459,9 +496,10 @@ local function cell_group(t, sel)
 	return "AiMapAgent"
 end
 
-local function paint(panes, by_pane, W, H, sel, frame, header)
+local function paint(panes, by_pane, W, H, sel, frame, header, rail)
 	local yoff = header and 1 or 0
-	local geom = geometry(panes, by_pane, W, math.max(1, H - yoff), yoff)
+	local rail_rows = (rail and #rail > 0) and 1 or 0
+	local geom = geometry(panes, by_pane, W, math.max(1, H - yoff - rail_rows), yoff)
 	local g = grid_new(W, H)
 	local tab_hit
 	if header then
@@ -596,6 +634,17 @@ local function paint(panes, by_pane, W, H, sel, frame, header)
 				-- No contiguous run wide enough for even a letter: this agent has no cell to
 				-- be pointed at, and the header says so instead of letting it vanish.
 				clipped = clipped + 1
+			end
+		end
+	end
+
+	-- The rail goes last, so the layout keeps its own rows and a rail entry can never cover a pane
+	if rail_rows > 0 then
+		local rail_hit = draw_rail(g, H, W, rail, sel)
+		if rail_hit then
+			hit[H] = hit[H] or {}
+			for x, item in pairs(rail_hit) do
+				hit[H][x] = item
 			end
 		end
 	end
@@ -741,9 +790,10 @@ function M.size(windows)
 end
 
 --- Open the map picker
----@param opts { panes?: table[], windows?: table[], items: table[], cursor_pane?: string, active?: string, on_choose: fun(item: table|nil), on_switch?: fun() }
+---@param opts { panes?: table[], windows?: table[], items: table[], rail?: table[], cursor_pane?: string, active?: string, on_choose: fun(item: table|nil), on_switch?: fun() }
 function M.select(opts)
 	local items = opts.items or {}
+	local rail = opts.rail or {}
 	define_hl()
 
 	-- Windows are the canvas' tabs: each one carries its own split layout. An adapter that
@@ -817,6 +867,10 @@ function M.select(opts)
 	if strip then
 		H = math.min(H + 1, math.max(conf.min_height, conf.max_height))
 	end
+	-- One extra row for the rail. Bounded like the layout: the map never grows off screen.
+	if #rail > 0 then
+		H = math.min(H + 1, math.max(conf.min_height, conf.max_height))
+	end
 
 	-- The message area (above cmdheight) has a higher zindex than floating windows, so leftover messages can cover the map,
 	-- showing up as a vertical line or garbled characters in the middle. Clear the message area before opening the window.
@@ -869,7 +923,9 @@ function M.select(opts)
 	sel_by_win[start] = sel_by_win[start] or nearest_to_cursor(windows[start])
 	local tab = start
 	local cur = windows[start]
-	local sel = sel_by_win[tab]
+	-- A map with nothing on the canvas still has agents: select the first rail entry so the
+	-- highlight, <CR> and h/l have something to act on.
+	local sel = sel_by_win[tab] or rail[1]
 
 	local hit, tab_hit
 	local win
@@ -919,12 +975,12 @@ function M.select(opts)
 		elseif notice then
 			hdr = { notice = notice }
 		end
-		local painted = paint(cur.panes, cur.by_pane, W, H, sel, frame, hdr)
+		local painted = paint(cur.panes, cur.by_pane, W, H, sel, frame, hdr, rail)
 		-- A layout too dense for the cells: say so once, instead of letting agents disappear
 		-- silently. Costs one layout row, only when it actually happens.
 		if not strip and not notice and painted.clipped > 0 then
 			notice = ("clipped %d"):format(painted.clipped)
-			painted = paint(cur.panes, cur.by_pane, W, H, sel, frame, { notice = notice })
+			painted = paint(cur.panes, cur.by_pane, W, H, sel, frame, { notice = notice }, rail)
 		end
 		hit, tab_hit = painted.hit, painted.tab_hit
 		vim.bo[buf].modifiable = true
@@ -1118,7 +1174,7 @@ function M.select(opts)
 		sel_by_win[tab] = sel
 		tab = i
 		cur = windows[i]
-		sel = sel_by_win[tab] or nearest_to_cursor(cur)
+		sel = sel_by_win[tab] or nearest_to_cursor(cur) or rail[1]
 		sel_by_win[tab] = sel
 		-- Repaint first: `hit` belongs to the tab being drawn, and move_to reads it.
 		repaint()

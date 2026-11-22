@@ -3,7 +3,7 @@
 --
 -- A backend module is the extension point for talking to another agent. It only
 -- has to implement four things:
---   id       string                          unique id (used by :AskAgentBackend)
+--   id       string                          unique id (also qualifies `target = "id:target"`)
 --   label    string                          human-readable name
 --   targets  fun(): table[]                  available targets, empty = unusable
 --   send     fun(target, text): ok, err      deliver already-rendered text
@@ -24,6 +24,12 @@
 --                                            legacy shorthand for working, and no `state` at all
 --                                            means "unknown" (the picker still sends).
 --                                            `kind` (permission/question/auth) refines blocked.
+--                                            Set `explicit = true` when the backend reports done/error
+--                                            itself: the state layer then stops inferring "done" from
+--                                            working -> idle (right for tmux hooks, wrong for deck).
+--   cancel     fun(target, cb)              optional: abort a running turn (deck does).
+--                                            `cb(ok, err)` reports the outcome; without it the
+--                                            dashboard's cancel key and :AskAgentCancel refuse.
 --   stale_targets fun(): table[]             recently exited instances, shown greyed out in
 --                                            the picker so the user sees what is *not* running
 --
@@ -75,6 +81,19 @@ end
 
 ---List every backend in registration order (unusable ones included, with reason).
 ---@return { id: string, label: string, available: boolean, reason: string? }[]
+---Every registered backend module, in registration order (no availability probe).
+---@return table[]
+function M.all()
+	local out = {}
+	for _, id in ipairs(order) do
+		local mod = registry[id]
+		if mod then
+			out[#out + 1] = mod
+		end
+	end
+	return out
+end
+
 function M.list()
 	local out = {}
 	for _, id in ipairs(order) do
@@ -179,6 +198,49 @@ function M.candidates(mod, cwd, opts)
 	return out
 end
 
+---Candidates from every available backend, for the unified picker: this is what makes the
+---map/list "multi-agent" instead of "multi-pane-of-one-backend". Each entry carries its target
+---with `target.backend` set, and `mod` for callers that want the module without a second lookup.
+---@param cwd string|nil
+---@param opts { related?: boolean, single?: boolean, include_stale?: boolean, stale_limit?: integer, prefer?: string }|nil
+---@return table[] {{ target: table, tier: integer, stale?: boolean, mod: table }}
+function M.all_candidates(cwd, opts)
+	opts = opts or {}
+	local out = {}
+	for _, info in ipairs(M.list()) do
+		if info.available then
+			local mod = M.get(info.id)
+			if mod then
+				for _, c in ipairs(M.candidates(mod, cwd, opts)) do
+					c.target.backend = c.target.backend or mod.id
+					c.mod = mod
+					out[#out + 1] = c
+				end
+			end
+		end
+	end
+	local prefer = opts.prefer
+	table.sort(out, function(a, b)
+		if a.tier ~= b.tier then
+			return a.tier < b.tier
+		end
+		-- The backend used for unparameterised sends stays first within a tier, so the old
+		-- "the only candidate worth sending to" instinct keeps working in a mixed list.
+		if prefer and (a.mod.id == prefer) ~= (b.mod.id == prefer) then
+			return a.mod.id == prefer
+		end
+		if (a.stale ~= nil) ~= (b.stale ~= nil) then
+			return not a.stale
+		end
+		local aa, bb = a.target.avoid ~= nil, b.target.avoid ~= nil
+		if aa ~= bb then
+			return not aa
+		end
+		return (a.target.ts or 0) > (b.target.ts or 0)
+	end)
+	return out
+end
+
 local STATES = { idle = true, working = true, blocked = true, done = true, error = true }
 
 ---Is this target usable right now, and what is it doing? Backends may implement probe();
@@ -204,6 +266,7 @@ function M.probe(mod, target, stale)
 				progress = res.progress,
 				msg = res.msg,
 				busy = state == "working",
+				explicit = res.explicit or nil,
 				detail = res.detail or res.msg,
 			}
 		elseif ok and res == false then
@@ -289,7 +352,7 @@ function M.pick(mod, cwd, opts)
 		table.insert(names, ("  %s  %s  (skipped: %s)"):format(t.label or t.id, t.cwd or "?", t.avoid))
 	end
 	return nil,
-		("%s has no target for %s (use :AskAgentTarget to choose one explicitly, or :AskAgentBackend to switch backend). Available:\n%s"):format(
+		("%s has no target for %s (use :AskAgentTarget to choose one explicitly). Available:\n%s"):format(
 			mod.label or mod.id,
 			cwd,
 			table.concat(names, "\n")

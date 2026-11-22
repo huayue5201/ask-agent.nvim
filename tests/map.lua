@@ -233,4 +233,47 @@ assert(
 )
 vim.api.nvim_buf_delete(0, { force = true })
 
+-- Agents with no pane (a desktop app) go on a rail under the canvas instead of vanishing:
+-- the map is still the map, and a session whose only agent has no pane still opens it.
+map.setup({ width = 0.5, height = 0.5, min_width = 24, max_width = 40, min_height = 5, max_height = 8 })
+local rail_items = {
+	{ pane_id = "r1", target = { label = "term" }, name = "term", icon = "" },
+	{ pane_id = nil, target = { label = "deck" }, name = "deck", icon = "◇" },
+}
+local rail_choice
+map.select({
+	panes = { { id = "r1", rect = { 0, 0, 1, 1 }, kind = "tiled" } },
+	items = rail_items,
+	rail = { rail_items[2] },
+	on_choose = function(item)
+		rail_choice = item
+	end,
+})
+local rl = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+assert(rl[#rl]:find("deck", 1, true), "an agent without a pane is drawn on the rail")
+for i = 1, #rl - 1 do
+	assert(not rl[i]:find("deck", 1, true), "the rail is its own row, below the canvas")
+end
+assert(rl[#rl]:find("b", 1, true), "the rail keeps the letter the list gave it")
+vim.api.nvim_feedkeys("b", "x", false)
+assert(rail_choice and rail_choice.target.label == "deck", "the rail letter chooses the agent")
+vim.api.nvim_buf_delete(0, { force = true })
+
+-- A map where no agent has a pane is all rail: still a map, still pickable, no silent fallback.
+local only_rail = { { pane_id = nil, target = { label = "deck" }, name = "deck", icon = "◇" } }
+local only_choice
+map.select({
+	panes = { { id = "empty1", rect = { 0, 0, 1, 1 }, kind = "tiled" } },
+	items = only_rail,
+	rail = only_rail,
+	on_choose = function(item)
+		only_choice = item
+	end,
+})
+local orl = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+assert(orl[#orl]:find("deck", 1, true), "a rail-only map still draws its agent")
+vim.api.nvim_feedkeys("\r", "x", false)
+assert(only_choice and only_choice.target.label == "deck", "the rail is selectable by default")
+vim.api.nvim_buf_delete(0, { force = true })
+
 print("MAP OK")

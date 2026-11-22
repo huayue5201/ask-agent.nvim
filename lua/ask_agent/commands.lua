@@ -84,38 +84,18 @@ function M.install(deps)
 		nargs = "?",
 		desc = "Ask agent: start (no arg) or close ('last' / a turn id) a manual review interval",
 	})
-	vim.api.nvim_create_user_command("AskAgentBackend", function(args)
-		if args.args ~= "" then
-			local ok, err = api.use(args.args)
-			if not ok then
-				notify.notify("[ask_agent] " .. err, vim.log.levels.WARN)
+	vim.api.nvim_create_user_command("AskAgentCancel", function()
+		local ok, sent = api.cancel(nil, function(done, err)
+			if done then
+				notify.notify("[ask_agent] Cancel requested", vim.log.levels.INFO)
 			else
-				notify.notify("[ask_agent] Current backend → " .. args.args, vim.log.levels.INFO)
-			end
-			return
-		end
-		local items = api.list()
-		vim.ui.select(items, {
-			prompt = ("Ask agent backend (current: %s)"):format(deps.current()),
-			format_item = function(item)
-				return ("%s%s%s"):format(deps.icon_prefix(item), item.label, item.available and "" or " (unavailable)")
-			end,
-		}, function(item)
-			if item then
-				api.use(item.id)
+				notify.notify("[ask_agent] " .. tostring(err), vim.log.levels.WARN)
 			end
 		end)
-	end, {
-		nargs = "?",
-		complete = function()
-			local out = {}
-			for _, item in ipairs(api.list()) do
-				table.insert(out, item.id)
-			end
-			return out
-		end,
-		desc = "Ask agent: select or switch the default backend",
-	})
+		if not ok then
+			notify.notify("[ask_agent] " .. tostring(sent), vim.log.levels.WARN)
+		end
+	end, { desc = "Ask agent: cancel the running turn (backend must support it, e.g. deck)" })
 
 	vim.api.nvim_create_user_command("AskAgentPicker", function(args)
 		local cur = api.picker()

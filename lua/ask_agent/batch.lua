@@ -14,7 +14,7 @@ local ui = require("ask_agent.ui")
 
 local M = {}
 
----@type { choose_target: fun(mod: table, cb: fun(t: table|nil)), name_of: fun(t: table): string, deliver_text: fun(mod: table, t: table, text: string, opts: table|nil): boolean, string|nil, current: fun(): string }
+---@type { choose_target: fun(restrict: table|nil, cb: fun(t: table|nil)), name_of: fun(t: table): string, deliver_text: fun(t: table, text: string, opts: table|nil): boolean, string|nil, current: fun(): string }
 local api
 
 ---Wire the batch sender to the rest of the plugin. Called from init.setup().
@@ -77,7 +77,7 @@ local function deliver_one(mod, target, entries)
 	for _, entry in ipairs(entries) do
 		local index = entry.index
 		local text = message.render(queue.sync(entry), entry.prompt)
-		local ok, send_err = api.deliver_text(mod, target, text, { anchor = entry.anchor })
+		local ok, send_err = api.deliver_text(target, text, { anchor = entry.anchor })
 		if ok then
 			sent = sent + 1
 			queue.remove(entry.id)
@@ -151,17 +151,17 @@ function M.send(opts)
 		end
 	end
 	if #rest > 0 then
-		local mod = backends.get(opts.backend or api.current())
-		if not mod then
-			notify.notify(
-				("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
-				vim.log.levels.WARN
-			)
-			return false
+		local restrict
+		if opts.backend then
+			restrict = backends.get(opts.backend)
+			if not restrict then
+				notify.notify(("[ask_agent] No backend registered with id %s"):format(opts.backend), vim.log.levels.WARN)
+				return false
+			end
 		end
-		api.choose_target(mod, function(target)
+		api.choose_target(restrict, function(target)
 			if target then
-				deliver_one(mod, target, rest)
+				deliver_one(restrict or backends.get(target.backend), target, rest)
 			end
 		end)
 	end
@@ -191,19 +191,24 @@ function M.route(ids, opts)
 		notify.notify(("[ask_agent] Cleared the route of %d queued question(s)"):format(#entries), vim.log.levels.INFO)
 		return true
 	end
-	local mod = backends.get(opts.backend or api.current())
-	if not mod then
-		notify.notify(
-			("[ask_agent] No backend registered with id %s"):format(opts.backend or current),
-			vim.log.levels.WARN
-		)
-		return false
+	local restrict
+	if opts.backend then
+		restrict = backends.get(opts.backend)
+		if not restrict then
+			notify.notify(("[ask_agent] No backend registered with id %s"):format(opts.backend), vim.log.levels.WARN)
+			return false
+		end
 	end
-	api.choose_target(mod, function(target)
+	api.choose_target(restrict, function(target)
 		if not target then
 			return
 		end
-		local route = { backend = mod.id, id = tostring(target.id), ts = target.ts, name = api.name_of(target) }
+		local route = {
+			backend = target.backend or (restrict and restrict.id) or api.current(),
+			id = tostring(target.id),
+			ts = target.ts,
+			name = api.name_of(target),
+		}
 		for _, entry in ipairs(entries) do
 			queue.route(entry.id, route)
 		end

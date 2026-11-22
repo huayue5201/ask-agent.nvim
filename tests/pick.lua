@@ -38,6 +38,9 @@ ask.setup({
 	picker = "list",
 	extra = { backend("two", targets.two) },
 })
+
+-- A running desktop app / pi sessions would otherwise join the unified picker.
+dofile(vim.fn.getcwd() .. "/tests/helpers/isolate.lua").only({ two = true })
 ask.list_impl("vim_ui")
 
 -- 1) ambiguous: the picker has to appear, and nothing is sent before a choice
@@ -88,20 +91,33 @@ vim.ui.select = function()
 end
 local sole = { { id = "solo", label = "solo", cwd = cwd, ts = 1 } }
 ask.register(backend("solo", sole))
+dofile(vim.fn.getcwd() .. "/tests/helpers/isolate.lua").only({ solo = true })
 ask.use("solo")
 ask.send("third", { pick = true })
 assert(asked == 0, "a sole same-project candidate is not a question: " .. asked)
 assert(#sent == 2 and sent[2].id == "solo", "it went out: " .. vim.inspect(sent))
 
--- 4) an explicit target skips the picker entirely
+-- 4) an explicit target skips the picker entirely, and crosses backends: "a" belongs to `two`
+--    even though the fallback backend is now `solo` (this is what makes a target key work).
+dofile(vim.fn.getcwd() .. "/tests/helpers/isolate.lua").only({ two = true })
 asked = 0
 vim.ui.select = function()
 	asked = asked + 1
 end
-ask.use("two")
 ask.send("fourth", { pick = true, target = "a" })
 assert(asked == 0, "an explicit target is not a question")
-assert(sent[3].id == "a", "it went to the named instance")
+assert(sent[3] and sent[3].id == "a", "it went to the named instance")
+ask.use("two")
+
+-- 5) naming a backend is naming the agent: with opts.backend the picker is skipped and the
+--    first live candidate takes it (a dedicated key for a desktop app must never ask).
+asked = 0
+vim.ui.select = function()
+	asked = asked + 1
+end
+ask.send("fifth", { pick = true, backend = "two" })
+assert(asked == 0, "a named backend is not a question: " .. asked)
+assert(#sent == 4 and (sent[4].id == "a" or sent[4].id == "b"), "it went to that backend")
 
 vim.ui.select = real_select
 print("OK")

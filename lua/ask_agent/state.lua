@@ -374,14 +374,22 @@ local schedule_save -- journal writer, defined below (apply() is above it)
 
 ---Apply a new observation to a record, emitting only what actually changed.
 ---@param rec table
----@param st { state: string, kind?: string, progress?: integer, msg?: string, gone?: boolean }
+---@param st { state: string, kind?: string, progress?: integer, msg?: string, explicit?: boolean, gone?: boolean }
 ---@param src string|nil where this observation came from: "rex" | "probe" | "heuristic"
 local function apply(rec, st, src)
 	local prev = rec.state
 	local state, kind = st.state, st.kind
 	-- Completion inference for sources that cannot say "done" (tmux hooks, pi busy flags):
 	-- a turn that ends after one of our sends means our message was answered.
-	if state == "idle" and prev == "working" and rec.dispatch and (rec.dispatch.ts or 0) > (rec.idle_at or 0) then
+	-- `explicit` sources (deck) report done/error/cancelled themselves, so an idle
+	-- there means idle (cancelled, or a turn they did not run for us).
+	if
+		state == "idle"
+		and prev == "working"
+		and not st.explicit
+		and rec.dispatch
+		and (rec.dispatch.ts or 0) > (rec.idle_at or 0)
+	then
 		state, kind, src = "done", nil, "heuristic"
 		rec.unread = true
 	end
@@ -694,6 +702,7 @@ function poll()
 					kind = st.kind,
 					progress = st.progress,
 					msg = st.msg or st.detail,
+					explicit = st.explicit,
 					gone = not st.running,
 				}, "probe")
 				-- rex reports the real state for agents that speak OSC 7501; apply it when it arrives

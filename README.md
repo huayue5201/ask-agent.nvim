@@ -50,11 +50,14 @@ the same agent is mirrored into a float, terminal mode, `<C-q>` to close.
 - **Anchor capture** — `cwd`, tab, `file:line`, visual selection, `modified`, plus the
   code around the line and the diagnostics on it; the agent gets them as a structured
   `<nvim-context>` block (see "What a question carries").
-- **Multiple instances, disambiguated** — when several agents run in the same project
-  you get a picker. Every instance gets a stable color, so the same agent is the same
-  color in the list and in the map. Give instances names with `:AskAgentRename` (or `R` in the dashboard).
+- **Multiple agents, disambiguated** — when several agents can take the question you get
+  a picker that spans **every backend at once**: terminal agents in your panes and desktop
+  apps with no pane of their own are all candidates, no "switch backend first" step. Every
+  instance gets a stable color, so the same agent is the same color in list and map. Give
+  instances names with `:AskAgentRename` (or `R` in the dashboard).
 - **Two pickers** — a **map** of your terminal split layout (pick the agent by the pane
-  it lives in; it only shows agents of the window nvim lives in) and a plain **list**
+  it lives in; it draws the window nvim lives in, and agents with no pane at all — a desktop
+  app — get a **rail** row under the canvas with the same letters) and a plain **list**
   (works across tabs/windows — use it for agents outside the current window). `<Tab>`
   flips between them. Every row shows the agent's state: `●` idle, `◐` working (the question is queued
   behind the running task, same as typing into pi while it works), `⚠` waiting for you,
@@ -154,8 +157,8 @@ animated spinner and a real `<Tab>` round-trip between the map and the list.
 | --- | --- |
 | `:AskAgent [text]` | Ask with the cursor anchor (`:AskAgent` opens the ask window) |
 | `:AskAgentVisual` | Ask with the current visual selection as anchor |
-| `:AskAgentPi` | Ask the `pi` backend explicitly |
-| `:AskAgentBackend [id]` | Switch/choose the default backend |
+| `:AskAgentPi` | Ask the `pi` backend explicitly (skips the picker; `aq` already lists every backend) |
+| `:AskAgentCancel` | Cancel the running turn (backends that can, e.g. `deck`) |
 | `:AskAgentPicker [map\|list]` | Choose the multi-candidate picker |
 | `:AskAgentTarget [id]` | Pin the target instance (`!` clears) |
 | `:AskAgentRename` | Name an instance (`!` clears the name) |
@@ -188,8 +191,9 @@ vim.keymap.set("n", "<leader>ai", "<cmd>AskAgentRename<cr>", { desc = "Ask agent
 ```
 
 In the **ask window**: `<C-s>` sends, `<Esc>`/`<C-c>` cancels, `<CR>` is a newline.
-In the **map**: letter picks that pane, a digit (`1`–`9`) switches to that window's tab,
-`h/j/k/l` moves the highlight, `<Tab>` switches to the list, `<Esc>` cancels.
+In the **map**: letter picks that agent, a digit (`1`–`9`) switches to that window's tab,
+`h/j/k/l` moves the highlight, `<Tab>` switches to the list, `<Esc>` cancels. Agents with
+no pane (a desktop app) sit on a rail row under the canvas and are picked by the same letters.
 In the **list**: number (or `<M-a>` for items past 9) picks, `<Tab>` goes back to the map.
 Each entry carries its live status, colored by state: `●` idle, a spinner while busy (your question is
 delivered immediately but pi processes it after the current turn — you get a notice
@@ -725,7 +729,7 @@ Bundled backends:
   ```
 
   `new()` takes `{ id, label, command (default "claude"), command_pattern, state_dir,
-  field, ttl, keys_after }`. Then `:AskAgentBackend claude`.
+  field, ttl, keys_after }`. It then shows up in every picker (no switching).
 - `herdr` — the agents [herdr](https://herdr.dev) recognizes in its panes, with the
   state herdr already tracks (`idle`, `working`, `blocked`, `done`). Not registered
   by default, because an agent running under herdr is often visible through another
@@ -945,7 +949,7 @@ ask.show_answer(task)         -- that question + answer in a float (dashboard `o
 ask.prompts(cwd)              -- prompt templates visible from a directory
 ask.prompt(name, opts)        -- ask with a template rendered against the anchor
 ask.prompt_save(name, text, opts) / ask.prompt_remove(name, opts)
-ask.use(id) / ask.current()   -- default backend
+ask.use(id) / ask.current()   -- fallback backend for sends that name none (pickers use all)
 ask.list() / ask.targets(id)  -- backends / instances
 ask.list_impl(value)          -- read (nil) or set "auto" | "ui_menu" | "vim_ui" at runtime
 ask.pin(id) / ask.pinned()    -- pin a target
@@ -1212,6 +1216,7 @@ instead of flashing a float that closes itself again.
 | `J` | jump out to the agent's own window (rex/tmux) | jump out to its agent's window |
 | `s` / `S` | send / flush every queued question routed to it | |
 | `a` / `d` | acknowledge / dismiss | delete the queued question |
+| `C` | cancel its running turn (backends that can, e.g. `deck`) | |
 | `R` | rename (empty restores the directory name) | |
 | `v` | review the whole worktree vs HEAD | review the turn behind that task |
 | `o` | show the newest task's question + answer | show the question and what the agent said back (`results = true`) |
@@ -1409,8 +1414,8 @@ keeps the anchor captured when it was queued — and `:AskAgentBatchSend 3,5-7`
 sends only those entries.
 
 Entries can be routed to different agents: `:AskAgentBatchRoute 3` (or
-`:AskAgentBatchRoute` for all, `!` to clear) picks a target of the current backend
-(`:AskAgentBackend` switches it) and tags the marker `[3→claude]` in that instance's
+`:AskAgentBatchRoute` for all, `!` to clear) picks a target of any backend
+and tags the marker `[3→claude]` in that instance's
 color. A batch send then groups by route — routed entries go to their own agent, the
 unrouted rest shares one picker — so one queue can be split across several running
 agents. Entries follow buffer edits through

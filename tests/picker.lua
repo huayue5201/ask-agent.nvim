@@ -48,6 +48,9 @@ ask.setup({
 	},
 })
 
+-- A running desktop app / pi sessions would otherwise join the unified picker.
+dofile(vim.fn.getcwd() .. "/tests/helpers/isolate.lua").only({ fake = true })
+
 local map = require("ask_agent.map")
 local real = map.select
 map.select = function(opts)

@@ -163,8 +163,10 @@ Only the keys you pass change; everything else keeps its default. A top-level
 3. COMMANDS                                               *ask-agent-commands*
 
                                                         *:AskAgent*
-:AskAgent [text]        Ask the current backend; the cursor position is the
-                        anchor. Without [text] the ask window opens.
+:AskAgent [text]        Ask an agent; the cursor position is the anchor.
+                        Without [text] the ask window opens. The picker
+                        offers every backend at once (terminal panes *and*
+                        desktop apps), so there is no backend to switch.
 
                                                   *:AskAgentVisual*
 :AskAgentVisual         Ask with the visual selection as anchor.
@@ -172,8 +174,10 @@ Only the keys you pass change; everything else keeps its default. A top-level
                                                   *:AskAgentPi*
 :AskAgentPi             Ask the `pi` backend explicitly.
 
-                                                  *:AskAgentBackend*
-:AskAgentBackend [id]   Switch the default backend, or pick one.
+                                                  *:AskAgentCancel*
+:AskAgentCancel         Cancel the running turn. Only backends that can reach
+                        into the agent implement this (`deck`); terminal agents
+                        have no such API and report an error.
 
                                                   *:AskAgentPicker*
 :AskAgentPicker [mode]  Choose how multiple candidates are presented.
@@ -192,7 +196,8 @@ Only the keys you pass change; everything else keeps its default. A top-level
                         `J` jumps out to the agent's own window
                         (rex/tmux), `s` send, `S` flush its queued questions,
                         `a` acknowledge, `d` delete a queued task or dismiss a
-                        dead agent, `<Tab>` fold,
+                        dead agent, `C` cancel its running turn (only backends
+                        that can), `<Tab>` fold,
                         `?` key help, `r` poll now, `q` close.
 
                                                   *:AskAgentBatch*
@@ -309,6 +314,11 @@ A pane covered by a floating window still gets its letter — placed on a visibl
 cell of that same pane, so nothing is painted over the floating window. Blocks
 are laid out compactly (no gaps) and the map is centered on screen.
 
+Agents that have no pane at all (a desktop app such as `deck`) are drawn on a
+**rail**: one row under the canvas, `b ◇ deck · c pi`, with the same letters the
+list gives them, so a map with no terminal pane hosting an agent still opens and
+still picks. The rail row is clickable and reachable with `h`/`j`/`k`/`l`.
+
 Only the selected cell (the one under the cursor) is asked for a name: it shows the
 agent's name instead of the letter, shortened with "…" when the visible part of the pane
 is narrow, and kept as a letter when fewer than `name_min` columns fit. Other cells stay
@@ -392,9 +402,11 @@ screen-centering, spinner animation and <Tab> back to the map. It is recommended
 not required: without ui-menu the list falls back to |vim.ui.select|, and
 `list_impl = "vim_ui"` forces that fallback.
 
-The map is the primary picker even for a single locatable candidate. Without a
-layout adapter, or when no candidate can be located on screen, it falls back to
-the list (where <Tab> returns to the map).
+Candidates come from every backend, not just the "current" one: a question can go
+to a terminal agent in one pane and to a desktop app on the next, without any
+switching. The map is the primary picker even for a single locatable candidate.
+Without a layout adapter, or when no candidate can be located on screen (and none
+is on the rail), it falls back to the list (where <Tab> returns to the map).
 
 ==============================================================================
 6. BACKENDS                                               *ask-agent-backends*
@@ -460,7 +472,7 @@ Claude Code is bundled: `backends/claude.lua` builds the tmux backend above with
 
   require("ask_agent").setup({ extra = { require("ask_agent.backends.claude").new() } })
 
-and switch with `:AskAgentBackend claude`. `new()` accepts
+and it appears in every picker like any other backend. `new()` accepts
 `id, label, command, command_pattern, state_dir, field, ttl, keys_after`.
 
 Herdr is bundled too: `backends/herdr.lua` lists the agents herdr recognizes in
@@ -768,7 +780,7 @@ project's own file. `J` goes the
 other way — out to the terminal window the agent really runs in, through a jump
 adapter (see |ask-agent-jump|). `s` sends, `S` flushes every queued question
 routed to that agent, `a` acknowledges, `d` deletes a
-queued task or dismisses a dead agent, `v` reviews (the turn behind that task, or
+queued task or dismisses a dead agent, `C` cancels its running turn, `v` reviews (the turn behind that task, or
 the whole worktree for an agent), `o` shows the question and the answer the agent
 handed back (|ask-agent-results|), `y` copies the task text, `f` toggles "only
 agents that need you", `<Tab>` (or `za`) folds its tasks, `R` renames, `?` opens
@@ -938,7 +950,7 @@ follows buffer edits through its extmark. |:AskAgentBatchSend| sends every entry
 as its own message; |:AskAgentBatchSend| `3,5-7` sends only those.
 
 |:AskAgentBatchRoute| routes entries to a specific agent instance of the current
-backend (|:AskAgentBackend| switches backends); the marker shows `[3→name]` in that
+backend (any backend, not just the pinned one); the marker shows `[3→name]` in that
 instance's color, so one queue can be split across several running agents: a send
 groups by route, routed entries go to their own agent and the unrouted rest shares
 one picker.

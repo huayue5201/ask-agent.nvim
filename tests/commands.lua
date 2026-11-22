@@ -35,7 +35,6 @@ local want = {
 	"AskAgentBatchClear",
 	"AskAgentDashboard",
 	"AskAgentPi",
-	"AskAgentBackend",
 	"AskAgentPicker",
 	"AskAgentTarget",
 	"AskAgentRename",

@@ -35,6 +35,9 @@ ask.setup({
 	},
 })
 
+-- A running desktop app / pi sessions would otherwise join the unified picker.
+dofile(vim.fn.getcwd() .. "/tests/helpers/isolate.lua").only({ fake = true })
+
 -- This test is about queue routing, not the picker: the list picker sends a sole
 -- candidate directly instead of opening a map.
 ask.picker("list")

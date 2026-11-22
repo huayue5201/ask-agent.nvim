@@ -843,7 +843,7 @@ end
 -- Keys, in the order they appear in the help float. `name` is what
 -- `setup({ keys = { ... } })` overrides; a name bound to `false`
 -- is not mapped at all. Semantics first: `R` renames (R), `v` views the diff,
--- `y` yanks, `r` refreshes, `s` sends, `d` deletes/dismisses, `J` jumps.
+-- `y` yanks, `r` refreshes, `s` sends, `C` cancels, `d` deletes/dismisses, `J` jumps.
 KEYS = {
 	{ "help", "?", "Show these keys" },
 	{
@@ -855,6 +855,7 @@ KEYS = {
 	{ "send", "s", "Send a question to that agent" },
 	{ "send_queue", "S", "Send every queued question routed to it" },
 	{ "ack", "a", "Acknowledge a done/blocked agent" },
+	{ "cancel", "C", "Cancel the agent's running turn (backends that can, e.g. deck)" },
 	{ "dismiss", "d", "Delete the queued task · dismiss a dead agent" },
 	{ "rename", "R", "Rename an agent (empty restores the directory name)" },
 	{ "diff", "v", "Diff: the turn behind that task · the whole worktree for an agent" },
@@ -1106,6 +1107,24 @@ local function attach(bufnr)
 			kind = "agent",
 			fn = function(node)
 				state.ack(node.rec.key)
+			end,
+		},
+		cancel = {
+			kind = "agent",
+			fn = function(node)
+				if not api.cancel then
+					return
+				end
+				local sent, err = api.cancel({ backend = node.rec.backend, id = node.rec.id }, function(ok, why)
+					if ok then
+						notify.notify("[ask_agent] Cancel requested", vim.log.levels.INFO)
+					else
+						notify.notify("[ask_agent] " .. tostring(why), vim.log.levels.WARN)
+					end
+				end)
+				if not sent then
+					notify.notify("[ask_agent] " .. tostring(err), vim.log.levels.WARN)
+				end
 			end,
 		},
 		dismiss = {
