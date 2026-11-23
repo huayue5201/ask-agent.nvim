@@ -115,17 +115,20 @@ function M.diagnostics(buf, line)
 	return #out > 0 and out or nil
 end
 
----The source around the cursor, when the file on disk is not what is on screen.
+---The source around the cursor.
+---By default only when the file on disk is not what is on screen. `force` also
+---snippets a saved file — backends without filesystem access (StudyDeck) need it.
 ---@param a table anchor
+---@param force boolean|nil
 ---@return table|nil
-function M.snippet(a)
+function M.snippet(a, force)
 	local buf = a.buf
 	if not buf or not vim.api.nvim_buf_is_valid(buf) then
 		return nil
 	end
 	-- A saved file is readable through `path`; an unsaved one, or a buffer with no
 	-- path at all (a diff, a scratch buffer), is only visible from here.
-	if M.lines <= 0 or not (a.modified or (a.virtual and not a.path)) then
+	if M.lines <= 0 or (not force and not (a.modified or (a.virtual and not a.path))) then
 		return nil
 	end
 	local total = vim.api.nvim_buf_line_count(buf)

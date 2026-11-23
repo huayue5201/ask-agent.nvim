@@ -91,6 +91,18 @@ local clean = context.capture()
 eq(clean.context, nil, "a saved file does not inline itself")
 assert(not message.render(clean, "q"):find("context (lines", 1, true), "and the message stays short")
 
+-- A backend without filesystem access (deck/StudyDeck) forces a snippet even for
+-- a saved file. The range still covers only the cursor neighborhood.
+local forced = context.snippet(clean, true)
+assert(forced, "force=true snippets a saved file")
+eq(forced.start_line, 1, "forced snippet starts at the top of a short file")
+eq(forced.end_line, 3, "and ends at the bottom")
+local forced_anchor = vim.deepcopy(clean)
+forced_anchor.context = forced
+local forced_text = message.render(forced_anchor, "q")
+assert(forced_text:find("context (lines 1-3):", 1, true), "forced snippet reaches the message:\n" .. forced_text)
+assert(forced_text:find("two CHANGED", 1, true), "with the buffer text")
+
 -- 5. a bounded snippet: lines around the cursor, not the whole buffer
 vim.bo.modified = true
 local many = {}

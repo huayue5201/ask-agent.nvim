@@ -24,7 +24,7 @@
 -- calls it too, so it reads the handshake file and local state, and refreshes the
 -- remote turn list in the background at most once every REMOTE_TTL.
 
-local M = { id = "deck", label = "deck" }
+local M = { id = "deck", label = "deck", needs_source = true }
 
 ---State per target id:
 ---  { state = "working" | "done" | "error" | "idle", msg?, ts?, task_id?, turn?, session?, answer? }
@@ -32,14 +32,34 @@ local M = { id = "deck", label = "deck" }
 local inflight = {}
 M._inflight = inflight -- tests drive transitions without a server
 
+---Inflight state is per session when known, otherwise per cwd. A single target id
+---(`deck`) used to serialize every project in this nvim instance; that made two
+---independent StudyDeck sessions look busy to each other.
+---@param target table|nil
+---@return string
+local function inflight_key(target)
+	local sid = target and target.session_id
+	if type(sid) == "string" and sid ~= "" then
+		return "session:" .. sid
+	end
+	local cwd = target and target.cwd
+	if type(cwd) == "string" and cwd ~= "" then
+		return "cwd:" .. cwd
+	end
+	return "deck"
+end
+M._key = inflight_key -- tests use the same key without duplicating the rule
+
 ---How `vim.system` is reached; tests replace this to simulate curl.
 ---@type fun(args: string[], opts: table, cb: fun(res: table)): any
 M._spawn = nil
 
 ---Turns the app knows about but this nvim did not start (cheap, cached snapshot).
 local remote = { at = 0, fetching = false, turns = {} }
----cwd -> session id, learned from our own turns, so the remote list can be filtered.
+---cwd -> session id, learned from our own turns and from resolve.
 local sessions = {}
+---cwd -> last resolve attempt (ms), so an unbound project is not probed every tick.
+local resolved_at = {}
 ---Remote refresh interval: longer than the state poll (2s) on purpose.
 local REMOTE_TTL = 5000
 
@@ -149,7 +169,15 @@ function M.targets()
 	if not hs or not alive(hs.pid) then
 		return {}
 	end
-	return { { id = "deck", label = "deck", cwd = vim.fn.getcwd(), port = hs.port } }
+	local cwd = vim.fn.getcwd()
+	return {
+		{
+			id = "deck",
+			label = "deck",
+			cwd = cwd,
+			port = hs.port,
+		},
+	}
 end
 
 ---Authorization header arguments for a handshake, or nothing for an old build.
@@ -238,6 +266,44 @@ local function request(hs, method, path, opts)
 	return proc ~= nil
 end
 
+---Resolve a cwd to the app's bound session without creating one.
+---@param cwd string|nil
+---@param cb fun(result: table|nil, err: string|nil)
+---@return boolean started
+function M.resolve(cwd, cb)
+	cb = cb or function() end
+	cwd = cwd or vim.fn.getcwd()
+	local hs = M.handshake()
+	if not hs then
+		cb(nil, "StudyDeck 没在运行")
+		return false
+	end
+	local path = "/api/sessions/resolve?cwd=" .. vim.uri_encode(cwd)
+	request(hs, "GET", path, {
+		timeout = 3,
+		cb = function(res, spawn_err)
+			if not res then
+				cb(nil, spawn_err or "无法启动 curl")
+				return
+			end
+			if res.code ~= 0 then
+				cb(nil, err_text(res))
+				return
+			end
+			local ok, obj = pcall(vim.json.decode, res.stdout or "")
+			if not ok or type(obj) ~= "table" then
+				cb(nil, "resolve 返回不是 JSON")
+				return
+			end
+			if type(obj.session_id) == "string" and obj.session_id ~= "" then
+				sessions[cwd] = obj.session_id
+			end
+			cb(obj)
+		end,
+	})
+	return true
+end
+
 ---Fold an SSE body into what this backend cares about. The app writes `data: <json>`
 ---per event, with `id:` sequence lines; deltas carry text, `error`/`cancelled` are
 ---terminal failures, `turn_started` carries the ids used for cancel and replay.
@@ -323,13 +389,14 @@ function M.send(target, text, opts)
 	if not port then
 		return false, "StudyDeck 没在运行"
 	end
-	local id = (target and target.id) or "deck"
+	local key = inflight_key(target)
 	local cwd = (target and target.cwd) or vim.fn.getcwd()
 	local origin = hs or { port = port }
 
 	-- The app runs one turn per session (and a session is picked by cwd), so a second
-	-- send would be rejected there anyway: refuse here, before the round trip.
-	local prev = inflight[id]
+	-- send to the same session would be rejected there anyway: refuse here, before the
+	-- round trip.
+	local prev = inflight[key]
 	if prev and prev.state == "working" then
 		return false, "上一轮还在运行（先 :AskAgentCancel 或等它结束）"
 	end
@@ -342,9 +409,15 @@ function M.send(target, text, opts)
 		task_id = opts and opts.task_id,
 		cwd = cwd,
 	}
-	inflight[id] = rec
+	inflight[key] = rec
 
-	local body = vim.json.encode({ text = text, cwd = cwd })
+	local explicit_session = (target and target.session_id)
+		or (opts and opts.session_id)
+	local body = { text = text, cwd = cwd }
+	if type(explicit_session) == "string" and explicit_session ~= "" then
+		body.session_id = explicit_session
+	end
+	body = vim.json.encode(body)
 	request(origin, "POST", "/api/ask", {
 		body = body,
 		timeout = 1800,
@@ -385,10 +458,14 @@ end
 ---@param target table
 ---@return table|nil
 local function remote_turn(target)
-	local cwd = target and target.cwd
-	local sid = cwd and sessions[cwd]
+	local sid = (target and target.session_id) or (target and target.cwd and sessions[target.cwd])
+	if not sid then
+		-- Without a known session there is no safe attribution: do not claim someone
+		-- else's turn. The next send learns the session from turn_started.
+		return nil
+	end
 	for _, turn in ipairs(remote.turns) do
-		if turn.state == "running" and (not sid or turn.session_id == sid) then
+		if turn.state == "running" and turn.session_id == sid then
 			return turn
 		end
 	end
@@ -432,8 +509,8 @@ function M.cancel(target, cb)
 	if not hs then
 		return false, "StudyDeck 没在运行"
 	end
-	local id = (target and target.id) or "deck"
-	local rec = inflight[id]
+	local key = inflight_key(target)
+	local rec = inflight[key]
 
 	local function post(turn_id)
 		request(hs, "POST", "/api/turns/" .. turn_id .. "/cancel", {
@@ -470,15 +547,17 @@ function M.cancel(target, cb)
 			end
 			local ok, obj = pcall(vim.json.decode, res.stdout or "")
 			local turns = ok and type(obj) == "table" and type(obj.turns) == "table" and obj.turns or {}
+			local sid = (target and target.session_id)
+				or (target and target.cwd and sessions[target.cwd])
+			if not sid then
+				cb(false, "还不知道当前会话；先发一轮或指定 session_id")
+				return
+			end
 			local found = nil
 			for _, turn in ipairs(turns) do
-				if turn.state == "running" then
-					found = found or turn
-					local sid = (target and target.cwd) and sessions[target.cwd]
-					if not sid or turn.session_id == sid then
-						found = turn
-						break
-					end
+				if turn.state == "running" and turn.session_id == sid then
+					found = turn
+					break
 				end
 			end
 			if not found then
@@ -497,8 +576,8 @@ end
 ---@param target table
 ---@return table
 function M.probe(target)
-	local id = (target and target.id) or "deck"
-	local rec = inflight[id]
+	local key = inflight_key(target)
+	local rec = inflight[key]
 	if rec then
 		if rec.state == "working" then
 			return { running = true, state = "working", explicit = true }
@@ -521,8 +600,16 @@ function M.probe(target)
 	if hs and not alive(hs.pid) then
 		return { running = false }
 	end
-	-- A turn the app itself is running outranks our own last outcome: the dashboard
-	-- should say working even when this nvim's previous turn is still unread.
+	-- After a restart the local session cache is empty. Ask the app once per cwd
+	-- (throttled) so remote turns can still be attributed to the right session.
+	local cwd = target and target.cwd
+	if hs and cwd and hs.caps.resolve and not sessions[cwd] then
+		local last = resolved_at[cwd] or 0
+		if now_ms() - last > 30000 then
+			resolved_at[cwd] = now_ms()
+			M.resolve(cwd, function() end)
+		end
+	end
 	if hs and hs.caps.turns then
 		refresh_remote(hs)
 		if remote_turn(target) then

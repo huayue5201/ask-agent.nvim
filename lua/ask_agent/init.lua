@@ -1130,6 +1130,11 @@ function M.ask(opts)
 			),
 			default = default,
 			on_submit = function(prompt)
+				-- StudyDeck has no project filesystem access. Send the anchor source
+				-- even for a saved file; file-capable agents keep the light behavior.
+				if mod and mod.needs_source and not anchor.context then
+					anchor.context = context.snippet(anchor, true)
+				end
 				local text = message.render(anchor, prompt)
 				local ok, send_err = deliver_text(target, text, { anchor = anchor })
 				if not ok then

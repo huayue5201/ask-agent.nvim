@@ -56,6 +56,7 @@ local function started(turn, session)
 end
 
 -- 1. no handshake = the app is not running, and the backend is unusable (not broken)
+assert(deck.needs_source == true, "deck asks the context layer for anchor source")
 assert(deck.handshake() == nil, "no file = nil")
 assert(deck.port() == nil, "no port file = nil")
 assert(#deck.targets() == 0, "no target without a port")
@@ -94,17 +95,17 @@ vim.fn.writefile({
 
 -- 4. state passthrough: working / done are what the app tells us, idle is the floor
 assert(deck.probe(t).state == "idle", "fresh backend is idle")
-deck._inflight["deck"] = { state = "working", ts = os.time() }
+deck._inflight[deck._key(t)] = { state = "working", ts = os.time() }
 assert(deck.probe(t).state == "working", "working while streaming")
-deck._inflight["deck"] = { state = "done", ts = os.time() }
+deck._inflight[deck._key(t)] = { state = "done", ts = os.time() }
 assert(deck.probe(t).state == "done", "done is reported explicitly, not inferred")
 
 -- 5. an error is reported once, then does not stick
-deck._inflight["deck"] = { state = "error", msg = "curl: (7) connection refused" }
+deck._inflight[deck._key(t)] = { state = "error", msg = "curl: (7) connection refused" }
 local err = deck.probe(t)
 assert(err.state == "error" and err.msg:match("refused"), "error surfaced with its message")
 assert(deck.probe(t).state == "idle", "error cleared after reporting")
-deck._inflight["deck"] = nil
+deck._inflight[deck._key(t)] = nil
 
 -- 6. delivery: the request carries the token, -f (so 4xx/5xx are failures) and the JSON body
 calls = {}
@@ -128,8 +129,8 @@ call.cb(res(0, sse({
 })))
 flush()
 assert(deck.probe(t).state == "done", "done after the stream ended")
-assert(deck._inflight["deck"].answer == "你好", "deltas folded into the answer")
-assert(deck._inflight["deck"].turn == "turn-1", "turn id remembered for cancel")
+assert(deck._inflight[deck._key(t)].answer == "你好", "deltas folded into the answer")
+assert(deck._inflight[deck._key(t)].turn == "turn-1", "turn id remembered for cancel")
 
 -- 8. an HTTP error is an error, not a quiet idle (the old -sS bug)
 deck.send(t, "q", { task_id = "task-2" })
@@ -183,9 +184,10 @@ flush()
 assert(cancel_ok == true and cancel_err == nil, "cancel callback reports success")
 
 -- 14. cancel without a remembered turn asks the app which turn is running
-deck._inflight["deck"] = nil
+deck._inflight[deck._key(t)] = nil
 calls = {}
-assert(deck.cancel(t, function() end) == true, "cancel starts a lookup")
+local scoped = { id = "deck", cwd = t.cwd, session_id = "sess-9" }
+assert(deck.cancel(scoped, function() end) == true, "cancel starts a lookup")
 local lookup = last_call()
 assert(table.concat(lookup.args, " "):find("/api/turns?active=1", 1, true), "looks up active turns")
 lookup.cb(res(0, '{"turns":[{"id":"turn-9","session_id":"sess-9","state":"running"}]}'))
